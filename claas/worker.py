@@ -72,7 +72,7 @@ training_image = (
 class DistillWorker:
     """Training worker for SDPO continual distillation."""
 
-    base_model_id: str = "Qwen/Qwen2.5-Coder-3B-Instruct"
+    base_model_id: str = "Qwen/Qwen3-Coder-Next"
 
     @modal.enter(snap=True)
     def load_base_model(self):

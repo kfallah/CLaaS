@@ -1,6 +1,6 @@
 """TeacherService: vLLM-based teacher model for SDPO logprob scoring.
 
-This Modal service hosts a Qwen2.5-32B teacher model via vLLM to provide
+This Modal service hosts a Qwen3-Coder-30B teacher model via vLLM to provide
 dense logprob supervision for the SDPO loss. The teacher scores student-
 generated tokens and returns top-K log-probabilities at each position.
 
@@ -45,13 +45,13 @@ vllm_image = (
 class TeacherService:
     """vLLM-based teacher model service for SDPO logprob scoring."""
 
-    model_id: str = "Qwen/Qwen2.5-32B-Instruct"
+    model_id: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
     max_model_len: int = 8192
     default_top_k: int = 100
 
     @modal.enter(snap=True)
     def start_vllm(self):
-        """Initialize vLLM engine with Qwen2.5-32B.
+        """Initialize vLLM engine with Qwen3-Coder-30B.
 
         The entire state — model weights, KV cache allocations, CUDA graphs,
         compiled kernels — is captured in the GPU memory snapshot.

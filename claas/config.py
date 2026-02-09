@@ -13,13 +13,13 @@ from dataclasses import dataclass, field
 class ModelConfig:
     """Model configuration."""
 
-    # Student model (Qwen2.5-Coder-3B)
-    student_model_id: str = "Qwen/Qwen2.5-Coder-3B-Instruct"
+    # Student model (Qwen3-Coder-Next)
+    student_model_id: str = "Qwen/Qwen3-Coder-Next"
     student_dtype: str = "bfloat16"
     student_attn_implementation: str = "flash_attention_2"
 
-    # Teacher model (Qwen2.5-32B)
-    teacher_model_id: str = "Qwen/Qwen2.5-32B-Instruct"
+    # Teacher model (Qwen3-Coder-30B-A3B)
+    teacher_model_id: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
     teacher_dtype: str = "bfloat16"
     teacher_max_model_len: int = 8192
 
