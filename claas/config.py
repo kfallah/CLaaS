@@ -70,7 +70,7 @@ class InfraConfig:
     student_timeout: int = 120  # 2 minutes per request
 
     # Teacher worker (vLLM)
-    teacher_gpu: str = "A100-80GB"
+    teacher_gpu: str = "H100"
     teacher_keep_warm: int = 1
     teacher_container_idle_timeout: int = 600  # 10 minutes
     teacher_gpu_memory_utilization: float = 0.90

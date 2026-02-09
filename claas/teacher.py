@@ -34,7 +34,7 @@ vllm_image = (
 
 
 @app.cls(
-    gpu="A100-80GB",
+    gpu="H100",
     image=vllm_image,
     volumes={"/models": model_volume},
     keep_warm=1,
