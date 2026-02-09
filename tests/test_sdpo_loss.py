@@ -104,12 +104,10 @@ class TestSparseLogitJsd:
     def test_jsd_is_non_negative(self, sample_data, device):
         """JSD should always be non-negative."""
         student_log_probs = torch.log_softmax(sample_data["student_logits"], dim=-1)
-        student_probs = student_log_probs.exp()
         teacher_topk_probs = sample_data["teacher_logprobs"].exp()
 
         jsd = _sparse_logit_jsd(
             student_log_probs,
-            student_probs,
             sample_data["teacher_logprobs"],
             teacher_topk_probs,
             sample_data["teacher_indices"],
@@ -126,7 +124,6 @@ class TestSparseLogitJsd:
         # Create identical distributions
         logits = torch.randn(B, T, V, device=device)
         log_probs = torch.log_softmax(logits, dim=-1)
-        probs = log_probs.exp()
 
         # Teacher's top-K matches student exactly
         topk_logprobs, topk_indices = log_probs.topk(K, dim=-1)
@@ -135,7 +132,6 @@ class TestSparseLogitJsd:
 
         jsd = _sparse_logit_jsd(
             log_probs,
-            probs,
             topk_logprobs,
             topk_logprobs.exp(),
             topk_indices,

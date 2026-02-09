@@ -51,7 +51,6 @@ def compute_sdpo_loss(
 
     # Step 1: Student log-probabilities (full, with gradient)
     student_log_probs = F.log_softmax(student_logits, dim=-1)  # (B, T, V)
-    student_probs = student_log_probs.exp()  # (B, T, V)
 
     # Current student log-prob of the actually-generated token
     current_logprob_chosen = student_log_probs.gather(
@@ -122,7 +121,6 @@ def compute_sdpo_loss(
     # This provides the "logit-level" credit assignment SDPO describes.
     jsd_reg = _sparse_logit_jsd(
         student_log_probs,
-        student_probs,
         teacher_logprobs,
         teacher_probs_sparse,
         teacher_indices,
@@ -184,7 +182,6 @@ def _lookup_token_in_topk(
 
 def _sparse_logit_jsd(
     student_log_probs: torch.Tensor,
-    student_probs: torch.Tensor,
     teacher_topk_logprobs: torch.Tensor,
     teacher_topk_probs: torch.Tensor,
     teacher_topk_indices: torch.Tensor,
@@ -198,7 +195,6 @@ def _sparse_logit_jsd(
 
     Args:
         student_log_probs: (B, T, V) full student log-probabilities
-        student_probs: (B, T, V) full student probabilities
         teacher_topk_logprobs: (B, T, K) teacher's top-K log-probabilities
         teacher_topk_probs: (B, T, K) teacher's top-K probabilities
         teacher_topk_indices: (B, T, K) teacher's top-K token indices
