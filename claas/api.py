@@ -26,6 +26,7 @@ Example usage:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import modal
@@ -227,8 +228,9 @@ async def distill(request: DistillRequest) -> DistillResponse:
     Returns the new LoRA ID and training metrics.
     """
     try:
-        # Validate LoRA exists
-        if not lora_exists(request.lora_id):
+        # Validate LoRA exists (run sync function in thread pool to avoid blocking)
+        exists = await asyncio.to_thread(lora_exists, request.lora_id)
+        if not exists:
             raise HTTPException(
                 status_code=404,
                 detail=f"LoRA not found: {request.lora_id}",
@@ -261,7 +263,9 @@ async def distill_lite(request: DistillLiteRequest) -> DistillResponse:
     token using their own teacher API.
     """
     try:
-        if not lora_exists(request.lora_id):
+        # Validate LoRA exists (run sync function in thread pool to avoid blocking)
+        exists = await asyncio.to_thread(lora_exists, request.lora_id)
+        if not exists:
             raise HTTPException(
                 status_code=404,
                 detail=f"LoRA not found: {request.lora_id}",

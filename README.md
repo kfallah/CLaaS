@@ -17,7 +17,7 @@ This enables real-time model personalization where the model learns from each in
 
 ## Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────┐
 │  Modal App: claas-distill                                        │
 │                                                                  │

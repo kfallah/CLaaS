@@ -207,8 +207,8 @@ class TestComputeSdpoLoss:
             results.append(result["loss"].item())
 
         # Losses should be different for different alphas (usually)
-        # This is a weak test but checks the alpha path is being used
-        assert len(set(results)) >= 1  # At minimum, not all identical
+        # This checks the alpha path is being used
+        assert len(set(results)) > 1  # Different alphas produce different losses
 
     def test_clip_fraction_in_bounds(self, sample_data):
         """Clip fraction should be between 0 and 1."""

@@ -1,6 +1,6 @@
 """TeacherService: vLLM-based teacher model for SDPO logprob scoring.
 
-This Modal service hosts a Qwen3-32B teacher model via vLLM to provide
+This Modal service hosts a Qwen2.5-32B teacher model via vLLM to provide
 dense logprob supervision for the SDPO loss. The teacher scores student-
 generated tokens and returns top-K log-probabilities at each position.
 
@@ -51,7 +51,7 @@ class TeacherService:
 
     @modal.enter(snap=True)
     def start_vllm(self):
-        """Initialize vLLM engine with Qwen3-32B.
+        """Initialize vLLM engine with Qwen2.5-32B.
 
         The entire state — model weights, KV cache allocations, CUDA graphs,
         compiled kernels — is captured in the GPU memory snapshot.
@@ -108,7 +108,7 @@ class TeacherService:
 
         # Concatenate prompt + completion as a single prompt
         # Use prompt_logprobs to get logprobs at every position
-        full_texts = [p + c for p, c in zip(prompts, completions)]
+        full_texts = [p + c for p, c in zip(prompts, completions, strict=True)]
         prompt_lengths = [len(self.tokenizer.encode(p)) for p in prompts]
 
         params = SamplingParams(
@@ -120,7 +120,7 @@ class TeacherService:
         outputs = self.llm.generate(full_texts, params)
 
         results = []
-        for output, plen in zip(outputs, prompt_lengths):
+        for output, plen in zip(outputs, prompt_lengths, strict=True):
             # Extract logprobs at completion token positions (after the prompt)
             completion_logprobs = []
 
@@ -162,7 +162,6 @@ class TeacherService:
 
 def format_teacher_prompt(
     user_prompt: str,
-    student_response: str,
     feedback: str | None = None,
     system_prompt: str | None = None,
 ) -> str:
@@ -174,7 +173,6 @@ def format_teacher_prompt(
 
     Args:
         user_prompt: The original user prompt
-        student_response: The student's generated response
         feedback: Optional feedback about the response quality
         system_prompt: Optional system prompt
 

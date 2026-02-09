@@ -30,7 +30,6 @@ def compute_sdpo_loss(
     alpha: float = 0.5,
     clip_eps: float = 0.2,
     jsd_reg_weight: float = 0.5,
-    student_topk: int = 100,
 ) -> dict:
     """Compute SDPO loss: policy gradient with JSD-derived per-token advantages.
 
@@ -44,7 +43,6 @@ def compute_sdpo_loss(
         alpha: interpolation parameter (0.5 = symmetric JSD, SDPO default)
         clip_eps: PPO clip range for importance sampling
         jsd_reg_weight: weight for the logit-level JSD regularizer
-        student_topk: number of student top-K to consider for sparse JSD
 
     Returns:
         dict with 'loss' and diagnostic tensors

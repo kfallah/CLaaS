@@ -8,18 +8,13 @@ Run lint and type checking after every code change:
 
 ```bash
 # Lint and auto-fix
-python3 -m ruff check claas/ tests/ --fix
+uvx ruff check claas/ tests/ --fix
 
-# Type check (ignore missing imports for GPU deps)
-python3 -m pyright claas/
+# Type check (import errors for modal/torch/vllm are expected)
+uvx ty check
 ```
 
-Or if using uv:
-
-```bash
-uv run ruff check claas/ tests/ --fix
-uv run pyright claas/
-```
+Note: GPU dependencies (modal, torch, vllm, transformers, peft) are not installed locally. `ty check` will report `unresolved-import` errors for these - this is expected and can be ignored.
 
 ### Run Tests
 

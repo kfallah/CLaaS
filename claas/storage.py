@@ -16,7 +16,7 @@ import json
 import os
 import shutil
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import modal
@@ -106,7 +106,7 @@ def save_lora(
     if version_suffix:
         full_lora_id = f"{lora_id.rstrip('/')}-{version_suffix}"
     else:
-        timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         full_lora_id = f"{lora_id.rstrip('/')}-{timestamp}"
 
     lora_path = get_lora_path(full_lora_id)

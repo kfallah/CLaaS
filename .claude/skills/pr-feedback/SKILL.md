@@ -136,7 +136,7 @@ gh repo view --json owner,name -q '"\(.owner.login)/\(.name)"'
 
 ## Example Workflow
 
-```
+```text
 Comment: "This function should handle the case where the list is empty"
 Analysis: Valid - the function doesn't check for empty input
 Action: Add empty list check, commit, reply with commit link

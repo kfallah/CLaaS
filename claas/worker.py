@@ -17,6 +17,8 @@ Key features:
 
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 
 import modal
@@ -125,6 +127,52 @@ class DistillWorker:
         print(f"Base model loaded. VRAM: {vram_gb:.2f} GB")
         print("Snapshot will capture this state.")
 
+    def _load_or_create_lora(self, lora_path: str):
+        """Load existing LoRA weights or create fresh LoRA from config.
+
+        For newly initialized LoRAs (config only, no weights), creates a fresh
+        LoRA using get_peft_model() with the config. For trained LoRAs with
+        saved weights, loads them with PeftModel.from_pretrained().
+
+        Args:
+            lora_path: Path to local LoRA directory
+
+        Returns:
+            PeftModel with LoRA applied to base model
+        """
+        from peft import LoraConfig, PeftModel, get_peft_model
+
+        # Check if adapter weights exist
+        weights_safetensors = os.path.join(lora_path, "adapter_model.safetensors")
+        weights_bin = os.path.join(lora_path, "adapter_model.bin")
+        has_weights = os.path.exists(weights_safetensors) or os.path.exists(weights_bin)
+
+        if has_weights:
+            # Load existing trained LoRA
+            model = PeftModel.from_pretrained(
+                self.base_model,
+                lora_path,
+                is_trainable=True,
+            )
+        else:
+            # Fresh LoRA - create from config using get_peft_model()
+            config_path = os.path.join(lora_path, "adapter_config.json")
+            with open(config_path) as f:
+                config_dict = json.load(f)
+
+            lora_config = LoraConfig(
+                r=config_dict.get("r", 16),
+                lora_alpha=config_dict.get("lora_alpha", 32),
+                target_modules=config_dict.get("target_modules"),
+                lora_dropout=config_dict.get("lora_dropout", 0.0),
+                bias=config_dict.get("bias", "none"),
+                task_type=config_dict.get("task_type", "CAUSAL_LM"),
+            )
+
+            model = get_peft_model(self.base_model, lora_config)
+
+        return model
+
     @modal.method()
     def distill(self, request: dict) -> dict:
         """Run a single SDPO distillation step.
@@ -144,7 +192,6 @@ class DistillWorker:
         """
         import torch
         import torch.nn.functional as F
-        from peft import PeftModel
 
         torch.cuda.empty_cache()
 
@@ -168,11 +215,7 @@ class DistillWorker:
         lora_local_path = load_lora(request["lora_id"])
 
         try:
-            model = PeftModel.from_pretrained(
-                self.base_model,
-                lora_local_path,
-                is_trainable=True,
-            )
+            model = self._load_or_create_lora(lora_local_path)
             model.train()
         except Exception as e:
             cleanup_local_lora(lora_local_path)
@@ -222,7 +265,6 @@ class DistillWorker:
         # 4. Get teacher logprobs from vLLM sidecar
         teacher_prompt = format_teacher_prompt(
             request["prompt"],
-            request["response"],
             request.get("feedback"),
         )
 
@@ -279,9 +321,11 @@ class DistillWorker:
 
         # 7. Save LoRA to Modal Volume
         save_dir = tempfile.mkdtemp(prefix="lora_updated_")
-        model.save_pretrained(save_dir)
-        new_lora_id = save_lora(save_dir, request["lora_id"])
-        cleanup_local_lora(save_dir)
+        try:
+            model.save_pretrained(save_dir)
+            new_lora_id = save_lora(save_dir, request["lora_id"])
+        finally:
+            cleanup_local_lora(save_dir)
 
         # 8. Cleanup
         del model, optimizer, student_output, student_logits
@@ -320,7 +364,6 @@ class DistillWorker:
         """
         import torch
         import torch.nn.functional as F
-        from peft import PeftModel
 
         torch.cuda.empty_cache()
 
@@ -344,11 +387,7 @@ class DistillWorker:
         lora_local_path = load_lora(request["lora_id"])
 
         try:
-            model = PeftModel.from_pretrained(
-                self.base_model,
-                lora_local_path,
-                is_trainable=True,
-            )
+            model = self._load_or_create_lora(lora_local_path)
             model.train()
         except Exception as e:
             cleanup_local_lora(lora_local_path)
@@ -405,9 +444,11 @@ class DistillWorker:
 
         # Save LoRA
         save_dir = tempfile.mkdtemp(prefix="lora_updated_")
-        model.save_pretrained(save_dir)
-        new_lora_id = save_lora(save_dir, request["lora_id"])
-        cleanup_local_lora(save_dir)
+        try:
+            model.save_pretrained(save_dir)
+            new_lora_id = save_lora(save_dir, request["lora_id"])
+        finally:
+            cleanup_local_lora(save_dir)
 
         # Cleanup
         del model, optimizer, student_output, student_logits
