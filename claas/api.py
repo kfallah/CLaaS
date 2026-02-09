@@ -62,11 +62,17 @@ class TrainingConfig(BaseModel):
         le=1.0,
         description="JSD interpolation (0.5 = symmetric JSD, SDPO default)",
     )
-    clip_eps: float = Field(
+    clip_eps_lower: float = Field(
         default=0.2,
         ge=0.0,
         le=1.0,
-        description="PPO clip range for importance sampling",
+        description="Lower bound for PPO clip range (ratio >= 1 - clip_eps_lower)",
+    )
+    clip_eps_upper: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="Upper bound for PPO clip range (ratio <= 1 + clip_eps_upper)",
     )
     max_grad_norm: float = Field(
         default=1.0,

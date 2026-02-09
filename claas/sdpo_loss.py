@@ -3,6 +3,8 @@
 This module implements the Self-Distillation Policy Optimization (SDPO) loss
 as described in Hübotter et al. (2026), "Reinforcement Learning via Self-Distillation".
 
+Reference implementation: https://github.com/lasgroup/SDPO
+
 SDPO is a policy gradient algorithm where per-token advantages are derived from
 a divergence between student and teacher distributions. The key insight is that
 SDPO does NOT directly minimize a KL divergence as a supervised loss. Instead,
@@ -16,8 +18,22 @@ correction when doing multiple gradient steps.
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 import torch
 import torch.nn.functional as F
+
+
+class SDPOLossResult(TypedDict):
+    """Result from SDPO loss computation."""
+
+    loss: torch.Tensor
+    pg_loss: float
+    jsd_reg: float
+    mean_advantage: float
+    frac_positive_advantage: float
+    mean_is_ratio: float
+    clip_fraction: float
 
 
 def compute_sdpo_loss(
@@ -28,9 +44,10 @@ def compute_sdpo_loss(
     old_student_logprobs: torch.Tensor,
     response_ids: torch.Tensor,
     alpha: float = 0.5,
-    clip_eps: float = 0.2,
+    clip_eps_lower: float = 0.2,
+    clip_eps_upper: float = 0.2,
     jsd_reg_weight: float = 0.5,
-) -> dict:
+) -> SDPOLossResult:
     """Compute SDPO loss: policy gradient with JSD-derived per-token advantages.
 
     Args:
@@ -41,11 +58,12 @@ def compute_sdpo_loss(
         old_student_logprobs: (B, T) student log-prob of chosen token at rollout time
         response_ids: (B, T) actual token ids in the response
         alpha: interpolation parameter (0.5 = symmetric JSD, SDPO default)
-        clip_eps: PPO clip range for importance sampling
+        clip_eps_lower: lower bound for PPO clip range (ratio >= 1 - clip_eps_lower)
+        clip_eps_upper: upper bound for PPO clip range (ratio <= 1 + clip_eps_upper)
         jsd_reg_weight: weight for the logit-level JSD regularizer
 
     Returns:
-        dict with 'loss' and diagnostic tensors
+        SDPOLossResult with loss tensor and diagnostic metrics
     """
     B, T, V = student_logits.shape
 
@@ -105,10 +123,10 @@ def compute_sdpo_loss(
     log_ratio_is = current_logprob_chosen - old_student_logprobs
     ratio = log_ratio_is.exp().clamp(max=10.0)  # prevent explosion
 
-    # Clipped surrogate objective
+    # Clipped surrogate objective with separate lower/upper bounds
     # advantages are NOT differentiated through (detached)
     surr1 = ratio * advantages.detach()
-    surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages.detach()
+    surr2 = torch.clamp(ratio, 1.0 - clip_eps_lower, 1.0 + clip_eps_upper) * advantages.detach()
     pg_loss = -torch.min(surr1, surr2)
 
     # Apply response mask and average
@@ -135,9 +153,10 @@ def compute_sdpo_loss(
         mean_advantage = (advantages.abs() * response_mask).sum() / mask_sum
         frac_positive = ((advantages > 0).float() * response_mask).sum() / mask_sum
         mean_ratio = (ratio * response_mask).sum() / mask_sum
-        clip_frac = (
-            ((ratio - 1.0).abs() > clip_eps).float() * response_mask
-        ).sum() / mask_sum
+        # Check if ratio is outside the clip bounds
+        clipped_lower = (ratio < 1.0 - clip_eps_lower).float()
+        clipped_upper = (ratio > 1.0 + clip_eps_upper).float()
+        clip_frac = ((clipped_lower + clipped_upper) * response_mask).sum() / mask_sum
 
     return {
         "loss": total_loss,

@@ -208,7 +208,8 @@ class DistillWorker:
         training_config = request.get("training", {})
         lr = training_config.get("learning_rate", 1e-4)
         alpha = training_config.get("alpha", 0.5)
-        clip_eps = training_config.get("clip_eps", 0.2)
+        clip_eps_lower = training_config.get("clip_eps_lower", 0.2)
+        clip_eps_upper = training_config.get("clip_eps_upper", 0.2)
         max_grad_norm = training_config.get("max_grad_norm", 1.0)
         jsd_reg_weight = training_config.get("jsd_reg_weight", 0.5)
         teacher_top_k = training_config.get("teacher_top_k", 100)
@@ -310,7 +311,8 @@ class DistillWorker:
             old_student_logprobs=old_student_logprobs,
             response_ids=response_ids[:, :T_resp],
             alpha=alpha,
-            clip_eps=clip_eps,
+            clip_eps_lower=clip_eps_lower,
+            clip_eps_upper=clip_eps_upper,
             jsd_reg_weight=jsd_reg_weight,
         )
 

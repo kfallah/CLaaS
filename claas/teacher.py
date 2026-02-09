@@ -12,7 +12,26 @@ Key features:
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 import modal
+import torch
+from vllm import LLM, SamplingParams
+
+
+class TokenLogprobs(TypedDict):
+    """Log-probabilities for a single token position."""
+
+    indices: list[int]
+    logprobs: list[float]
+
+
+class HealthCheckResult(TypedDict):
+    """Result from health check."""
+
+    status: str
+    model: str
+    ready: bool
 
 # Modal app (shared with training worker)
 app = modal.App("claas-distill")
@@ -59,8 +78,6 @@ class TeacherService:
         Without snapshot: ~45-60s cold start
         With snapshot: ~3-5s cold start
         """
-        from vllm import LLM, SamplingParams
-
         print(f"Initializing vLLM with {self.model_id}...")
 
         self.llm = LLM(
@@ -89,7 +106,7 @@ class TeacherService:
         prompts: list[str],
         completions: list[str],
         top_k: int | None = None,
-    ) -> list[list[dict]]:
+    ) -> list[list[TokenLogprobs]]:
         """Get teacher logprobs on student-generated tokens.
 
         Args:
@@ -99,9 +116,8 @@ class TeacherService:
 
         Returns:
             List of completion results, each containing:
-                - List of position dicts with 'indices' and 'logprobs'
+                - List of TokenLogprobs with 'indices' and 'logprobs'
         """
-        from vllm import SamplingParams
 
         if top_k is None:
             top_k = self.default_top_k
@@ -151,13 +167,13 @@ class TeacherService:
         return results
 
     @modal.method()
-    def health_check(self) -> dict:
+    def health_check(self) -> HealthCheckResult:
         """Check if the service is ready."""
-        return {
-            "status": "healthy",
-            "model": self.model_id,
-            "ready": self.llm is not None,
-        }
+        return HealthCheckResult(
+            status="healthy",
+            model=self.model_id,
+            ready=self.llm is not None,
+        )
 
 
 def format_teacher_prompt(
@@ -204,13 +220,13 @@ def format_teacher_prompt(
 
 
 def parse_teacher_result(
-    result: list[dict],
+    result: list[TokenLogprobs],
     device: str = "cuda",
-) -> tuple:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Parse teacher scoring result into tensors.
 
     Args:
-        result: List of position dicts from score_tokens
+        result: List of TokenLogprobs from score_tokens
         device: Device to place tensors on
 
     Returns:
@@ -218,8 +234,6 @@ def parse_teacher_result(
             - teacher_logprobs: (T, K) tensor of log-probabilities
             - teacher_indices: (T, K) tensor of token indices
     """
-    import torch
-
     if not result:
         raise ValueError("Empty teacher result")
 
