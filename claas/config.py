@@ -46,9 +46,10 @@ class TrainingDefaults:
 
     # SDPO loss parameters
     learning_rate: float = 1e-4
+    clip_eps_lower: float = 0.2  # PPO clip range lower bound
+    clip_eps_upper: float = 0.2  # PPO clip range upper bound
     max_grad_norm: float = 1.0
     kl_reg_weight: float = 0.1  # KL regularization to base policy
-    is_clip: float = 5.0  # Importance sampling ratio clip
 
     # Teacher scoring
     teacher_top_k: int = 100  # Number of top logprobs from teacher

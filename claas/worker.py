@@ -209,8 +209,9 @@ class DistillWorker:
         training_config = request.get("training", {})
         lr = training_config.get("learning_rate", 1e-4)
         max_grad_norm = training_config.get("max_grad_norm", 1.0)
+        clip_eps_lower = training_config.get("clip_eps_lower", 0.2)
+        clip_eps_upper = training_config.get("clip_eps_upper", 0.2)
         kl_reg_weight = training_config.get("kl_reg_weight", 0.1)
-        is_clip = training_config.get("is_clip", 5.0)
         teacher_top_k = training_config.get("teacher_top_k", 100)
 
         # 1. Load LoRA from Modal Volume
@@ -266,6 +267,12 @@ class DistillWorker:
         # Logits at positions [response_start-1, ..., end-1] predict tokens at [response_start, ..., end]
         student_logits = student_output.logits[:, response_start - 1 : -1, :]  # (1, T_resp, V)
 
+        # Old logprobs (for importance sampling - detached snapshot)
+        with torch.no_grad():
+            old_student_logprobs = F.log_softmax(
+                student_logits.detach(), dim=-1
+            ).gather(-1, response_ids[:, :T_resp].unsqueeze(-1)).squeeze(-1)
+
         # 5. Get teacher logprobs from vLLM sidecar
         teacher_prompt = format_teacher_prompt(
             request["prompt"],
@@ -310,9 +317,11 @@ class DistillWorker:
             teacher_indices=teacher_indices,
             base_logprobs=base_logprobs,
             response_mask=response_mask[:, response_start:],
+            old_student_logprobs=old_student_logprobs,
             response_ids=response_ids[:, :T_resp],
+            clip_eps_lower=clip_eps_lower,
+            clip_eps_upper=clip_eps_upper,
             kl_reg_weight=kl_reg_weight,
-            is_clip=is_clip,
         )
 
         # 7. Backward + clip + step
@@ -339,9 +348,10 @@ class DistillWorker:
             "lora_id": new_lora_id,
             "metadata": {
                 "total_loss": loss_dict["loss"].item(),
-                "distill_loss": loss_dict["distill_loss"],
+                "pg_loss": loss_dict["pg_loss"],
                 "kl_reg": loss_dict["kl_reg"],
-                "mean_kl_to_teacher": loss_dict["mean_kl_to_teacher"],
+                "mean_advantage": loss_dict["mean_advantage"],
+                "frac_positive_advantage": loss_dict["frac_positive_advantage"],
                 "mean_is_ratio": loss_dict["mean_is_ratio"],
                 "clip_fraction": loss_dict["clip_fraction"],
                 "grad_norm": grad_norm.item() if hasattr(grad_norm, "item") else grad_norm,
