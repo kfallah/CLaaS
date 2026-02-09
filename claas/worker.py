@@ -182,7 +182,7 @@ class DistillWorker:
                 - lora_id: LoRA identifier (e.g., "user123/coder-v1")
                 - prompt: User prompt
                 - response: Student's response to learn from
-                - feedback: Optional feedback about the response
+                - feedback: Feedback about the response quality
                 - training: Training config (learning_rate, alpha, clip_eps, etc.)
 
         Returns:
@@ -202,6 +202,8 @@ class DistillWorker:
             raise ValueError("Missing required field: prompt")
         if "response" not in request:
             raise ValueError("Missing required field: response")
+        if "feedback" not in request:
+            raise ValueError("Missing required field: feedback")
 
         training_config = request.get("training", {})
         lr = training_config.get("learning_rate", 1e-4)
@@ -265,7 +267,7 @@ class DistillWorker:
         # 4. Get teacher logprobs from vLLM sidecar
         teacher_prompt = format_teacher_prompt(
             request["prompt"],
-            request.get("feedback"),
+            request["feedback"],
         )
 
         teacher_service = TeacherService()

@@ -104,9 +104,10 @@ class DistillRequest(BaseModel):
         min_length=1,
         description="Student's response to learn from",
     )
-    feedback: str | None = Field(
-        default=None,
-        description="Optional feedback about response quality",
+    feedback: str = Field(
+        ...,
+        min_length=1,
+        description="Feedback about response quality",
     )
     training: TrainingConfig = Field(
         default_factory=TrainingConfig,
