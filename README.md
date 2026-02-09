@@ -6,12 +6,12 @@ SDPO-style continual distillation API for per-request model adaptation.
 
 CLaaS provides a serverless API for continual learning via Self-Distillation Policy Optimization (SDPO). Each API call:
 
-1. Loads a user's LoRA adapter from S3
+1. Loads a user's LoRA adapter from Modal Volume
 2. Runs the student model on the provided prompt/response
 3. Gets dense teacher logprobs from a 32B teacher model
 4. Computes SDPO loss (JSD-based policy gradient with per-token advantages)
 5. Updates the LoRA parameters
-6. Saves the updated adapter back to S3
+6. Saves the updated adapter back to Modal Volume
 
 This enables real-time model personalization where the model learns from each interaction.
 
@@ -31,6 +31,7 @@ This enables real-time model personalization where the model learns from each in
 │  │  Cold start: ~2s           │  │  Cold start: ~3-5s         ││
 │  └─────────────────────────────┘  └────────────────────────────┘│
 │                                                                  │
+│  Modal Volume: claas-loras (LoRA storage)                        │
 │  FastAPI endpoint: /v1/distill                                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -44,37 +45,33 @@ pip install -e .
 ## Prerequisites
 
 1. **Modal account**: Sign up at [modal.com](https://modal.com)
-2. **AWS credentials**: For S3 LoRA storage
-3. **Modal secrets**: Configure AWS credentials in Modal
+2. **Modal CLI**: `pip install modal && modal token new`
 
-```bash
-modal secret create aws-credentials \
-  AWS_ACCESS_KEY_ID=<your-key> \
-  AWS_SECRET_ACCESS_KEY=<your-secret> \
-  AWS_REGION=us-east-1
-```
+That's it! No AWS/S3 credentials needed - LoRAs are stored in Modal Volumes.
 
 ## Quick Start
 
-### 1. Initialize a LoRA adapter
+### 1. Deploy the service
 
 ```bash
-claas init-lora --output-uri s3://my-bucket/loras/user123/coder-v1/
+modal deploy claas.api
 ```
 
-### 2. Deploy the service
+### 2. Initialize a LoRA adapter
 
 ```bash
-claas deploy
+curl -X POST https://your-app--claas-distill-fastapi-app.modal.run/v1/lora/init \
+  -H "Content-Type: application/json" \
+  -d '{"lora_id": "user123/coder-v1"}'
 ```
 
-### 3. Call the API
+### 3. Call the distillation API
 
 ```bash
 curl -X POST https://your-app--claas-distill-fastapi-app.modal.run/v1/distill \
   -H "Content-Type: application/json" \
   -d '{
-    "lora_uri": "s3://my-bucket/loras/user123/coder-v1/",
+    "lora_id": "user123/coder-v1-init",
     "prompt": "Write a function to calculate factorial",
     "response": "def factorial(n):\n    if n <= 1:\n        return 1\n    return n * factorial(n-1)",
     "feedback": "Good recursive solution",
@@ -94,7 +91,7 @@ Run a single SDPO distillation step.
 **Request body:**
 ```json
 {
-  "lora_uri": "s3://bucket/loras/user/model/",
+  "lora_id": "user123/coder-v1",
   "prompt": "User prompt text",
   "response": "Model response to learn from",
   "feedback": "Optional feedback about quality",
@@ -112,7 +109,7 @@ Run a single SDPO distillation step.
 **Response:**
 ```json
 {
-  "lora_uri": "s3://bucket/loras/user/model-20250209-123456/",
+  "lora_id": "user123/coder-v1-20250209-123456",
   "metadata": {
     "total_loss": 0.234,
     "pg_loss": 0.156,
@@ -135,9 +132,27 @@ Lightweight distillation with pre-computed teacher logprobs (for use with Firewo
 
 Initialize a new LoRA adapter.
 
+### GET /v1/lora
+
+List all LoRA adapters (with optional prefix filter).
+
 ### GET /v1/health
 
 Health check for all services.
+
+## Storage
+
+LoRA adapters are stored in **Modal Volumes** - no external storage needed:
+
+- Volume name: `claas-loras`
+- Path format: `/loras/{user_id}/{lora_name}`
+- Automatic versioning with timestamps
+
+Benefits:
+- No AWS credentials to manage
+- Integrated with Modal infrastructure
+- ~100MB/s read/write throughput
+- Persists across container restarts
 
 ## Configuration
 
@@ -164,19 +179,13 @@ Health check for all services.
 ### Run locally
 
 ```bash
-claas serve
+modal serve claas.api
 ```
 
 ### Run tests
 
 ```bash
 pytest tests/ -v
-```
-
-### Check health
-
-```bash
-claas health
 ```
 
 ## Cost Estimate

@@ -1,7 +1,7 @@
 """CLaaS CLI: Command-line interface for CLaaS operations.
 
 Usage:
-    claas init-lora --output-uri s3://bucket/loras/user/model/
+    claas init-lora --lora-id user123/coder-v1
     claas deploy
     claas health
 """
@@ -15,17 +15,35 @@ import sys
 
 def cmd_init_lora(args: argparse.Namespace) -> int:
     """Initialize a new LoRA adapter."""
-    from .s3_utils import initialize_lora_from_base
+    from .storage import create_initial_lora
 
     try:
-        uri = initialize_lora_from_base(
+        lora_id = create_initial_lora(
+            lora_id=args.lora_id,
             base_model_name=args.base_model,
-            output_uri=args.output_uri,
             lora_r=args.lora_r,
             lora_alpha=args.lora_alpha,
             target_modules=args.target_modules.split(",") if args.target_modules else None,
         )
-        print(f"LoRA initialized at: {uri}")
+        print(f"LoRA initialized: {lora_id}")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_list_loras(args: argparse.Namespace) -> int:
+    """List all LoRA adapters."""
+    from .storage import list_loras
+
+    try:
+        loras = list_loras(args.prefix or "")
+        if loras:
+            print("LoRA adapters:")
+            for lora in loras:
+                print(f"  - {lora}")
+        else:
+            print("No LoRA adapters found.")
         return 0
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -86,7 +104,7 @@ def cmd_distill(args: argparse.Namespace) -> int:
         from .worker import DistillWorker
 
         request = {
-            "lora_uri": args.lora_uri,
+            "lora_id": args.lora_id,
             "prompt": args.prompt,
             "response": args.response,
             "feedback": args.feedback,
@@ -118,9 +136,9 @@ def main() -> int:
     # init-lora command
     init_parser = subparsers.add_parser("init-lora", help="Initialize a new LoRA adapter")
     init_parser.add_argument(
-        "--output-uri",
+        "--lora-id",
         required=True,
-        help="S3 URI for the LoRA output",
+        help="LoRA identifier (e.g., 'user123/coder-v1')",
     )
     init_parser.add_argument(
         "--base-model",
@@ -135,6 +153,11 @@ def main() -> int:
         help="Comma-separated target modules",
     )
     init_parser.set_defaults(func=cmd_init_lora)
+
+    # list-loras command
+    list_parser = subparsers.add_parser("list-loras", help="List all LoRA adapters")
+    list_parser.add_argument("--prefix", default="", help="Filter by prefix")
+    list_parser.set_defaults(func=cmd_list_loras)
 
     # deploy command
     deploy_parser = subparsers.add_parser("deploy", help="Deploy to Modal")
@@ -151,7 +174,7 @@ def main() -> int:
 
     # distill command (for testing)
     distill_parser = subparsers.add_parser("distill", help="Run a distillation step")
-    distill_parser.add_argument("--lora-uri", required=True, help="LoRA S3 URI")
+    distill_parser.add_argument("--lora-id", required=True, help="LoRA identifier")
     distill_parser.add_argument("--prompt", required=True, help="Prompt text")
     distill_parser.add_argument("--response", required=True, help="Response text")
     distill_parser.add_argument("--feedback", default=None, help="Feedback text")

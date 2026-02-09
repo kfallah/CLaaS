@@ -1,29 +1,34 @@
 """DistillWorker: Modal-based training worker for SDPO continual distillation.
 
 This Modal service handles the core training loop:
-1. Load user's LoRA adapter from S3
+1. Load user's LoRA adapter from Modal Volume
 2. Run student forward pass
 3. Get teacher logprobs from TeacherService
 4. Compute SDPO loss (JSD-based policy gradient)
 5. Backward pass and optimizer step on LoRA params only
-6. Save updated LoRA back to S3
+6. Save updated LoRA back to Modal Volume
 
 Key features:
 - GPU memory snapshots for sub-second cold starts (~2s vs ~15-20s)
 - Frozen base model with per-request LoRA loading
 - Full SDPO loss with logit-level JSD regularizer
+- Simple Modal Volume storage (no S3/AWS needed)
 """
 
 from __future__ import annotations
 
-import os
 import tempfile
-from typing import Any
 
 import modal
 
-from .s3_utils import cleanup_local_lora, download_lora_from_s3, upload_lora_to_s3
 from .sdpo_loss import compute_sdpo_loss, compute_token_level_only_loss
+from .storage import (
+    LORA_MOUNT_PATH,
+    cleanup_local_lora,
+    load_lora,
+    lora_volume,
+    save_lora,
+)
 from .teacher import TeacherService, format_teacher_prompt, parse_teacher_result
 
 # Modal app (shared with teacher)
@@ -42,7 +47,6 @@ training_image = (
         "accelerate>=0.27.0",
         "bitsandbytes>=0.42.0",
         "flash-attn>=2.5.0",
-        "boto3>=1.34.0",
         "safetensors>=0.4.0",
     )
     .env({
@@ -55,8 +59,10 @@ training_image = (
 @app.cls(
     gpu="L40S",
     image=training_image,
-    volumes={"/models": model_volume},
-    secrets=[modal.Secret.from_name("aws-credentials")],
+    volumes={
+        "/models": model_volume,
+        LORA_MOUNT_PATH: lora_volume,
+    },
     container_idle_timeout=300,
     timeout=120,
     enable_memory_snapshot=True,
@@ -125,7 +131,7 @@ class DistillWorker:
 
         Args:
             request: Distillation request with:
-                - lora_uri: S3 URI of the LoRA adapter
+                - lora_id: LoRA identifier (e.g., "user123/coder-v1")
                 - prompt: User prompt
                 - response: Student's response to learn from
                 - feedback: Optional feedback about the response
@@ -133,7 +139,7 @@ class DistillWorker:
 
         Returns:
             dict with:
-                - lora_uri: Updated S3 URI
+                - lora_id: Updated LoRA identifier
                 - metadata: Training metrics
         """
         import torch
@@ -143,8 +149,8 @@ class DistillWorker:
         torch.cuda.empty_cache()
 
         # Validate request
-        if "lora_uri" not in request:
-            raise ValueError("Missing required field: lora_uri")
+        if "lora_id" not in request:
+            raise ValueError("Missing required field: lora_id")
         if "prompt" not in request:
             raise ValueError("Missing required field: prompt")
         if "response" not in request:
@@ -158,8 +164,8 @@ class DistillWorker:
         jsd_reg_weight = training_config.get("jsd_reg_weight", 0.5)
         teacher_top_k = training_config.get("teacher_top_k", 100)
 
-        # 1. Load LoRA from S3
-        lora_local_path = download_lora_from_s3(request["lora_uri"])
+        # 1. Load LoRA from Modal Volume
+        lora_local_path = load_lora(request["lora_id"])
 
         try:
             model = PeftModel.from_pretrained(
@@ -271,10 +277,10 @@ class DistillWorker:
         optimizer.step()
         optimizer.zero_grad()
 
-        # 7. Save LoRA to S3
+        # 7. Save LoRA to Modal Volume
         save_dir = tempfile.mkdtemp(prefix="lora_updated_")
         model.save_pretrained(save_dir)
-        new_uri = upload_lora_to_s3(save_dir, request["lora_uri"])
+        new_lora_id = save_lora(save_dir, request["lora_id"])
         cleanup_local_lora(save_dir)
 
         # 8. Cleanup
@@ -283,7 +289,7 @@ class DistillWorker:
         torch.cuda.empty_cache()
 
         return {
-            "lora_uri": new_uri,
+            "lora_id": new_lora_id,
             "metadata": {
                 "total_loss": loss_dict["loss"].item(),
                 "pg_loss": loss_dict["pg_loss"],
@@ -310,7 +316,7 @@ class DistillWorker:
                      pre-computed externally (e.g., from Fireworks)
 
         Returns:
-            dict with lora_uri and metadata
+            dict with lora_id and metadata
         """
         import torch
         import torch.nn.functional as F
@@ -319,8 +325,8 @@ class DistillWorker:
         torch.cuda.empty_cache()
 
         # Validate request
-        if "lora_uri" not in request:
-            raise ValueError("Missing required field: lora_uri")
+        if "lora_id" not in request:
+            raise ValueError("Missing required field: lora_id")
         if "prompt" not in request:
             raise ValueError("Missing required field: prompt")
         if "response" not in request:
@@ -335,7 +341,7 @@ class DistillWorker:
         max_grad_norm = training_config.get("max_grad_norm", 1.0)
 
         # Load LoRA
-        lora_local_path = download_lora_from_s3(request["lora_uri"])
+        lora_local_path = load_lora(request["lora_id"])
 
         try:
             model = PeftModel.from_pretrained(
@@ -400,7 +406,7 @@ class DistillWorker:
         # Save LoRA
         save_dir = tempfile.mkdtemp(prefix="lora_updated_")
         model.save_pretrained(save_dir)
-        new_uri = upload_lora_to_s3(save_dir, request["lora_uri"])
+        new_lora_id = save_lora(save_dir, request["lora_id"])
         cleanup_local_lora(save_dir)
 
         # Cleanup
@@ -409,7 +415,7 @@ class DistillWorker:
         torch.cuda.empty_cache()
 
         return {
-            "lora_uri": new_uri,
+            "lora_id": new_lora_id,
             "metadata": {
                 "total_loss": loss_dict["loss"].item(),
                 "pg_loss": loss_dict["pg_loss"],

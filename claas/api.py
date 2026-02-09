@@ -6,13 +6,14 @@ Endpoints:
 - POST /v1/distill: Run a single SDPO distillation step
 - POST /v1/distill/lite: Lightweight distillation with pre-computed teacher logprobs
 - POST /v1/lora/init: Initialize a new LoRA adapter
+- GET /v1/lora: List all LoRA adapters
 - GET /v1/health: Health check
 
 Example usage:
     curl -X POST https://your-modal-app.modal.run/v1/distill \\
         -H "Content-Type: application/json" \\
         -d '{
-            "lora_uri": "s3://my-bucket/loras/user123/coder-v1/",
+            "lora_id": "user123/coder-v1",
             "prompt": "Write a function to calculate factorial",
             "response": "def factorial(n):\\n    if n <= 1:\\n        return 1\\n    return n * factorial(n-1)",
             "feedback": "Good recursive solution",
@@ -31,7 +32,7 @@ import modal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from .s3_utils import initialize_lora_from_base, lora_exists
+from .storage import create_initial_lora, list_loras, lora_exists, lora_volume, LORA_MOUNT_PATH
 from .worker import DistillWorker, app as modal_app
 
 # FastAPI app
@@ -88,9 +89,9 @@ class TrainingConfig(BaseModel):
 class DistillRequest(BaseModel):
     """Request for a distillation step."""
 
-    lora_uri: str = Field(
+    lora_id: str = Field(
         ...,
-        description="S3 URI of the LoRA adapter (e.g., s3://bucket/loras/user/model/)",
+        description="LoRA identifier (e.g., 'user123/coder-v1')",
     )
     prompt: str = Field(
         ...,
@@ -115,9 +116,9 @@ class DistillRequest(BaseModel):
 class DistillLiteRequest(BaseModel):
     """Request for lightweight distillation with pre-computed teacher logprobs."""
 
-    lora_uri: str = Field(
+    lora_id: str = Field(
         ...,
-        description="S3 URI of the LoRA adapter",
+        description="LoRA identifier",
     )
     prompt: str = Field(
         ...,
@@ -142,9 +143,9 @@ class DistillLiteRequest(BaseModel):
 class DistillResponse(BaseModel):
     """Response from a distillation step."""
 
-    lora_uri: str = Field(
+    lora_id: str = Field(
         ...,
-        description="Updated S3 URI of the LoRA adapter",
+        description="Updated LoRA identifier",
     )
     metadata: dict[str, Any] = Field(
         ...,
@@ -155,9 +156,9 @@ class DistillResponse(BaseModel):
 class LoraInitRequest(BaseModel):
     """Request to initialize a new LoRA adapter."""
 
-    output_uri: str = Field(
+    lora_id: str = Field(
         ...,
-        description="S3 URI where the LoRA should be saved",
+        description="LoRA identifier (e.g., 'user123/coder-v1')",
     )
     base_model: str = Field(
         default="Qwen/Qwen2.5-Coder-3B-Instruct",
@@ -184,9 +185,18 @@ class LoraInitRequest(BaseModel):
 class LoraInitResponse(BaseModel):
     """Response from LoRA initialization."""
 
-    lora_uri: str = Field(
+    lora_id: str = Field(
         ...,
-        description="S3 URI of the initialized LoRA",
+        description="LoRA identifier of the initialized adapter",
+    )
+
+
+class LoraListResponse(BaseModel):
+    """Response listing all LoRA adapters."""
+
+    loras: list[str] = Field(
+        ...,
+        description="List of LoRA identifiers",
     )
 
 
@@ -206,21 +216,21 @@ async def distill(request: DistillRequest) -> DistillResponse:
     """Run a single SDPO distillation step.
 
     This endpoint:
-    1. Loads the user's LoRA from S3
+    1. Loads the user's LoRA from Modal Volume
     2. Runs the student model forward pass
     3. Gets teacher logprobs from the vLLM teacher service
     4. Computes SDPO loss (JSD-based policy gradient)
     5. Updates LoRA parameters
-    6. Saves the updated LoRA back to S3
+    6. Saves the updated LoRA back to Modal Volume
 
-    Returns the new LoRA URI and training metrics.
+    Returns the new LoRA ID and training metrics.
     """
     try:
         # Validate LoRA exists
-        if not lora_exists(request.lora_uri):
+        if not lora_exists(request.lora_id):
             raise HTTPException(
                 status_code=404,
-                detail=f"LoRA not found at {request.lora_uri}",
+                detail=f"LoRA not found: {request.lora_id}",
             )
 
         # Call the Modal worker
@@ -250,10 +260,10 @@ async def distill_lite(request: DistillLiteRequest) -> DistillResponse:
     token using their own teacher API.
     """
     try:
-        if not lora_exists(request.lora_uri):
+        if not lora_exists(request.lora_id):
             raise HTTPException(
                 status_code=404,
-                detail=f"LoRA not found at {request.lora_uri}",
+                detail=f"LoRA not found: {request.lora_id}",
             )
 
         worker = DistillWorker()
@@ -274,24 +284,41 @@ async def distill_lite(request: DistillLiteRequest) -> DistillResponse:
 async def init_lora(request: LoraInitRequest) -> LoraInitResponse:
     """Initialize a new LoRA adapter.
 
-    Creates a new LoRA adapter configuration at the specified S3 URI.
+    Creates a new LoRA adapter configuration in the Modal Volume.
     The adapter will have zero weights initially and will be trained
     through distill calls.
     """
     try:
-        uri = initialize_lora_from_base(
+        lora_id = create_initial_lora(
+            lora_id=request.lora_id,
             base_model_name=request.base_model,
-            output_uri=request.output_uri,
             lora_r=request.lora_r,
             lora_alpha=request.lora_alpha,
             target_modules=request.target_modules,
         )
-        return LoraInitResponse(lora_uri=uri)
+        return LoraInitResponse(lora_id=lora_id)
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"LoRA initialization failed: {str(e)}",
+        ) from e
+
+
+@web_app.get("/v1/lora", response_model=LoraListResponse)
+async def list_lora_adapters(prefix: str = "") -> LoraListResponse:
+    """List all LoRA adapters.
+
+    Args:
+        prefix: Optional prefix to filter by (e.g., 'user123/')
+    """
+    try:
+        loras = list_loras(prefix)
+        return LoraListResponse(loras=loras)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list LoRAs: {str(e)}",
         ) from e
 
 
@@ -335,9 +362,8 @@ async def root():
     image=modal.Image.debian_slim(python_version="3.11").pip_install(
         "fastapi>=0.110.0",
         "pydantic>=2.6.0",
-        "boto3>=1.34.0",
     ),
-    secrets=[modal.Secret.from_name("aws-credentials")],
+    volumes={LORA_MOUNT_PATH: lora_volume},
 )
 @modal.asgi_app()
 def fastapi_app():
