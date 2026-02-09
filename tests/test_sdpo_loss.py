@@ -9,7 +9,6 @@ from claas.sdpo_loss import (
     _lookup_token_in_topk,
     _sparse_logit_jsd,
     compute_sdpo_loss,
-    compute_token_level_only_loss,
 )
 
 
@@ -243,64 +242,6 @@ class TestComputeSdpoLoss:
             torch.tensor(1.0),
             atol=1e-4,
         )
-
-
-class TestTokenLevelOnlyLoss:
-    """Tests for compute_token_level_only_loss (lite mode)."""
-
-    def test_returns_expected_keys(self, sample_data, device):
-        """Loss dict contains expected keys for lite mode."""
-        # Create teacher logprob for chosen tokens only
-        teacher_logprob_chosen = torch.randn(
-            sample_data["B"], sample_data["T"], device=device
-        )
-
-        result = compute_token_level_only_loss(
-            student_logits=sample_data["student_logits"],
-            teacher_logprob_chosen=teacher_logprob_chosen,
-            response_mask=sample_data["response_mask"],
-            old_student_logprobs=sample_data["old_student_logprobs"],
-            response_ids=sample_data["response_ids"],
-        )
-
-        expected_keys = {
-            "loss",
-            "pg_loss",
-            "mean_advantage",
-            "frac_positive_advantage",
-            "mean_is_ratio",
-            "clip_fraction",
-        }
-        assert set(result.keys()) == expected_keys
-        # No jsd_reg in lite mode
-        assert "jsd_reg" not in result
-
-    def test_loss_is_differentiable(self, sample_data, device):
-        """Lite loss should be differentiable."""
-        teacher_logprob_chosen = torch.randn(
-            sample_data["B"], sample_data["T"], device=device
-        )
-
-        # Create fresh student logits with grad
-        student_logits = torch.randn(
-            sample_data["B"], sample_data["T"], sample_data["V"],
-            device=device, requires_grad=True,
-        )
-        old_logprobs = torch.log_softmax(student_logits.detach(), dim=-1).gather(
-            -1, sample_data["response_ids"].unsqueeze(-1)
-        ).squeeze(-1)
-
-        result = compute_token_level_only_loss(
-            student_logits=student_logits,
-            teacher_logprob_chosen=teacher_logprob_chosen,
-            response_mask=sample_data["response_mask"],
-            old_student_logprobs=old_logprobs,
-            response_ids=sample_data["response_ids"],
-        )
-
-        result["loss"].backward()
-
-        assert student_logits.grad is not None
 
 
 if __name__ == "__main__":

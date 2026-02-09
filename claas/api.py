@@ -4,7 +4,6 @@ This module provides the REST API for the distillation service.
 
 Endpoints:
 - POST /v1/distill: Run a single SDPO distillation step
-- POST /v1/distill/lite: Lightweight distillation with pre-computed teacher logprobs
 - POST /v1/lora/init: Initialize a new LoRA adapter
 - GET /v1/lora: List all LoRA adapters
 - GET /v1/health: Health check
@@ -115,33 +114,6 @@ class DistillRequest(BaseModel):
     )
 
 
-class DistillLiteRequest(BaseModel):
-    """Request for lightweight distillation with pre-computed teacher logprobs."""
-
-    lora_id: str = Field(
-        ...,
-        description="LoRA identifier",
-    )
-    prompt: str = Field(
-        ...,
-        min_length=1,
-        description="User prompt",
-    )
-    response: str = Field(
-        ...,
-        min_length=1,
-        description="Student's response",
-    )
-    teacher_logprobs: list[float] = Field(
-        ...,
-        description="Pre-computed teacher log-probs for each response token",
-    )
-    training: TrainingConfig = Field(
-        default_factory=TrainingConfig,
-        description="Training configuration",
-    )
-
-
 class DistillResponse(BaseModel):
     """Response from a distillation step."""
 
@@ -239,40 +211,6 @@ async def distill(request: DistillRequest) -> DistillResponse:
         # Call the Modal worker
         worker = DistillWorker()
         result = worker.distill.remote(request.model_dump())
-
-        return DistillResponse(**result)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Distillation failed: {str(e)}",
-        ) from e
-
-
-@web_app.post("/v1/distill/lite", response_model=DistillResponse)
-async def distill_lite(request: DistillLiteRequest) -> DistillResponse:
-    """Run a lightweight distillation step with pre-computed teacher logprobs.
-
-    This is the "lite" mode for use with external teacher APIs (e.g., Fireworks)
-    that have limited logprob support (K=5). It uses only the token-level
-    advantage computation, without the logit-level JSD regularizer.
-
-    The caller must pre-compute teacher log-probabilities for each response
-    token using their own teacher API.
-    """
-    try:
-        # Validate LoRA exists (run sync function in thread pool to avoid blocking)
-        exists = await asyncio.to_thread(lora_exists, request.lora_id)
-        if not exists:
-            raise HTTPException(
-                status_code=404,
-                detail=f"LoRA not found: {request.lora_id}",
-            )
-
-        worker = DistillWorker()
-        result = worker.distill_lite.remote(request.model_dump())
 
         return DistillResponse(**result)
 
