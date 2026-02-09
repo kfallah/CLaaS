@@ -32,8 +32,9 @@ import modal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from .storage import create_initial_lora, list_loras, lora_exists, lora_volume, LORA_MOUNT_PATH
-from .worker import DistillWorker, app as modal_app
+from .storage import LORA_MOUNT_PATH, create_initial_lora, list_loras, lora_exists, lora_volume
+from .worker import DistillWorker
+from .worker import app as modal_app
 
 # FastAPI app
 web_app = FastAPI(
