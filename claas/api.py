@@ -56,34 +56,22 @@ class TrainingConfig(BaseModel):
         le=1e-2,
         description="Learning rate for LoRA parameter updates",
     )
-    alpha: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="JSD interpolation (0.5 = symmetric JSD, SDPO default)",
-    )
-    clip_eps_lower: float = Field(
-        default=0.2,
-        ge=0.0,
-        le=1.0,
-        description="Lower bound for PPO clip range (ratio >= 1 - clip_eps_lower)",
-    )
-    clip_eps_upper: float = Field(
-        default=0.2,
-        ge=0.0,
-        le=1.0,
-        description="Upper bound for PPO clip range (ratio <= 1 + clip_eps_upper)",
-    )
     max_grad_norm: float = Field(
         default=1.0,
         ge=0.0,
         description="Maximum gradient norm for clipping",
     )
-    jsd_reg_weight: float = Field(
-        default=0.5,
+    kl_reg_weight: float = Field(
+        default=0.1,
         ge=0.0,
-        le=2.0,
-        description="Weight for logit-level JSD regularizer",
+        le=1.0,
+        description="Weight for KL regularization to base policy",
+    )
+    is_clip: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=20.0,
+        description="Importance sampling ratio clip (exp space)",
     )
     teacher_top_k: int = Field(
         default=100,

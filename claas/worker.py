@@ -2,16 +2,17 @@
 
 This Modal service handles the core training loop:
 1. Load user's LoRA adapter from Modal Volume
-2. Run student forward pass
-3. Get teacher logprobs from TeacherService
-4. Compute SDPO loss (JSD-based policy gradient)
-5. Backward pass and optimizer step on LoRA params only
-6. Save updated LoRA back to Modal Volume
+2. Run base model forward pass (for KL regularization)
+3. Run student (base + LoRA) forward pass
+4. Get teacher logprobs from TeacherService
+5. Compute SDPO loss (distillation + KL to base)
+6. Backward pass and optimizer step on LoRA params only
+7. Save updated LoRA back to Modal Volume
 
 Key features:
 - GPU memory snapshots for sub-second cold starts (~2s vs ~15-20s)
 - Frozen base model with per-request LoRA loading
-- Full SDPO loss with logit-level JSD regularizer
+- SDPO loss: KL distillation from teacher + KL regularization to base
 - Simple Modal Volume storage (no S3/AWS needed)
 """
 
@@ -207,11 +208,9 @@ class DistillWorker:
 
         training_config = request.get("training", {})
         lr = training_config.get("learning_rate", 1e-4)
-        alpha = training_config.get("alpha", 0.5)
-        clip_eps_lower = training_config.get("clip_eps_lower", 0.2)
-        clip_eps_upper = training_config.get("clip_eps_upper", 0.2)
         max_grad_norm = training_config.get("max_grad_norm", 1.0)
-        jsd_reg_weight = training_config.get("jsd_reg_weight", 0.5)
+        kl_reg_weight = training_config.get("kl_reg_weight", 0.1)
+        is_clip = training_config.get("is_clip", 5.0)
         teacher_top_k = training_config.get("teacher_top_k", 100)
 
         # 1. Load LoRA from Modal Volume
@@ -254,18 +253,20 @@ class DistillWorker:
         response_mask = torch.zeros(1, full_ids.shape[-1], device=self.device)
         response_mask[:, response_start:] = 1.0
 
-        # 3. Student forward pass (WITH gradient)
+        # 3. Base model forward pass (for KL regularization, no grad)
+        with torch.no_grad():
+            base_output = self.base_model(input_ids=full_ids)
+            base_logits = base_output.logits[:, response_start - 1 : -1, :]  # (1, T_resp, V)
+            base_logprobs = F.log_softmax(base_logits, dim=-1).gather(
+                -1, response_ids[:, :T_resp].unsqueeze(-1)
+            ).squeeze(-1)  # (1, T_resp)
+
+        # 4. Student forward pass (WITH gradient)
         student_output = model(input_ids=full_ids)
         # Logits at positions [response_start-1, ..., end-1] predict tokens at [response_start, ..., end]
         student_logits = student_output.logits[:, response_start - 1 : -1, :]  # (1, T_resp, V)
 
-        # Old logprobs (for importance sampling - detached snapshot)
-        with torch.no_grad():
-            old_student_logprobs = F.log_softmax(
-                student_logits.detach(), dim=-1
-            ).gather(-1, response_ids[:, :T_resp].unsqueeze(-1)).squeeze(-1)
-
-        # 4. Get teacher logprobs from vLLM sidecar
+        # 5. Get teacher logprobs from vLLM sidecar
         teacher_prompt = format_teacher_prompt(
             request["prompt"],
             request["feedback"],
@@ -302,28 +303,26 @@ class DistillWorker:
         teacher_logprobs = teacher_logprobs.unsqueeze(0)
         teacher_indices = teacher_indices.unsqueeze(0)
 
-        # 5. Compute SDPO loss
+        # 6. Compute SDPO loss
         loss_dict = compute_sdpo_loss(
             student_logits=student_logits,
             teacher_logprobs=teacher_logprobs,
             teacher_indices=teacher_indices,
+            base_logprobs=base_logprobs,
             response_mask=response_mask[:, response_start:],
-            old_student_logprobs=old_student_logprobs,
             response_ids=response_ids[:, :T_resp],
-            alpha=alpha,
-            clip_eps_lower=clip_eps_lower,
-            clip_eps_upper=clip_eps_upper,
-            jsd_reg_weight=jsd_reg_weight,
+            kl_reg_weight=kl_reg_weight,
+            is_clip=is_clip,
         )
 
-        # 6. Backward + clip + step
+        # 7. Backward + clip + step
         loss_dict["loss"].backward()
 
         grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, max_grad_norm)
         optimizer.step()
         optimizer.zero_grad()
 
-        # 7. Save LoRA to Modal Volume
+        # 8. Save LoRA to Modal Volume
         save_dir = tempfile.mkdtemp(prefix="lora_updated_")
         try:
             model.save_pretrained(save_dir)
@@ -331,8 +330,8 @@ class DistillWorker:
         finally:
             cleanup_local_lora(save_dir)
 
-        # 8. Cleanup
-        del model, optimizer, student_output, student_logits
+        # 9. Cleanup
+        del model, optimizer, student_output, student_logits, base_output
         cleanup_local_lora(lora_local_path)
         torch.cuda.empty_cache()
 
@@ -340,10 +339,9 @@ class DistillWorker:
             "lora_id": new_lora_id,
             "metadata": {
                 "total_loss": loss_dict["loss"].item(),
-                "pg_loss": loss_dict["pg_loss"],
-                "jsd_reg": loss_dict["jsd_reg"],
-                "mean_advantage": loss_dict["mean_advantage"],
-                "frac_positive_advantage": loss_dict["frac_positive_advantage"],
+                "distill_loss": loss_dict["distill_loss"],
+                "kl_reg": loss_dict["kl_reg"],
+                "mean_kl_to_teacher": loss_dict["mean_kl_to_teacher"],
                 "mean_is_ratio": loss_dict["mean_is_ratio"],
                 "clip_fraction": loss_dict["clip_fraction"],
                 "grad_norm": grad_norm.item() if hasattr(grad_norm, "item") else grad_norm,

@@ -46,10 +46,9 @@ class TrainingDefaults:
 
     # SDPO loss parameters
     learning_rate: float = 1e-4
-    alpha: float = 0.5  # JSD interpolation (0.5 = symmetric)
-    clip_eps: float = 0.2  # PPO clip range
     max_grad_norm: float = 1.0
-    jsd_reg_weight: float = 0.5
+    kl_reg_weight: float = 0.1  # KL regularization to base policy
+    is_clip: float = 5.0  # Importance sampling ratio clip
 
     # Teacher scoring
     teacher_top_k: int = 100  # Number of top logprobs from teacher
