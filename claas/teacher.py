@@ -40,6 +40,8 @@ app = modal.App("claas-distill")
 
 # Volume for model weights
 model_volume = modal.Volume.from_name("claas-models", create_if_missing=True)
+hf_secret_name = os.environ.get("CLAAS_HF_SECRET_NAME", "").strip()
+teacher_secrets = [modal.Secret.from_name(hf_secret_name)] if hf_secret_name else []
 
 # vLLM image with dependencies
 vllm_image = (
@@ -52,8 +54,6 @@ vllm_image = (
     )
     .env({
         "HF_HOME": "/models/hf_cache",
-        "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
-        "HUGGING_FACE_HUB_TOKEN": os.environ.get("HF_TOKEN", ""),
         "VLLM_SERVER_DEV_MODE": "1",
         "TORCHINDUCTOR_COMPILE_THREADS": "1",
     })
@@ -64,6 +64,7 @@ vllm_image = (
     gpu="H100",
     image=vllm_image,
     volumes={"/models": model_volume},
+    secrets=teacher_secrets,
     min_containers=1,
     scaledown_window=600,
     enable_memory_snapshot=True,
@@ -93,6 +94,11 @@ class TeacherService:
         # Modal can expose "none" during early init in some snapshots.
         if os.environ.get("CUDA_VISIBLE_DEVICES", "").lower() == "none":
             os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+        # Ensure runtime-injected tokens are visible to huggingface_hub/vLLM.
+        hf_token = os.environ.get("HF_TOKEN")
+        if hf_token and not os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_token
 
         vllm_module = importlib.import_module("vllm")
         LLM = getattr(vllm_module, "LLM")
