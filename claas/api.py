@@ -281,12 +281,19 @@ class LoraListResponse(BaseModel):
     )
 
 
+class ServiceHealth(BaseModel):
+    """Health status for a backing service (worker or teacher)."""
+
+    status: str
+    error: str | None = None
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
 
     status: str
-    worker: dict[str, Any] | None = None
-    teacher: dict[str, Any] | None = None
+    worker: ServiceHealth | None = None
+    teacher: ServiceHealth | None = None
 
 
 async def _get_feedback_lock(lora_id: str) -> asyncio.Lock:
@@ -634,23 +641,27 @@ async def export_lora_adapter(lora_id: str) -> Response:
 @web_app.get("/v1/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
     """Check health of the API and backing services."""
-    result: dict[str, Any] = {"status": "healthy"}
+    status = "healthy"
+    worker: ServiceHealth | None = None
+    teacher: ServiceHealth | None = None
 
     try:
         worker_health_fn = modal.Function.from_name("claas-distill", "DistillWorker.health_check")
-        result["worker"] = await asyncio.wait_for(worker_health_fn.remote.aio(), timeout=15)
+        data = await asyncio.wait_for(worker_health_fn.remote.aio(), timeout=15)
+        worker = ServiceHealth.model_validate(data)
     except Exception as e:
-        result["worker"] = {"status": "unhealthy", "error": str(e)}
-        result["status"] = "degraded"
+        worker = ServiceHealth(status="unhealthy", error=str(e))
+        status = "degraded"
 
     try:
         teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
-        result["teacher"] = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
+        data = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
+        teacher = ServiceHealth.model_validate(data)
     except Exception as e:
-        result["teacher"] = {"status": "unhealthy", "error": str(e)}
-        result["status"] = "degraded"
+        teacher = ServiceHealth(status="unhealthy", error=str(e))
+        status = "degraded"
 
-    return HealthResponse(**result)
+    return HealthResponse(status=status, worker=worker, teacher=teacher)
 
 
 @web_app.get("/")
