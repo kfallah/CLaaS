@@ -236,6 +236,28 @@ vllm serve Qwen/Qwen3-8B \
   --lora-modules coder=./loras/coder-v1-init
 ```
 
+### Local OpenClaw + multi-LoRA stack (recommended)
+
+Use the scripts in `scripts/openclaw-local` to run a supervised local stack:
+
+```bash
+cd /root/CLaaS
+
+# Optional: customize values (model ids, LoRA modules, etc.)
+cp scripts/openclaw-local/openclaw-local.env.example .env.openclaw-local
+set -a; source .env.openclaw-local; set +a
+
+# Start supervised stack (auto-restarts vLLM + gateway if either exits)
+bash scripts/openclaw-local/run_openclaw_local_stack.sh
+```
+
+What this stack does:
+- starts `vllm` on Qwen3-8B
+- supports multiple LoRAs (`LORA_MODULES=alias=/path,alias2=/path2`)
+- auto-loads alias LoRAs from `CLaaS/.local_loras/.aliases.json`
+- writes OpenClaw model config to `~/.openclaw/openclaw.json` and `~/.openclaw/agents/main/agent/models.json` (default stable model id: `qwen3-8b`)
+- restarts vLLM/gateway when they crash so Telegram does not get stuck on `Connection error`
+
 ## Storage
 
 LoRA adapters are stored in **Modal Volumes** - no external storage needed:
