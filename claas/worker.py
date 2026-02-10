@@ -32,6 +32,7 @@ from .storage import (
     load_lora,
     lora_volume,
     save_lora,
+    save_lora_inplace,
 )
 from .teacher import parse_teacher_result
 from .types import SDPOLossInput, TrainingConfig
@@ -378,7 +379,10 @@ class DistillWorker:
         save_dir = tempfile.mkdtemp(prefix="lora_updated_")
         try:
             model.save_pretrained(save_dir)
-            new_lora_id = save_lora(save_dir, request["lora_id"])
+            if request.get("save_in_place", False):
+                new_lora_id = save_lora_inplace(save_dir, request["lora_id"])
+            else:
+                new_lora_id = save_lora(save_dir, request["lora_id"])
         finally:
             cleanup_local_lora(save_dir)
 

@@ -107,6 +107,17 @@ curl -X POST https://your-app--claas-distill-fastapi-app.modal.run/v1/distill \
 
 ## API Reference
 
+### POST /v1/feedback
+
+Run one online update transaction for the served adapter:
+
+1. `POST /sleep?level=1` to local vLLM
+2. distill one step with CLaaS worker
+3. save the adapter in place to the same `lora_id`
+4. `POST /wake_up` to local vLLM
+
+Each call writes a structured JSON log file to `FEEDBACK_LOG_DIR` (default `./feedback_logs`).
+
 ### POST /v1/distill
 
 Run a single SDPO distillation step.
@@ -239,6 +250,8 @@ Benefits:
 - Integrated with Modal infrastructure
 - ~100MB/s read/write throughput
 - Persists across container restarts
+
+`/v1/distill` keeps versioned checkpoint behavior for compatibility. `/v1/feedback` is the recommended path for updating one served LoRA in place.
 
 ## Off-Policy Learning
 

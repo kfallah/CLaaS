@@ -157,6 +157,38 @@ class TestSaveLora:
         assert result.startswith("user/model-")
         assert len(result) > len("user/model-")
 
+    def test_inplace_overwrites_fixed_path(self, tmp_path, monkeypatch):
+        """In-place save keeps a stable lora_id and replaces adapter files."""
+        from claas import storage
+
+        class MockVolume:
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(storage, "lora_volume", MockVolume())
+
+        volume_path = tmp_path / "volume"
+        volume_path.mkdir()
+        monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(volume_path))
+
+        initial = tmp_path / "initial"
+        initial.mkdir()
+        (initial / "adapter_config.json").write_text('{"r": 16}')
+        (initial / "weights.txt").write_text("old")
+        storage.save_lora_inplace(str(initial), "user/model")
+
+        updated = tmp_path / "updated"
+        updated.mkdir()
+        (updated / "adapter_config.json").write_text('{"r": 16}')
+        (updated / "weights.txt").write_text("new")
+        result = storage.save_lora_inplace(str(updated), "user/model")
+
+        assert result == "user/model"
+        fixed_path = volume_path / "user" / "model"
+        assert fixed_path.exists()
+        assert (fixed_path / "weights.txt").read_text() == "new"
+        assert not (volume_path / "user" / "model.bak").exists()
+
 
 class TestCreateInitialLora:
     """Tests for create_initial_lora."""

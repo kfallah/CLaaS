@@ -204,6 +204,61 @@ def save_lora(
     return full_lora_id
 
 
+def save_lora_inplace(local_dir: str, lora_id: str) -> str:
+    """Save a LoRA adapter by replacing a fixed LoRA path in place.
+
+    This uses a staged directory and rename swaps to avoid exposing
+    partially written adapter files.
+    """
+    sanitized_id = lora_id.strip("/")
+    target_path = get_lora_path(sanitized_id)
+    parent = os.path.dirname(target_path)
+    os.makedirs(parent, exist_ok=True)
+
+    stage_path = tempfile.mkdtemp(prefix=".stage_", dir=parent)
+    backup_path = f"{target_path}.bak"
+
+    try:
+        # Copy files into stage directory first.
+        local_path = Path(local_dir)
+        for item in local_path.iterdir():
+            src = str(item)
+            dst = os.path.join(stage_path, item.name)
+            if item.is_file():
+                shutil.copy2(src, dst)
+            elif item.is_dir():
+                shutil.copytree(src, dst)
+
+        config_path = os.path.join(stage_path, "adapter_config.json")
+        if not os.path.exists(config_path):
+            raise ValueError("adapter_config.json is required for LoRA save")
+
+        # Clear old backup if present from a prior interrupted run.
+        if os.path.exists(backup_path):
+            shutil.rmtree(backup_path)
+
+        had_existing = os.path.exists(target_path)
+        if had_existing:
+            os.replace(target_path, backup_path)
+
+        try:
+            os.replace(stage_path, target_path)
+        except Exception:
+            # Roll back prior adapter on swap failure.
+            if had_existing and os.path.exists(backup_path):
+                os.replace(backup_path, target_path)
+            raise
+
+        if had_existing and os.path.exists(backup_path):
+            shutil.rmtree(backup_path)
+    finally:
+        if os.path.exists(stage_path):
+            shutil.rmtree(stage_path)
+
+    lora_volume.commit()
+    return sanitized_id
+
+
 def create_initial_lora(
     lora_id: str,
     base_model_name: str,

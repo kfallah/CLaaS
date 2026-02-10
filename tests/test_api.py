@@ -8,16 +8,19 @@ from claas.api import web_app
 
 
 class _RemoteCall:
-    def __init__(self, payload):
+    def __init__(self, payload, capture=None):
         self.payload = payload
+        self.capture = capture
 
-    async def aio(self, _request):
+    async def aio(self, request):
+        if self.capture is not None:
+            self.capture["request"] = request
         return self.payload
 
 
 class _FunctionStub:
-    def __init__(self, payload):
-        self.remote = _RemoteCall(payload)
+    def __init__(self, payload, capture=None):
+        self.remote = _RemoteCall(payload, capture=capture)
 
 
 class _RemoteCallFailure:
@@ -79,6 +82,94 @@ def test_distill_success(monkeypatch):
     body = response.json()
     assert body["lora_id"] == "user/model-v2"
     assert body["metadata"]["tokens_processed"] == 3
+
+
+def test_feedback_success_inplace_flow(monkeypatch):
+    from claas import api
+
+    calls = []
+    captured = {}
+    log_records = []
+
+    def fake_from_name(_app, fn_name):
+        if fn_name == "DistillWorker.distill":
+            return _FunctionStub(
+                {"lora_id": "user/model", "metadata": {"tokens_processed": 2}},
+                capture=captured,
+            )
+        raise AssertionError(f"unexpected modal function: {fn_name}")
+
+    async def fake_vllm_post(path, *, params=None, timeout_s=30.0):
+        calls.append((path, params))
+
+    def fake_write_feedback_log(record):
+        log_records.append(record)
+        return "/tmp/feedback-log.json"
+
+    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
+    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
+    monkeypatch.setattr(api, "_write_feedback_log", fake_write_feedback_log)
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "lora_id": "user/model",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "training": {"teacher_mode": "self"},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["lora_id"] == "user/model"
+    assert body["feedback_log_path"] == "/tmp/feedback-log.json"
+    assert calls == [("/sleep", {"level": 1}), ("/wake_up", None)]
+    assert captured["request"]["save_in_place"] is True
+    assert log_records and log_records[0]["status"] == "ok"
+
+
+def test_feedback_returns_500_and_logs_error(monkeypatch):
+    from claas import api
+
+    log_records = []
+
+    def fake_from_name(_app, fn_name):
+        if fn_name == "DistillWorker.distill":
+            return _FunctionFailureStub()
+        raise AssertionError(f"unexpected modal function: {fn_name}")
+
+    async def fake_vllm_post(_path, *, params=None, timeout_s=30.0):
+        return None
+
+    def fake_write_feedback_log(record):
+        log_records.append(record)
+        return "/tmp/feedback-log.json"
+
+    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
+    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
+    monkeypatch.setattr(api, "_write_feedback_log", fake_write_feedback_log)
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "lora_id": "user/model",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "training": {"teacher_mode": "self"},
+        },
+    )
+
+    assert response.status_code == 500
+    assert "Feedback update failed" in response.json()["detail"]
+    assert log_records and log_records[0]["status"] == "error"
 
 
 def test_export_404_when_missing(monkeypatch):
