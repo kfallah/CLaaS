@@ -48,13 +48,17 @@ model_volume = modal.Volume.from_name("claas-models", create_if_missing=True)
 training_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "torch>=2.1.0",
-        "transformers>=4.40.0",
+        "torch==2.4.1",
+        "transformers>=4.40.0,<5.0.0",
         "peft>=0.10.0",
         "accelerate>=0.27.0",
         "bitsandbytes>=0.42.0",
-        "flash-attn>=2.5.0",
         "safetensors>=0.4.0",
+        "packaging>=24.0",
+    )
+    .pip_install(
+        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/"
+        "flash_attn-2.8.3%2Bcu12torch2.4cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
     )
     .env({
         "HF_HOME": "/models/hf_cache",
@@ -80,6 +84,10 @@ class DistillWorker:
     base_model_id: str = os.environ.get(
         "CLAAS_BASE_MODEL_ID",
         "Qwen/Qwen3-Coder-Next-8B",
+    )
+    attn_implementation: str = os.environ.get(
+        "CLAAS_ATTN_IMPLEMENTATION",
+        "flash_attention_2",
     )
 
     @modal.enter(snap=True)
@@ -112,7 +120,7 @@ class DistillWorker:
             torch_dtype=torch.bfloat16,
             device_map="cuda",
             trust_remote_code=True,
-            attn_implementation="flash_attention_2",
+            attn_implementation=self.attn_implementation,
             cache_dir="/models/hf_cache",
         )
 

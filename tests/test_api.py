@@ -15,12 +15,9 @@ class _RemoteCall:
         return self.payload
 
 
-class _WorkerSuccess:
-    def __init__(self):
-        self.distill = type("DistillMethod", (), {"remote": _RemoteCall({"lora_id": "user/model-v2", "metadata": {"tokens_processed": 3}})})()
-
-    async def health_check(self):
-        return {"status": "healthy"}
+class _FunctionStub:
+    def __init__(self, payload):
+        self.remote = _RemoteCall(payload)
 
 
 class _RemoteCallFailure:
@@ -28,9 +25,9 @@ class _RemoteCallFailure:
         raise RuntimeError("modal rpc failure")
 
 
-class _WorkerFailure:
+class _FunctionFailureStub:
     def __init__(self):
-        self.distill = type("DistillMethod", (), {"remote": _RemoteCallFailure()})()
+        self.remote = _RemoteCallFailure()
 
 
 def test_distill_404_when_lora_missing(monkeypatch):
@@ -58,7 +55,13 @@ def test_distill_success(monkeypatch):
     from claas import api
 
     monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
-    monkeypatch.setattr(api, "DistillWorker", _WorkerSuccess)
+    monkeypatch.setattr(
+        api.modal.Function,
+        "from_name",
+        lambda *_args, **_kwargs: _FunctionStub(
+            {"lora_id": "user/model-v2", "metadata": {"tokens_processed": 3}}
+        ),
+    )
     client = TestClient(web_app)
 
     response = client.post(
@@ -92,7 +95,11 @@ def test_distill_returns_500_on_worker_failure(monkeypatch):
     from claas import api
 
     monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
-    monkeypatch.setattr(api, "DistillWorker", _WorkerFailure)
+    monkeypatch.setattr(
+        api.modal.Function,
+        "from_name",
+        lambda *_args, **_kwargs: _FunctionFailureStub(),
+    )
     client = TestClient(web_app)
 
     response = client.post(

@@ -42,8 +42,9 @@ from .storage import (
     lora_volume,
 )
 from .types import TrainingConfig
-from .worker import DistillWorker
-from .worker import app as modal_app
+
+# Modal app for API surface; worker/teacher are resolved by name at runtime.
+app = modal.App("claas-distill")
 
 # FastAPI app
 web_app = FastAPI(
@@ -184,9 +185,9 @@ async def distill(request: DistillRequest) -> DistillResponse:
                 detail=f"LoRA not found: {request.lora_id}",
             )
 
-        # Call the Modal worker (use .remote.aio() in async context)
-        worker = DistillWorker()
-        result = await worker.distill.remote.aio(request.model_dump())
+        # Resolve worker by name to avoid importing training dependencies in API image.
+        distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
+        result = await distill_fn.remote.aio(request.model_dump())
 
         return DistillResponse(**result)
 
@@ -279,17 +280,15 @@ async def health_check() -> HealthResponse:
     result: dict[str, Any] = {"status": "healthy"}
 
     try:
-        worker = DistillWorker()
-        result["worker"] = await worker.health_check.remote.aio()
+        worker_health_fn = modal.Function.from_name("claas-distill", "DistillWorker.health_check")
+        result["worker"] = await worker_health_fn.remote.aio()
     except Exception as e:
         result["worker"] = {"status": "unhealthy", "error": str(e)}
         result["status"] = "degraded"
 
     try:
-        from .teacher import TeacherService
-
-        teacher = TeacherService()
-        result["teacher"] = await teacher.health_check.remote.aio()
+        teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
+        result["teacher"] = await teacher_health_fn.remote.aio()
     except Exception as e:
         result["teacher"] = {"status": "unhealthy", "error": str(e)}
         result["status"] = "degraded"
@@ -309,7 +308,7 @@ async def root():
 
 
 # Mount FastAPI to Modal
-@modal_app.function(
+@app.function(
     image=modal.Image.debian_slim(python_version="3.11").pip_install(
         "modal>=1.0.0",
         "fastapi>=0.110.0",
