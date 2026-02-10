@@ -43,7 +43,7 @@ model_volume = modal.Volume.from_name("claas-models", create_if_missing=True)
 vllm_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "vllm>=0.4.0",
+        "vllm>=0.11.0",
         "torch>=2.1.0",
         "transformers>=4.40.0",
         "huggingface_hub",

@@ -33,6 +33,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .storage import LORA_MOUNT_PATH, create_initial_lora, list_loras, lora_exists, lora_volume
+from .types import TrainingConfig
 from .worker import DistillWorker
 from .worker import app as modal_app
 
@@ -45,46 +46,6 @@ web_app = FastAPI(
 
 
 # Request/Response Models
-
-
-class TrainingConfig(BaseModel):
-    """Training configuration for distillation."""
-
-    learning_rate: float = Field(
-        default=1e-4,
-        ge=1e-6,
-        le=1e-2,
-        description="Learning rate for LoRA parameter updates",
-    )
-    alpha: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="GJS interpolation (0.5 = symmetric JSD, 1.0 = reverse KL)",
-    )
-    is_clip: float = Field(
-        default=5.0,
-        ge=1.0,
-        le=20.0,
-        description="Importance sampling ratio clip (exp space)",
-    )
-    max_grad_norm: float = Field(
-        default=1.0,
-        ge=0.0,
-        description="Maximum gradient norm for clipping",
-    )
-    kl_reg_weight: float = Field(
-        default=0.1,
-        ge=0.0,
-        le=1.0,
-        description="Weight for KL regularization to base policy",
-    )
-    teacher_top_k: int = Field(
-        default=100,
-        ge=10,
-        le=500,
-        description="Number of top logprobs to request from teacher",
-    )
 
 
 class DistillRequest(BaseModel):

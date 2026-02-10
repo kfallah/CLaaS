@@ -13,35 +13,17 @@ SDPO uses Generalized Jensen-Shannon Divergence (GJS) for distillation, with:
 
 from __future__ import annotations
 
-from typing import TypedDict
+import logging
 
 import torch
 import torch.nn.functional as F
 
+from .types import SDPOLossInput, SDPOLossResult
 
-class SDPOLossResult(TypedDict):
-    """Result from SDPO loss computation."""
-
-    loss: torch.Tensor
-    distill_loss: float
-    kl_reg: float
-    mean_is_ratio: float
-    clip_fraction: float
+logger = logging.getLogger(__name__)
 
 
-def compute_sdpo_loss(
-    student_logits: torch.Tensor,
-    teacher_logprobs: torch.Tensor,
-    teacher_indices: torch.Tensor,
-    base_logprobs: torch.Tensor,
-    response_mask: torch.Tensor,
-    old_student_logprobs: torch.Tensor,
-    response_ids: torch.Tensor,
-    alpha: float = 0.5,
-    is_clip: float = 5.0,
-    kl_reg_weight: float = 0.1,
-    rollout_is_weights: torch.Tensor | None = None,
-) -> SDPOLossResult:
+def compute_sdpo_loss(loss_input: SDPOLossInput) -> SDPOLossResult:
     """Compute SDPO loss: Generalized JSD distillation + KL regularization to base.
 
     This follows the reference implementation from https://github.com/lasgroup/SDPO.
@@ -51,21 +33,31 @@ def compute_sdpo_loss(
     3. KL divergence from student to base policy (drift regularization)
 
     Args:
-        student_logits: (B, T, V) student model logits at response positions (WITH grad)
-        teacher_logprobs: (B, T, K) teacher's top-K log-probabilities (no grad)
-        teacher_indices: (B, T, K) teacher's top-K token indices
-        base_logprobs: (B, T) base model log-prob of response tokens (no grad, no LoRA)
-        response_mask: (B, T) binary mask, 1 for response tokens
-        old_student_logprobs: (B, T) student log-prob of chosen token at rollout time
-        response_ids: (B, T) actual token ids in the response
-        alpha: interpolation for GJS (0.5 = symmetric JSD, 1.0 = reverse KL)
-        is_clip: importance sampling ratio clip (exp space)
-        kl_reg_weight: weight for KL regularization to base policy
-        rollout_is_weights: (B, T) optional rollout correction weights
+        loss_input: SDPOLossInput containing all required tensors and hyperparameters
 
     Returns:
         SDPOLossResult with loss tensor and diagnostic metrics
     """
+    # Extract from typed input
+    student_logits = loss_input.student_logits
+    teacher_logprobs = loss_input.teacher_logprobs
+    teacher_indices = loss_input.teacher_indices
+    base_logprobs = loss_input.base_logprobs
+    response_mask = loss_input.response_mask
+    old_student_logprobs = loss_input.old_student_logprobs
+    response_ids = loss_input.response_ids
+    alpha = loss_input.alpha
+    is_clip = loss_input.is_clip
+    kl_reg_weight = loss_input.kl_reg_weight
+    rollout_is_weights = loss_input.rollout_is_weights
+
+    # Warn if rollout_is_weights not provided (off-policy correction disabled)
+    if rollout_is_weights is None:
+        logger.warning(
+            "rollout_is_weights not provided; off-policy rollout correction disabled. "
+            "For proper off-policy learning, pass rollout importance weights."
+        )
+
     _B, _T, _V = student_logits.shape
 
     # Step 1: Student log-probabilities (full, with gradient)

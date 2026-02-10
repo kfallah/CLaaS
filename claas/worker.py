@@ -19,6 +19,7 @@ Key features:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 
@@ -33,6 +34,9 @@ from .storage import (
     save_lora,
 )
 from .teacher import TeacherService, format_teacher_prompt, parse_teacher_result
+from .types import SDPOLossInput, TrainingConfig
+
+logger = logging.getLogger(__name__)
 
 # Modal app (shared with teacher)
 app = modal.App("claas-distill")
@@ -121,8 +125,9 @@ class DistillWorker:
         del dummy_ids
         torch.cuda.empty_cache()
 
-        # Store optimizer class for later
+        # Store classes/modules for later use (avoids lazy imports in methods)
         self.optimizer_cls = torch.optim.AdamW
+        self.F = torch.nn.functional
 
         vram_gb = torch.cuda.memory_allocated() / 1e9
         print(f"Base model loaded. VRAM: {vram_gb:.2f} GB")
@@ -192,8 +197,8 @@ class DistillWorker:
                 - metadata: Training metrics
         """
         import torch
-        import torch.nn.functional as F
 
+        F = self.F  # Use pre-imported functional module
         torch.cuda.empty_cache()
 
         # Validate request
@@ -206,13 +211,8 @@ class DistillWorker:
         if "feedback" not in request:
             raise ValueError("Missing required field: feedback")
 
-        training_config = request.get("training", {})
-        lr = training_config.get("learning_rate", 1e-4)
-        max_grad_norm = training_config.get("max_grad_norm", 1.0)
-        alpha = training_config.get("alpha", 0.5)
-        is_clip = training_config.get("is_clip", 5.0)
-        kl_reg_weight = training_config.get("kl_reg_weight", 0.1)
-        teacher_top_k = training_config.get("teacher_top_k", 100)
+        # Parse training config with typed defaults
+        config = TrainingConfig.model_validate(request.get("training", {}))
 
         # 1. Load LoRA from Modal Volume
         lora_local_path = load_lora(request["lora_id"])
@@ -220,15 +220,19 @@ class DistillWorker:
         try:
             model = self._load_or_create_lora(lora_local_path)
             model.train()
-        except Exception as e:
+        except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
             cleanup_local_lora(lora_local_path)
             raise RuntimeError(f"Failed to load LoRA: {e}") from e
+        except ValueError as e:
+            # PEFT config validation errors
+            cleanup_local_lora(lora_local_path)
+            raise RuntimeError(f"Invalid LoRA configuration: {e}") from e
 
         # Set up optimizer on LoRA params only
         lora_params = [p for p in model.parameters() if p.requires_grad]
         optimizer = self.optimizer_cls(
             lora_params,
-            lr=lr,
+            lr=config.learning_rate,
             betas=(0.9, 0.999),
             weight_decay=0.01,
         )
@@ -267,11 +271,31 @@ class DistillWorker:
         # Logits at positions [response_start-1, ..., end-1] predict tokens at [response_start, ..., end]
         student_logits = student_output.logits[:, response_start - 1 : -1, :]  # (1, T_resp, V)
 
-        # Old logprobs (for importance sampling - detached snapshot)
-        with torch.no_grad():
-            old_student_logprobs = F.log_softmax(
-                student_logits.detach(), dim=-1
-            ).gather(-1, response_ids[:, :T_resp].unsqueeze(-1)).squeeze(-1)
+        # Old logprobs for importance sampling ratio
+        # These should come from the inference server that generated the rollout
+        if config.rollout_logprobs is not None:
+            old_student_logprobs = torch.tensor(
+                config.rollout_logprobs,
+                dtype=torch.float32,
+                device=self.device,
+            ).unsqueeze(0)  # Add batch dimension
+            # Truncate/pad to match response length
+            if old_student_logprobs.shape[1] > T_resp:
+                old_student_logprobs = old_student_logprobs[:, :T_resp]
+            elif old_student_logprobs.shape[1] < T_resp:
+                # Pad with zeros (log(1) = 0, neutral for IS ratio)
+                pad_size = T_resp - old_student_logprobs.shape[1]
+                old_student_logprobs = F.pad(old_student_logprobs, (0, pad_size), value=0.0)
+        else:
+            # Fallback: compute from current model (incorrect for off-policy)
+            logger.warning(
+                "rollout_logprobs not provided; computing from current model. "
+                "For proper off-policy learning, pass logprobs from the inference server."
+            )
+            with torch.no_grad():
+                old_student_logprobs = F.log_softmax(
+                    student_logits.detach(), dim=-1
+                ).gather(-1, response_ids[:, :T_resp].unsqueeze(-1)).squeeze(-1)
 
         # 5. Get teacher logprobs from vLLM sidecar
         teacher_prompt = format_teacher_prompt(
@@ -283,7 +307,7 @@ class DistillWorker:
         teacher_result = teacher_service.score_tokens.remote(
             prompts=[teacher_prompt],
             completions=[request["response"]],
-            top_k=teacher_top_k,
+            top_k=config.teacher_top_k,
         )
 
         if not teacher_result or not teacher_result[0]:
@@ -311,7 +335,24 @@ class DistillWorker:
         teacher_indices = teacher_indices.unsqueeze(0)
 
         # 6. Compute SDPO loss
-        loss_dict = compute_sdpo_loss(
+        # Convert rollout_is_weights to tensor if provided
+        rollout_is_weights_tensor = None
+        if config.rollout_is_weights is not None:
+            rollout_is_weights_tensor = torch.tensor(
+                config.rollout_is_weights,
+                dtype=torch.float32,
+                device=self.device,
+            ).unsqueeze(0)  # Add batch dimension
+            # Truncate/pad to match response length
+            if rollout_is_weights_tensor.shape[1] > T_resp:
+                rollout_is_weights_tensor = rollout_is_weights_tensor[:, :T_resp]
+            elif rollout_is_weights_tensor.shape[1] < T_resp:
+                pad_size = T_resp - rollout_is_weights_tensor.shape[1]
+                rollout_is_weights_tensor = F.pad(
+                    rollout_is_weights_tensor, (0, pad_size), value=1.0
+                )
+
+        loss_input = SDPOLossInput(
             student_logits=student_logits,
             teacher_logprobs=teacher_logprobs,
             teacher_indices=teacher_indices,
@@ -319,15 +360,17 @@ class DistillWorker:
             response_mask=response_mask[:, response_start:],
             old_student_logprobs=old_student_logprobs,
             response_ids=response_ids[:, :T_resp],
-            alpha=alpha,
-            is_clip=is_clip,
-            kl_reg_weight=kl_reg_weight,
+            alpha=config.alpha,
+            is_clip=config.is_clip,
+            kl_reg_weight=config.kl_reg_weight,
+            rollout_is_weights=rollout_is_weights_tensor,
         )
+        loss_dict = compute_sdpo_loss(loss_input)
 
         # 7. Backward + clip + step
         loss_dict["loss"].backward()
 
-        grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, max_grad_norm)
+        grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, config.max_grad_norm)
         optimizer.step()
         optimizer.zero_grad()
 
