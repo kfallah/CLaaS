@@ -194,15 +194,15 @@ class DistillWorker:
 
         return model
 
-    def _build_self_teacher_topk(self, student_logits, top_k: int):
-        """Build top-K teacher distribution from detached student logits."""
+    def _build_self_teacher_topk(self, logits, top_k: int):
+        """Build top-K teacher distribution from non-student logits."""
         import torch
 
         with torch.no_grad():
-            student_log_probs = self.F.log_softmax(student_logits.detach(), dim=-1)
-            vocab_size = student_log_probs.shape[-1]
+            log_probs = self.F.log_softmax(logits.detach(), dim=-1)
+            vocab_size = log_probs.shape[-1]
             k = min(max(1, top_k), vocab_size)
-            top_logprobs, top_indices = torch.topk(student_log_probs[0], k=k, dim=-1)
+            top_logprobs, top_indices = torch.topk(log_probs[0], k=k, dim=-1)
         return top_logprobs, top_indices
 
     @modal.method()
@@ -325,15 +325,19 @@ class DistillWorker:
                 ).gather(-1, response_ids[:, :T_resp].unsqueeze(-1)).squeeze(-1)
 
         # 5. Build/parse teacher logprobs
+        requested_teacher_mode = str(request.get("training", {}).get("teacher_mode", "self"))
         teacher_result = request.get("teacher_result")
-        if teacher_result:
+        if requested_teacher_mode == "remote":
+            if not teacher_result:
+                raise ValueError("teacher_mode='remote' requires non-empty teacher_result")
             teacher_logprobs, teacher_indices = parse_teacher_result(
                 teacher_result, str(self.device)
             )
             teacher_mode = "remote"
         else:
+            # Self-teacher should be a different distribution than student logits.
             teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
-                student_logits, config.teacher_top_k
+                base_logits, config.teacher_top_k
             )
             teacher_mode = "self"
 
