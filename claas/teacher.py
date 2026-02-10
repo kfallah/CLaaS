@@ -6,7 +6,7 @@ generated tokens and returns top-K log-probabilities at each position.
 
 Key features:
 - GPU memory snapshots for sub-second cold starts (~3-5s vs ~45-60s)
-- prompt_logprobs up to vLLM runtime limits (currently capped at 20)
+- prompt_logprobs up to 100 (matching SDPO reference)
 - Stateless service that can be shared across users/LoRAs
 """
 
@@ -77,8 +77,7 @@ class TeacherService:
 
     model_id: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
     max_model_len: int = 8192
-    default_top_k: int = 20
-    max_top_k: int = 20
+    top_k: int = 100
 
     @modal.enter(snap=True)
     def start_vllm(self):
@@ -158,8 +157,7 @@ class TeacherService:
         """
 
         if top_k is None:
-            top_k = self.default_top_k
-        top_k = min(top_k, self.max_top_k)
+            top_k = self.top_k
 
         # Concatenate prompt + completion as a single prompt
         # Use prompt_logprobs to get logprobs at every position

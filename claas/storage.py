@@ -284,7 +284,7 @@ def save_lora_inplace(local_dir: str, lora_id: str) -> str:
 
         try:
             os.replace(stage_path, target_path)
-        except Exception:
+        except OSError:
             # Roll back prior adapter on swap failure.
             if had_existing and os.path.exists(backup_path):
                 os.replace(backup_path, target_path)

@@ -84,7 +84,7 @@ def compute_sdpo_loss(loss_input: SDPOLossInput) -> SDPOLossResult:
         kl_student_M = (student_probs_k * (student_at_teacher_k - mixture_log_probs)).sum(-1)  # (B, T)
 
         # GJS = alpha * KL(teacher||M) + (1-alpha) * KL(student||M)
-        per_token_loss = (1.0 - alpha_t) * kl_student_M + alpha_t * kl_teacher_M  # (B, T)
+        per_token_loss = torch.lerp(kl_student_M, kl_teacher_M, alpha_t)  # (B, T)
     else:
         # Reverse KL (alpha = 1.0): student learns from teacher
         # per_token_loss = (student_logprob - teacher_logprob).detach() * student_logprob
