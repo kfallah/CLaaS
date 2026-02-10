@@ -431,7 +431,7 @@ async def distill(request: DistillRequest) -> DistillResponse:
 
     except HTTPException:
         raise
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError) as e:
         raise HTTPException(
             status_code=500,
             detail=f"Distillation failed: {str(e)}",
