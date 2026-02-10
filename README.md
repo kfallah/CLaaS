@@ -9,7 +9,7 @@ CLaaS provides a serverless API for continual learning via Self-Distillation Pol
 1. Loads a user's LoRA adapter from Modal Volume
 2. Runs the student model (with LoRA) on the provided prompt/response
 3. Gets teacher logprobs from configured source:
-   - `self` (default): detached student logits (self-distillation)
+   - `self` (default): base student model conditioned on feedback (forward pass through base model with feedback in prompt)
    - `remote`: 30B teacher model via vLLM
 4. Computes SDPO loss (Generalized JSD + KL regularization to base policy)
 5. Updates the LoRA parameters
@@ -43,7 +43,7 @@ warmup request -> `sleep(level=1)` before snapshot -> `wake_up()` on restore.
 │  │                             │  │                            ││
 │  │  • Student base model       │  │  • vLLM                    ││
 │  │  • LoRA training            │◄─►│  • Qwen3-Coder-30B-A3B    ││
-│  │  • SDPO loss                │  │  • prompt_logprobs<=20     ││
+│  │  • SDPO loss                │  │  • prompt_logprobs<=100    ││
 │  │  Cold start: ~2s            │  │  Cold start: ~3-5s         ││
 │  └─────────────────────────────┘  └────────────────────────────┘│
 │                                                                  │
@@ -161,8 +161,8 @@ Run a single SDPO distillation step.
 | `is_clip` | 5.0 | Importance sampling ratio clip (exp space) |
 | `max_grad_norm` | 1.0 | Gradient clipping |
 | `kl_reg_weight` | 0.1 | Weight for KL regularization to base policy |
-| `teacher_top_k` | 20 | Top-K logprobs from teacher |
-| `teacher_mode` | `self` | `self` (detached student logits) or `remote` (vLLM teacher) |
+| `teacher_top_k` | 100 | Top-K logprobs from teacher |
+| `teacher_mode` | `self` | `self` (base model conditioned on feedback) or `remote` (vLLM teacher) |
 
 **Response:**
 ```json
@@ -354,7 +354,7 @@ uv run pytest -q
 
 | Worker | Without Snapshots | With GPU Snapshots |
 |--------|-------------------|-------------------|
-| Student (7B-8B class) | ~15-20s | ~2s |
+| Student (Qwen3-8B) | ~15-20s | ~2s |
 | Teacher (Qwen3-Coder-30B) | ~45-60s | ~3-5s |
 
 ## Cost Estimate
