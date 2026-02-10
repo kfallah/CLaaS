@@ -28,11 +28,14 @@ from __future__ import annotations
 import asyncio
 import gc
 import json
+import logging
 import os
 import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import httpx
 import modal
@@ -63,7 +66,7 @@ web_app = FastAPI(
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
 FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
 FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
-DISTILL_EXECUTION_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "modal_rpc").strip().lower()
+DISTILL_EXECUTION_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local").strip().lower()
 
 _feedback_locks: dict[str, asyncio.Lock] = {}
 _feedback_locks_guard = asyncio.Lock()
@@ -371,7 +374,7 @@ async def _run_distill(payload: dict[str, Any]) -> dict[str, Any]:
 
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-            except Exception:
+            except ImportError:
                 pass
 
     distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
@@ -520,8 +523,8 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             try:
                 await _vllm_post("/wake_up")
                 woke = True
-            except httpx.HTTPError:
-                pass
+            except httpx.HTTPError as wake_err:
+                logger.warning("Failed to wake vLLM after error: %s", wake_err)
         raise HTTPException(
             status_code=500,
             detail=f"Feedback update failed in phase '{phase}': {error_message}",
@@ -549,8 +552,8 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
                 _write_feedback_log,
                 log_record.model_dump(mode="json"),
             )
-        except (OSError, TypeError, ValueError):
-            # Logging failures should not hide the training result.
+        except (OSError, TypeError, ValueError) as log_err:
+            logger.warning("Failed to write feedback log: %s", log_err)
             log_path = ""
 
     return FeedbackResponse(
