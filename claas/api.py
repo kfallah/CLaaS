@@ -79,6 +79,8 @@ web_app = FastAPI(
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
 FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
 FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
+# Default "local" assumes GPU deps (torch, etc.) are available on this machine.
+# Set to "modal_rpc" for Modal deployments where the API image is CPU-only.
 DISTILL_EXECUTION_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local").strip().lower()
 
 _feedback_locks: dict[str, asyncio.Lock] = {}
@@ -333,6 +335,16 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
         raise HTTPException(status_code=409, detail=error_message) from None
     except HTTPException as e:
         error_message = str(e.detail)
+        if (
+            slept
+            and request.orchestration.wake_after
+            and (request.orchestration.wake_on_failure or FEEDBACK_WAKE_ON_FAILURE)
+        ):
+            try:
+                await _vllm_post("/wake_up")
+                woke = True
+            except httpx.HTTPError as wake_err:
+                logger.warning("Failed to wake vLLM after error: %s", wake_err)
         raise
     except (ValueError, RuntimeError, OSError, httpx.HTTPError) as e:
         error_message = str(e)
