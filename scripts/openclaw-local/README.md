@@ -73,7 +73,7 @@ curl http://127.0.0.1:8000/v1/models -H "Authorization: Bearer sk-local"
 ### 3. Configure OpenClaw to use local vLLM
 
 ```bash
-bash scripts/openclaw-local/configure_openclaw_local_models.sh
+python3 scripts/openclaw-local/configure_openclaw_local_models.py
 ```
 
 This writes `~/.openclaw/openclaw.json` and
@@ -226,6 +226,6 @@ VLLM_WAIT_SECONDS=300 bash scripts/openclaw-local/run_openclaw_local_stack.sh
 |--------|---------|
 | `run_openclaw_local_stack.sh` | Supervised launcher: starts vLLM + gateway, auto-restarts on failure |
 | `start_vllm_qwen3_8b.sh` | Starts vLLM with Qwen3-8B, LoRA modules, sleep mode, tool calling |
-| `configure_openclaw_local_models.sh` | Writes OpenClaw config JSON pointing at local vLLM |
+| `configure_openclaw_local_models.py` | Writes OpenClaw config JSON pointing at local vLLM |
 | `start_openclaw_gateway_local.sh` | Waits for vLLM health, then starts `openclaw gateway` |
 | `openclaw-local.env.example` | Template for environment variables |

@@ -12,7 +12,7 @@ GATEWAY_PID_FILE="${GATEWAY_PID_FILE:-$LOG_DIR/gateway.pid}"
 
 VLLM_START_SCRIPT="${VLLM_START_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/start_vllm_qwen3_8b.sh}"
 GATEWAY_START_SCRIPT="${GATEWAY_START_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/start_openclaw_gateway_local.sh}"
-CONFIGURE_SCRIPT="${CONFIGURE_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/configure_openclaw_local_models.sh}"
+CONFIGURE_SCRIPT="${CONFIGURE_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/configure_openclaw_local_models.py}"
 
 STACK_NAME="openclaw-local"
 RESTART_BACKOFF_SECONDS="${RESTART_BACKOFF_SECONDS:-3}"
@@ -67,7 +67,7 @@ start_stack_once() {
   API_KEY="${API_KEY:-sk-local}" \
   MODEL_IDS="$MODEL_IDS" \
   PRIMARY_MODEL="$PRIMARY_MODEL" \
-  "$CONFIGURE_SCRIPT" >/dev/null 2>&1 || true
+  python3 "$CONFIGURE_SCRIPT" >/dev/null 2>&1 || true
 
   echo "[$STACK_NAME] starting vLLM..."
   nohup "$VLLM_START_SCRIPT" >>"$VLLM_LOG" 2>&1 &
