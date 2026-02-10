@@ -49,14 +49,6 @@ def compute_sdpo_loss(loss_input: SDPOLossInput) -> SDPOLossResult:
     alpha = loss_input.alpha
     is_clip = loss_input.is_clip
     kl_reg_weight = loss_input.kl_reg_weight
-    rollout_is_weights = loss_input.rollout_is_weights
-
-    # Warn if rollout_is_weights not provided (off-policy correction disabled)
-    if rollout_is_weights is None:
-        logger.warning(
-            "rollout_is_weights not provided; off-policy rollout correction disabled. "
-            "For proper off-policy learning, pass rollout importance weights."
-        )
 
     _B, _T, _V = student_logits.shape
 
@@ -121,11 +113,7 @@ def compute_sdpo_loss(loss_input: SDPOLossInput) -> SDPOLossResult:
 
     per_token_loss = per_token_loss * ratio
 
-    # Step 4: Apply rollout correction weights if provided
-    if rollout_is_weights is not None:
-        per_token_loss = per_token_loss * rollout_is_weights
-
-    # Step 5: KL regularization to base policy
+    # Step 4: KL regularization to base policy
     kl_to_base_per_token = student_logprob_chosen - base_logprobs  # (B, T)
 
     # Apply response mask and average

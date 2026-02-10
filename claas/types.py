@@ -52,10 +52,6 @@ class TrainingConfig(BaseModel):
         le=500,
         description="Number of top logprobs to request from teacher",
     )
-    rollout_is_weights: list[float] | None = Field(
-        default=None,
-        description="Optional per-token importance weights for off-policy rollout correction",
-    )
     rollout_logprobs: list[float] | None = Field(
         default=None,
         description="Log-probabilities from the inference server that generated the rollout. "
@@ -79,7 +75,6 @@ class SDPOLossInput(BaseModel):
     alpha: float = 0.5
     is_clip: float = 5.0
     kl_reg_weight: float = 0.1
-    rollout_is_weights: Any | None = None  # torch.Tensor (B, T) or None
 
 
 class SDPOLossResult(TypedDict):

@@ -335,23 +335,6 @@ class DistillWorker:
         teacher_indices = teacher_indices.unsqueeze(0)
 
         # 6. Compute SDPO loss
-        # Convert rollout_is_weights to tensor if provided
-        rollout_is_weights_tensor = None
-        if config.rollout_is_weights is not None:
-            rollout_is_weights_tensor = torch.tensor(
-                config.rollout_is_weights,
-                dtype=torch.float32,
-                device=self.device,
-            ).unsqueeze(0)  # Add batch dimension
-            # Truncate/pad to match response length
-            if rollout_is_weights_tensor.shape[1] > T_resp:
-                rollout_is_weights_tensor = rollout_is_weights_tensor[:, :T_resp]
-            elif rollout_is_weights_tensor.shape[1] < T_resp:
-                pad_size = T_resp - rollout_is_weights_tensor.shape[1]
-                rollout_is_weights_tensor = F.pad(
-                    rollout_is_weights_tensor, (0, pad_size), value=1.0
-                )
-
         loss_input = SDPOLossInput(
             student_logits=student_logits,
             teacher_logprobs=teacher_logprobs,
@@ -363,7 +346,6 @@ class DistillWorker:
             alpha=config.alpha,
             is_clip=config.is_clip,
             kl_reg_weight=config.kl_reg_weight,
-            rollout_is_weights=rollout_is_weights_tensor,
         )
         loss_dict = compute_sdpo_loss(loss_input)
 
