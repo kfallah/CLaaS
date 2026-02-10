@@ -9,5 +9,7 @@ exec vllm serve "$MODEL" \
   --port 8000 \
   --served-model-name "$SERVED_MODEL_NAME" \
   --api-key sk-local \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_xml \
   --max-model-len 32768 \
   --gpu-memory-utilization 0.95
