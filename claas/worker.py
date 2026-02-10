@@ -195,7 +195,7 @@ class DistillWorker:
         return model
 
     def _build_self_teacher_topk(self, logits, top_k: int):
-        """Build top-K teacher distribution from non-student logits."""
+        """Build top-K teacher distribution from detached student logits."""
         import torch
 
         with torch.no_grad():
@@ -335,11 +335,10 @@ class DistillWorker:
             )
             teacher_mode = "remote"
         else:
-            # SDPO core logic expects a separate teacher distribution.
-            # For local self mode, we use base-model logits as the teacher proxy
-            # so teacher and student are not identical at each step.
+            # "self" means behavior-policy/self-distillation teacher:
+            # detached student logits from rollout context.
             teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
-                base_logits, config.teacher_top_k
+                student_logits, config.teacher_top_k
             )
             teacher_mode = "self"
 

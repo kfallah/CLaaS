@@ -94,6 +94,18 @@ def cmd_distill(args: argparse.Namespace) -> int:
     }
 
     with modal.enable_output():
+        if args.teacher_mode == "remote":
+            teacher = TeacherService()
+            teacher_scored = teacher.score_tokens.remote(
+                [args.prompt],
+                [args.response],
+                top_k=args.teacher_top_k,
+            )
+            if not teacher_scored:
+                print("Error: remote teacher returned empty scores", file=sys.stderr)
+                return 1
+            request["teacher_result"] = teacher_scored[0]
+
         worker = DistillWorker()
         result = worker.distill.remote(request)
 
