@@ -33,7 +33,7 @@ from .storage import (
     lora_volume,
     save_lora,
 )
-from .teacher import TeacherService, format_teacher_prompt, parse_teacher_result
+from .teacher import parse_teacher_result
 from .types import SDPOLossInput, TrainingConfig
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ training_image = (
         "accelerate>=0.27.0",
         "bitsandbytes>=0.42.0",
         "safetensors>=0.4.0",
+        "pydantic>=2.6.0",
         "packaging>=24.0",
     )
     .pip_install(
@@ -63,6 +64,8 @@ training_image = (
     .env({
         "HF_HOME": "/models/hf_cache",
         "TRANSFORMERS_CACHE": "/models/hf_cache",
+        "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
+        "HUGGING_FACE_HUB_TOKEN": os.environ.get("HF_TOKEN", ""),
     })
 )
 
@@ -75,7 +78,7 @@ training_image = (
         LORA_MOUNT_PATH: lora_volume,
     },
     scaledown_window=300,
-    timeout=120,
+    timeout=600,
     enable_memory_snapshot=True,
 )
 class DistillWorker:
@@ -83,7 +86,8 @@ class DistillWorker:
 
     base_model_id: str = os.environ.get(
         "CLAAS_BASE_MODEL_ID",
-        "Qwen/Qwen3-Coder-Next-8B",
+        # Public default for smoke tests; override to Qwen3-Coder-Next-8B in env.
+        "Qwen/Qwen2.5-Coder-7B-Instruct",
     )
     attn_implementation: str = os.environ.get(
         "CLAAS_ATTN_IMPLEMENTATION",
@@ -309,25 +313,14 @@ class DistillWorker:
                     student_logits.detach(), dim=-1
                 ).gather(-1, response_ids[:, :T_resp].unsqueeze(-1)).squeeze(-1)
 
-        # 5. Get teacher logprobs from vLLM sidecar
-        teacher_prompt = format_teacher_prompt(
-            request["prompt"],
-            request["feedback"],
-        )
-
-        teacher_service = TeacherService()
-        teacher_result = teacher_service.score_tokens.remote(
-            prompts=[teacher_prompt],
-            completions=[request["response"]],
-            top_k=config.teacher_top_k,
-        )
-
-        if not teacher_result or not teacher_result[0]:
+        # 5. Parse teacher logprobs (scored by API side teacher call)
+        teacher_result = request.get("teacher_result")
+        if not teacher_result:
             cleanup_local_lora(lora_local_path)
-            raise RuntimeError("Failed to get teacher logprobs")
+            raise RuntimeError("Missing teacher_result in request")
 
         teacher_logprobs, teacher_indices = parse_teacher_result(
-            teacher_result[0], str(self.device)
+            teacher_result, str(self.device)
         )
 
         # Ensure dimensions match

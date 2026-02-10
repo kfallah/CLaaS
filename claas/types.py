@@ -47,9 +47,9 @@ class TrainingConfig(BaseModel):
         description="Weight for KL regularization to base policy",
     )
     teacher_top_k: int = Field(
-        default=100,
+        default=20,
         ge=10,
-        le=500,
+        le=100,
         description="Number of top logprobs to request from teacher",
     )
 

@@ -35,9 +35,9 @@ Important: even when API is local, calls to `DistillWorker().distill.remote(...)
 │  │  DistillWorker (L40S)       │  │  TeacherService (H100)     ││
 │  │  GPU memory snapshot        │  │  GPU memory snapshot        ││
 │  │                             │  │                            ││
-│  │  • Qwen3-Coder-Next         │  │  • vLLM                    ││
+│  │  • Student base model       │  │  • vLLM                    ││
 │  │  • LoRA training            │◄─►│  • Qwen3-Coder-30B-A3B    ││
-│  │  • SDPO loss                │  │  • prompt_logprobs=100     ││
+│  │  • SDPO loss                │  │  • prompt_logprobs<=20     ││
 │  │  Cold start: ~2s            │  │  Cold start: ~3-5s         ││
 │  └─────────────────────────────┘  └────────────────────────────┘│
 │                                                                  │
@@ -57,7 +57,12 @@ pip install -e .
 1. **Modal account**: Sign up at [modal.com](https://modal.com)
 2. **Modal CLI**: `pip install modal && modal token new`
 
-That's it! No AWS/S3 credentials needed - LoRAs are stored in Modal Volumes.
+Set the student model with `CLAAS_BASE_MODEL_ID`:
+
+- Default smoke-test model: `Qwen/Qwen2.5-Coder-7B-Instruct`
+- Target experiment model: `Qwen/Qwen3-Coder-Next-8B` (requires HF auth in Modal)
+
+No AWS/S3 credentials are needed; LoRAs are stored in Modal Volumes.
 
 ## Quick Start
 
@@ -113,7 +118,7 @@ Run a single SDPO distillation step.
     "is_clip": 5.0,
     "max_grad_norm": 1.0,
     "kl_reg_weight": 0.1,
-    "teacher_top_k": 100
+    "teacher_top_k": 20
   }
 }
 ```
@@ -137,7 +142,7 @@ Run a single SDPO distillation step.
 | `is_clip` | 5.0 | Importance sampling ratio clip (exp space) |
 | `max_grad_norm` | 1.0 | Gradient clipping |
 | `kl_reg_weight` | 0.1 | Weight for KL regularization to base policy |
-| `teacher_top_k` | 100 | Top-K logprobs from teacher |
+| `teacher_top_k` | 20 | Top-K logprobs from teacher |
 
 **Response:**
 ```json
@@ -272,7 +277,18 @@ uv run pytest -q
 ### Deploy
 
 ```bash
-modal deploy claas.api
+modal deploy -m claas.deploy
+```
+
+### Hugging Face auth (for gated models)
+
+If you use gated models like `Qwen/Qwen3-Coder-Next-8B`, export `HF_TOKEN` before
+deploy/serve so the Modal runtime can authenticate model downloads:
+
+```bash
+export HF_TOKEN=...
+CLAAS_BASE_MODEL_ID=Qwen/Qwen3-Coder-Next-8B
+modal deploy -m claas.deploy
 ```
 
 ### Modal auth troubleshooting
@@ -281,7 +297,8 @@ If local API starts but remote worker calls fail, verify:
 
 1. `modal token new` has been completed for the active user.
 2. The app has access to required Modal volumes (`claas-models`, `claas-loras`).
-3. `DistillWorker` and `TeacherService` are healthy via `/v1/health`.
+3. If using gated HF models, `HF_TOKEN` is available to the worker runtime.
+4. `DistillWorker` and `TeacherService` are healthy via `/v1/health`.
 
 ### Run unit tests only
 
@@ -293,7 +310,7 @@ uv run pytest -q
 
 | Worker | Without Snapshots | With GPU Snapshots |
 |--------|-------------------|-------------------|
-| Student (Qwen3-Coder-Next) | ~15-20s | ~2s |
+| Student (7B-8B class) | ~15-20s | ~2s |
 | Teacher (Qwen3-Coder-30B) | ~45-60s | ~3-5s |
 
 ## Cost Estimate

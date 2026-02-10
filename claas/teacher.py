@@ -6,13 +6,14 @@ generated tokens and returns top-K log-probabilities at each position.
 
 Key features:
 - GPU memory snapshots for sub-second cold starts (~3-5s vs ~45-60s)
-- prompt_logprobs=100 for dense teacher signal (vs Fireworks' K=5 limit)
+- prompt_logprobs up to vLLM runtime limits (currently capped at 20)
 - Stateless service that can be shared across users/LoRAs
 """
 
 from __future__ import annotations
 
 import importlib
+import os
 from typing import TypedDict
 
 import modal
@@ -48,7 +49,11 @@ vllm_image = (
         "transformers>=4.40.0",
         "huggingface_hub",
     )
-    .env({"HF_HOME": "/models/hf_cache"})
+    .env({
+        "HF_HOME": "/models/hf_cache",
+        "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
+        "HUGGING_FACE_HUB_TOKEN": os.environ.get("HF_TOKEN", ""),
+    })
 )
 
 
@@ -59,14 +64,15 @@ vllm_image = (
     min_containers=1,
     scaledown_window=600,
     enable_memory_snapshot=True,
-    timeout=300,
+    timeout=900,
 )
 class TeacherService:
     """vLLM-based teacher model service for SDPO logprob scoring."""
 
     model_id: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
     max_model_len: int = 8192
-    default_top_k: int = 100
+    default_top_k: int = 20
+    max_top_k: int = 20
 
     @modal.enter(snap=True)
     def start_vllm(self):
@@ -78,6 +84,11 @@ class TeacherService:
         Without snapshot: ~45-60s cold start
         With snapshot: ~3-5s cold start
         """
+        # vLLM model inspection subprocess expects a numeric CUDA device ID.
+        # Modal can expose "none" during early init in some snapshots.
+        if os.environ.get("CUDA_VISIBLE_DEVICES", "").lower() == "none":
+            os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
         vllm_module = importlib.import_module("vllm")
         LLM = getattr(vllm_module, "LLM")
         SamplingParams = getattr(vllm_module, "SamplingParams")
@@ -126,6 +137,7 @@ class TeacherService:
 
         if top_k is None:
             top_k = self.default_top_k
+        top_k = min(top_k, self.max_top_k)
 
         # Concatenate prompt + completion as a single prompt
         # Use prompt_logprobs to get logprobs at every position

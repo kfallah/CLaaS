@@ -52,7 +52,7 @@ class TrainingDefaults:
     kl_reg_weight: float = 0.1  # KL regularization to base policy
 
     # Teacher scoring
-    teacher_top_k: int = 100  # Number of top logprobs from teacher
+    teacher_top_k: int = 20  # Number of top logprobs from teacher
 
     # Optimizer
     weight_decay: float = 0.01

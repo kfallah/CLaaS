@@ -54,6 +54,30 @@ web_app = FastAPI(
 )
 
 
+def _format_teacher_prompt(
+    user_prompt: str,
+    feedback: str | None = None,
+    system_prompt: str | None = None,
+) -> str:
+    """Format prompt for teacher scoring without importing training deps."""
+    if system_prompt is None:
+        system_prompt = (
+            "You are an expert coding assistant. Provide high-quality, "
+            "correct, and well-explained code solutions."
+        )
+
+    parts = [f"<|im_start|>system\n{system_prompt}<|im_end|>"]
+    if feedback:
+        parts.append(
+            f"<|im_start|>user\n{user_prompt}\n\n"
+            f"[Feedback on previous attempt: {feedback}]<|im_end|>"
+        )
+    else:
+        parts.append(f"<|im_start|>user\n{user_prompt}<|im_end|>")
+    parts.append("<|im_start|>assistant\n")
+    return "".join(parts)
+
+
 # Request/Response Models
 
 
@@ -112,7 +136,7 @@ class LoraInitRequest(BaseModel):
         description="LoRA identifier (e.g., 'user123/coder-v1')",
     )
     base_model: str = Field(
-        default="Qwen/Qwen3-Coder-Next-8B",
+        default="Qwen/Qwen2.5-Coder-7B-Instruct",
         description="Base model the LoRA will be applied to",
     )
     lora_r: int = Field(
@@ -185,9 +209,21 @@ async def distill(request: DistillRequest) -> DistillResponse:
                 detail=f"LoRA not found: {request.lora_id}",
             )
 
+        # Score with teacher from the API process, then pass to worker.
+        teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
+        teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback)
+        teacher_scored = await teacher_score_fn.remote.aio(
+            prompts=[teacher_prompt],
+            completions=[request.response],
+            top_k=request.training.teacher_top_k,
+        )
+        teacher_result = teacher_scored[0] if teacher_scored else []
+
         # Resolve worker by name to avoid importing training dependencies in API image.
         distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
-        result = await distill_fn.remote.aio(request.model_dump())
+        payload = request.model_dump()
+        payload["teacher_result"] = teacher_result
+        result = await distill_fn.remote.aio(payload)
 
         return DistillResponse(**result)
 
@@ -281,14 +317,14 @@ async def health_check() -> HealthResponse:
 
     try:
         worker_health_fn = modal.Function.from_name("claas-distill", "DistillWorker.health_check")
-        result["worker"] = await worker_health_fn.remote.aio()
+        result["worker"] = await asyncio.wait_for(worker_health_fn.remote.aio(), timeout=15)
     except Exception as e:
         result["worker"] = {"status": "unhealthy", "error": str(e)}
         result["status"] = "degraded"
 
     try:
         teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
-        result["teacher"] = await teacher_health_fn.remote.aio()
+        result["teacher"] = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
     except Exception as e:
         result["teacher"] = {"status": "unhealthy", "error": str(e)}
         result["status"] = "degraded"

@@ -62,7 +62,7 @@ def compute_sdpo_loss(loss_input: SDPOLossInput) -> SDPOLossResult:
     if alpha < 1.0:
         # Full GJS with mixture distribution
         # log(alpha * teacher + (1-alpha) * student) via logsumexp
-        alpha_t = torch.tensor(alpha, dtype=student_log_probs.dtype, device=student_log_probs.device)
+        alpha_t = torch.tensor(alpha, dtype=torch.float32, device=student_log_probs.device)
         log_alpha = torch.log(alpha_t)
         log_one_minus_alpha = torch.log(1 - alpha_t)
 
@@ -84,8 +84,7 @@ def compute_sdpo_loss(loss_input: SDPOLossInput) -> SDPOLossResult:
         kl_student_M = (student_probs_k * (student_at_teacher_k - mixture_log_probs)).sum(-1)  # (B, T)
 
         # GJS = alpha * KL(teacher||M) + (1-alpha) * KL(student||M)
-        # Using lerp: lerp(kl_student, kl_teacher, alpha)
-        per_token_loss = torch.lerp(kl_student_M, kl_teacher_M, alpha_t)  # (B, T)
+        per_token_loss = (1.0 - alpha_t) * kl_student_M + alpha_t * kl_teacher_M  # (B, T)
     else:
         # Reverse KL (alpha = 1.0): student learns from teacher
         # per_token_loss = (student_logprob - teacher_logprob).detach() * student_logprob
