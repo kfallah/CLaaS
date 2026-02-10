@@ -18,10 +18,12 @@ LORA_ALIAS_FILE="${LORA_ALIAS_FILE:-$ROOT_DIR/.local_loras/.aliases.json}"
 LORA_ROOT="${LORA_ROOT:-$ROOT_DIR/.local_loras}"
 INCLUDE_ALIAS_LORAS="${INCLUDE_ALIAS_LORAS:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+VLLM_SERVER_DEV_MODE="${VLLM_SERVER_DEV_MODE:-${ENABLE_SLEEP_MODE}}"
+export VLLM_SERVER_DEV_MODE
 
-declare -a CMD
-declare -a MODULES
-declare -a MODEL_NAME_ARR
+declare -a CMD=()
+declare -a MODULES=()
+declare -a MODEL_NAME_ARR=()
 
 IFS=',' read -r -a MODEL_NAME_ARR <<<"$SERVED_MODEL_NAMES"
 for name in "${MODEL_NAME_ARR[@]}"; do
@@ -69,9 +71,9 @@ for alias, target in sorted(aliases.items()):
   )
 fi
 
-declare -a FINAL_MODULES
-declare -A SEEN_MODULES
-for module in "${MODULES[@]}"; do
+declare -a FINAL_MODULES=()
+declare -A SEEN_MODULES=()
+for module in "${MODULES[@]+"${MODULES[@]}"}"; do
   if [[ -z "${SEEN_MODULES[$module]+x}" ]]; then
     SEEN_MODULES["$module"]=1
     FINAL_MODULES+=("$module")

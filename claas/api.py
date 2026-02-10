@@ -52,7 +52,6 @@ from .types import (
     DistillRequest,
     DistillResponse,
     FeedbackLogRecord,
-    FeedbackLogRequest,
     FeedbackLogVllmState,
     FeedbackRequest,
     FeedbackResponse,
@@ -156,20 +155,6 @@ def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
         json.dump(payload, f, indent=2, sort_keys=True)
     return str(path)
 
-
-def _redact_feedback_request(request: FeedbackRequest) -> FeedbackLogRequest:
-    """Return metadata-only request fields for feedback logs."""
-    return FeedbackLogRequest(
-        lora_id=request.lora_id,
-        training=request.training,
-        orchestration=request.orchestration,
-        prompt_chars=len(request.prompt),
-        response_chars=len(request.response),
-        feedback_chars=len(request.feedback),
-        rollout_logprobs_count=(
-            None if request.rollout_logprobs is None else len(request.rollout_logprobs)
-        ),
-    )
 
 
 def _safe_export_name(lora_id: str) -> str:
@@ -374,7 +359,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             phase=phase,
             lora_id=request.lora_id,
             teacher_mode=request.training.teacher_mode,
-            request=_redact_feedback_request(request),
+            request=request,
             vllm=FeedbackLogVllmState(slept=slept, woke=woke),
             timing_ms=timing_ms,
             distill_result=distill_result,

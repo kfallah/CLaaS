@@ -193,18 +193,6 @@ class FeedbackResponse(BaseModel):
     timing_ms: FeedbackTimingMs
 
 
-class FeedbackLogRequest(BaseModel):
-    """Redacted feedback request fields persisted to logs."""
-
-    lora_id: str
-    training: TrainingConfig
-    orchestration: FeedbackOrchestration
-    prompt_chars: int
-    response_chars: int
-    feedback_chars: int
-    rollout_logprobs_count: int | None = None
-
-
 class FeedbackLogRecord(BaseModel):
     """Structured log record for feedback orchestration."""
 
@@ -214,7 +202,7 @@ class FeedbackLogRecord(BaseModel):
     phase: str
     lora_id: str
     teacher_mode: str
-    request: FeedbackLogRequest
+    request: FeedbackRequest
     vllm: FeedbackLogVllmState
     timing_ms: FeedbackTimingMs
     distill_result: DistillResponse | None = None
