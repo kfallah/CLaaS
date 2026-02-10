@@ -510,7 +510,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
     except HTTPException as e:
         error_message = str(e.detail)
         raise
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError, httpx.HTTPError) as e:
         error_message = str(e)
         if (
             slept
