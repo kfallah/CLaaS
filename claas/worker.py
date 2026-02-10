@@ -194,15 +194,47 @@ class DistillWorker:
 
         return model
 
-    def _build_self_teacher_topk(self, logits, top_k: int):
-        """Build top-K teacher distribution from detached student logits."""
+    def _build_self_teacher_topk(
+        self,
+        prompt: str,
+        feedback: str,
+        response_ids,
+        top_k: int,
+    ):
+        """Build top-K teacher from base model conditioned on feedback.
+
+        The SDPO teacher is the base student model with the feedback
+        incorporated into its prompt.  A separate forward pass through
+        the frozen base model produces logits that reflect what the model
+        would generate *given* the feedback, creating a meaningful
+        distillation signal (non-zero log-ratio vs. the student).
+
+        Reference: https://arxiv.org/pdf/2601.20802, Section 3.
+        """
         import torch
 
+        from .teacher import format_teacher_prompt
+
+        teacher_prompt = format_teacher_prompt(prompt, feedback)
+        teacher_prompt_ids = self.tokenizer.encode(
+            teacher_prompt,
+            add_special_tokens=True,
+            return_tensors="pt",
+        ).to(self.device)
+        teacher_full_ids = torch.cat([teacher_prompt_ids, response_ids], dim=-1)
+        teacher_resp_start = teacher_prompt_ids.shape[-1]
+        T_resp = response_ids.shape[-1]
+
         with torch.no_grad():
-            log_probs = self.F.log_softmax(logits.detach(), dim=-1)
+            teacher_output = self.base_model(input_ids=teacher_full_ids)
+            teacher_logits = teacher_output.logits[
+                :, teacher_resp_start - 1 : -1, :
+            ]  # (1, T_resp, V)
+            log_probs = self.F.log_softmax(teacher_logits, dim=-1)
             vocab_size = log_probs.shape[-1]
             k = min(max(1, top_k), vocab_size)
-            top_logprobs, top_indices = torch.topk(log_probs[0], k=k, dim=-1)
+            top_logprobs, top_indices = torch.topk(log_probs[0, :T_resp], k=k, dim=-1)
+
         return top_logprobs, top_indices
 
     @modal.method()
@@ -335,10 +367,15 @@ class DistillWorker:
             )
             teacher_mode = "remote"
         else:
-            # "self" means behavior-policy/self-distillation teacher:
-            # detached student logits from rollout context.
+            # "self" teacher: base model conditioned on feedback.
+            # Forward pass through frozen base model with feedback in
+            # the prompt creates a distribution that reflects the feedback
+            # signal (SDPO paper, Section 3).
             teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
-                student_logits, config.teacher_top_k
+                request["prompt"],
+                request["feedback"],
+                response_ids,
+                config.teacher_top_k,
             )
             teacher_mode = "self"
 
