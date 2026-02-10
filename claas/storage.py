@@ -25,9 +25,24 @@ import modal
 # Modal volume for LoRA storage
 lora_volume = modal.Volume.from_name("claas-loras", create_if_missing=True)
 
-# Mount path inside containers
-LORA_MOUNT_PATH = "/loras"
+# Mount path inside containers (or local filesystem root in local mode)
+LORA_MOUNT_PATH = os.environ.get("CLAAS_LORA_ROOT", "/loras")
 ALIASES_FILE_NAME = ".aliases.json"
+
+
+def _storage_backend() -> str:
+    """Return configured storage backend."""
+    return os.environ.get("CLAAS_STORAGE_BACKEND", "modal_volume").strip().lower()
+
+
+def _commit_storage() -> None:
+    """Commit storage when using Modal Volumes.
+
+    Local filesystem mode is a no-op commit.
+    """
+    if _storage_backend() == "local_fs":
+        return
+    lora_volume.commit()
 
 
 def _aliases_file_path() -> str:
@@ -61,15 +76,36 @@ def _write_aliases(aliases: dict[str, str]) -> None:
     """Persist alias -> lora_id mapping to disk."""
     os.makedirs(LORA_MOUNT_PATH, exist_ok=True)
     aliases_path = _aliases_file_path()
-    with open(aliases_path, "w") as f:
-        json.dump(dict(sorted(aliases.items())), f, indent=2)
+    aliases_dir = os.path.dirname(aliases_path)
+    fd, temp_path = tempfile.mkstemp(
+        dir=aliases_dir,
+        prefix=".aliases.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(dict(sorted(aliases.items())), f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, aliases_path)
+        dir_fd = os.open(aliases_dir, os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 def resolve_lora_id(lora_id: str) -> str:
     """Resolve a LoRA identifier or alias to a concrete LoRA identifier."""
     sanitized = lora_id.strip("/")
-    direct_path = get_lora_path(sanitized)
-    if os.path.exists(os.path.join(direct_path, "adapter_config.json")):
+    try:
+        direct_path = get_lora_path(sanitized)
+        if os.path.exists(os.path.join(direct_path, "adapter_config.json")):
+            return sanitized
+    except ValueError:
         return sanitized
 
     aliases = _read_aliases()
@@ -171,12 +207,17 @@ def save_lora(
     Returns:
         The full lora_id of the saved adapter
     """
+    base_lora_id = lora_id.strip("/")
+    if base_lora_id.endswith("-latest"):
+        # Keep a stable base when callers send the latest alias.
+        base_lora_id = base_lora_id[: -len("-latest")]
+
     # Add version suffix
     if version_suffix:
-        full_lora_id = f"{lora_id.rstrip('/')}-{version_suffix}"
+        full_lora_id = f"{base_lora_id}-{version_suffix}"
     else:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        full_lora_id = f"{lora_id.rstrip('/')}-{timestamp}"
+        full_lora_id = f"{base_lora_id}-{timestamp}"
 
     lora_path = get_lora_path(full_lora_id)
 
@@ -195,11 +236,11 @@ def save_lora(
 
     if update_latest_alias:
         aliases = _read_aliases()
-        aliases[f"{lora_id.rstrip('/')}-latest"] = full_lora_id
+        aliases[f"{base_lora_id}-latest"] = full_lora_id
         _write_aliases(aliases)
 
     # Commit changes to the volume (LoRA files + aliases map)
-    lora_volume.commit()
+    _commit_storage()
 
     return full_lora_id
 
@@ -255,7 +296,7 @@ def save_lora_inplace(local_dir: str, lora_id: str) -> str:
         if os.path.exists(stage_path):
             shutil.rmtree(stage_path)
 
-    lora_volume.commit()
+    _commit_storage()
     return sanitized_id
 
 
@@ -326,7 +367,7 @@ def delete_lora(lora_id: str) -> bool:
     if sanitized in aliases:
         aliases.pop(sanitized, None)
         _write_aliases(aliases)
-        lora_volume.commit()
+        _commit_storage()
         return True
 
     resolved_lora_id = resolve_lora_id(lora_id)
@@ -343,7 +384,7 @@ def delete_lora(lora_id: str) -> bool:
         aliases.pop(alias, None)
     _write_aliases(aliases)
 
-    lora_volume.commit()
+    _commit_storage()
     return True
 
 
@@ -407,9 +448,8 @@ def export_lora_zip_bytes(lora_id: str) -> bytes:
                     src = os.path.join(root, file_name)
                     arcname = os.path.relpath(src, lora_path)
                     zf.write(src, arcname=arcname)
-
-        temp_zip.seek(0)
-        return temp_zip.read()
+        with open(temp_zip.name, "rb") as f:
+            return f.read()
 
 
 def cleanup_local_lora(local_dir: str) -> None:

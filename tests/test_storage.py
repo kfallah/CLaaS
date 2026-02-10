@@ -290,6 +290,13 @@ class TestCleanupLocalLora:
 
         assert not local_dir.exists()
 
+    def test_no_error_when_missing(self, tmp_path):
+        """Doesn't raise when directory doesn't exist."""
+        from claas.storage import cleanup_local_lora
+
+        # Should not raise
+        cleanup_local_lora(str(tmp_path / "nonexistent"))
+
 
 class TestLoraAliases:
     """Tests for latest alias behavior."""
@@ -357,14 +364,6 @@ class TestLoraAliases:
         assert storage.delete_lora("user/model-latest") is True
         assert (lora_dir / "adapter_config.json").exists()
         assert "user/model-latest" not in storage._read_aliases()
-
-    def test_no_error_when_missing(self, tmp_path):
-        """Doesn't raise when directory doesn't exist."""
-        from claas.storage import cleanup_local_lora
-
-        # Should not raise
-        cleanup_local_lora(str(tmp_path / "nonexistent"))
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
