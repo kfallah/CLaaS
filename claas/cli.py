@@ -177,7 +177,7 @@ def main() -> int:
     distill_parser.add_argument(
         "--teacher-top-k",
         type=int,
-        default=20,
+        default=100,
         help="Top-K logprobs from teacher source",
     )
     distill_parser.set_defaults(func=cmd_distill)

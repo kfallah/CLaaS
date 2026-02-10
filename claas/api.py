@@ -211,14 +211,14 @@ async def distill(request: DistillRequest) -> DistillResponse:
     """Run a single SDPO distillation step.
 
     This endpoint:
-    1. Loads the user's LoRA from Modal Volume
+    1. Loads the user's LoRA from local storage (or Modal Volume in remote mode)
     2. Runs the student model forward pass
     3. Gets teacher logprobs from configured source
-       - self (default): detached student logits
+       - self (default): base model conditioned on feedback
        - remote: vLLM TeacherService
     4. Computes SDPO loss (JSD-based policy gradient)
     5. Updates LoRA parameters
-    6. Saves the updated LoRA back to Modal Volume
+    6. Saves the updated LoRA back to local storage (or Modal Volume in remote mode)
 
     Returns the new LoRA ID and training metrics.
     """

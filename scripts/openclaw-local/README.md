@@ -145,7 +145,7 @@ LoRA adapters live in `CLaaS/.local_loras/`:
 **From CLaaS API (export a trained adapter):**
 
 ```bash
-curl -L "https://your-modal-app.modal.run/v1/lora/export?lora_id=user/my-lora-init" \
+curl -L "http://localhost:8080/v1/lora/export?lora_id=user/my-lora-init" \
   -o my-lora.zip
 unzip -o my-lora.zip -d .local_loras/user/my-lora-init
 ```
