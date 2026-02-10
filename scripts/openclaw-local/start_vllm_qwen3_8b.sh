@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# L40S-friendly fallback that still exposes the CLaaS served model name.
-MODEL="Qwen/Qwen2.5-Coder-7B-Instruct"
-SERVED_MODEL_NAME="qwen3-coder-next-8b"
+MODEL="Qwen/Qwen3-8B"
+SERVED_MODEL_NAME="qwen3-8b"
 
 exec vllm serve "$MODEL" \
   --host 0.0.0.0 \
