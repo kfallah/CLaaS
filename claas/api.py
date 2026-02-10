@@ -56,17 +56,17 @@ class TrainingConfig(BaseModel):
         le=1e-2,
         description="Learning rate for LoRA parameter updates",
     )
-    clip_eps_lower: float = Field(
-        default=0.2,
+    alpha: float = Field(
+        default=0.5,
         ge=0.0,
         le=1.0,
-        description="Lower bound for PPO clip range (ratio >= 1 - clip_eps_lower)",
+        description="GJS interpolation (0.5 = symmetric JSD, 1.0 = reverse KL)",
     )
-    clip_eps_upper: float = Field(
-        default=0.2,
-        ge=0.0,
-        le=1.0,
-        description="Upper bound for PPO clip range (ratio <= 1 + clip_eps_upper)",
+    is_clip: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=20.0,
+        description="Importance sampling ratio clip (exp space)",
     )
     max_grad_norm: float = Field(
         default=1.0,

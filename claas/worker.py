@@ -209,8 +209,8 @@ class DistillWorker:
         training_config = request.get("training", {})
         lr = training_config.get("learning_rate", 1e-4)
         max_grad_norm = training_config.get("max_grad_norm", 1.0)
-        clip_eps_lower = training_config.get("clip_eps_lower", 0.2)
-        clip_eps_upper = training_config.get("clip_eps_upper", 0.2)
+        alpha = training_config.get("alpha", 0.5)
+        is_clip = training_config.get("is_clip", 5.0)
         kl_reg_weight = training_config.get("kl_reg_weight", 0.1)
         teacher_top_k = training_config.get("teacher_top_k", 100)
 
@@ -319,8 +319,8 @@ class DistillWorker:
             response_mask=response_mask[:, response_start:],
             old_student_logprobs=old_student_logprobs,
             response_ids=response_ids[:, :T_resp],
-            clip_eps_lower=clip_eps_lower,
-            clip_eps_upper=clip_eps_upper,
+            alpha=alpha,
+            is_clip=is_clip,
             kl_reg_weight=kl_reg_weight,
         )
 
@@ -348,10 +348,8 @@ class DistillWorker:
             "lora_id": new_lora_id,
             "metadata": {
                 "total_loss": loss_dict["loss"].item(),
-                "pg_loss": loss_dict["pg_loss"],
+                "distill_loss": loss_dict["distill_loss"],
                 "kl_reg": loss_dict["kl_reg"],
-                "mean_advantage": loss_dict["mean_advantage"],
-                "frac_positive_advantage": loss_dict["frac_positive_advantage"],
                 "mean_is_ratio": loss_dict["mean_is_ratio"],
                 "clip_fraction": loss_dict["clip_fraction"],
                 "grad_norm": grad_norm.item() if hasattr(grad_norm, "item") else grad_norm,

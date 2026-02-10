@@ -117,10 +117,8 @@ class TestComputeSdpoLoss:
 
         expected_keys = {
             "loss",
-            "pg_loss",
+            "distill_loss",
             "kl_reg",
-            "mean_advantage",
-            "frac_positive_advantage",
             "mean_is_ratio",
             "clip_fraction",
         }
@@ -142,6 +140,28 @@ class TestComputeSdpoLoss:
 
         assert sample_data["student_logits"].grad is not None
         assert not torch.isnan(sample_data["student_logits"].grad).any()
+
+    def test_alpha_affects_loss(self, sample_data):
+        """Different alpha values produce different losses."""
+        results = []
+        for alpha in [0.3, 0.5, 0.7]:
+            # Need fresh logits for each run
+            logits = torch.randn_like(sample_data["student_logits"], requires_grad=True)
+
+            result = compute_sdpo_loss(
+                student_logits=logits,
+                teacher_logprobs=sample_data["teacher_logprobs"],
+                teacher_indices=sample_data["teacher_indices"],
+                base_logprobs=sample_data["base_logprobs"],
+                response_mask=sample_data["response_mask"],
+                old_student_logprobs=sample_data["old_student_logprobs"],
+                response_ids=sample_data["response_ids"],
+                alpha=alpha,
+            )
+            results.append(result["loss"].item())
+
+        # Losses should be different for different alphas
+        assert len(set(results)) > 1
 
     def test_kl_reg_weight_affects_loss(self, sample_data):
         """Different kl_reg_weight values produce different losses."""
@@ -205,14 +225,14 @@ class TestComputeSdpoLoss:
             atol=1e-4,
         )
 
-    def test_clip_eps_affects_clip_fraction(self, sample_data):
-        """Smaller clip_eps should increase clip fraction."""
+    def test_is_clip_affects_ratio(self, sample_data):
+        """Lower is_clip should increase clip fraction when off-policy."""
         # Use a highly off-policy situation
         with torch.no_grad():
             # Old logprobs very different from current
-            off_policy_old = sample_data["old_student_logprobs"] - 2.0
+            off_policy_old = sample_data["old_student_logprobs"] - 3.0
 
-        result_wide = compute_sdpo_loss(
+        result_high = compute_sdpo_loss(
             student_logits=sample_data["student_logits"],
             teacher_logprobs=sample_data["teacher_logprobs"],
             teacher_indices=sample_data["teacher_indices"],
@@ -220,11 +240,10 @@ class TestComputeSdpoLoss:
             response_mask=sample_data["response_mask"],
             old_student_logprobs=off_policy_old,
             response_ids=sample_data["response_ids"],
-            clip_eps_lower=0.5,
-            clip_eps_upper=0.5,
+            is_clip=10.0,
         )
 
-        result_tight = compute_sdpo_loss(
+        result_low = compute_sdpo_loss(
             student_logits=sample_data["student_logits"],
             teacher_logprobs=sample_data["teacher_logprobs"],
             teacher_indices=sample_data["teacher_indices"],
@@ -232,12 +251,11 @@ class TestComputeSdpoLoss:
             response_mask=sample_data["response_mask"],
             old_student_logprobs=off_policy_old,
             response_ids=sample_data["response_ids"],
-            clip_eps_lower=0.1,
-            clip_eps_upper=0.1,
+            is_clip=2.0,
         )
 
-        # Tighter clip bounds should clip more
-        assert result_tight["clip_fraction"] >= result_wide["clip_fraction"]
+        # Lower clip should result in more clipping
+        assert result_low["clip_fraction"] >= result_high["clip_fraction"]
 
     def test_response_mask_applied(self, sample_data, device):
         """Loss should only consider masked positions."""
@@ -269,6 +287,23 @@ class TestComputeSdpoLoss:
 
         # Losses should differ when mask is different
         assert result_full["loss"].item() != result_partial["loss"].item()
+
+    def test_reverse_kl_mode(self, sample_data):
+        """alpha=1.0 should use reverse KL mode."""
+        result = compute_sdpo_loss(
+            student_logits=sample_data["student_logits"],
+            teacher_logprobs=sample_data["teacher_logprobs"],
+            teacher_indices=sample_data["teacher_indices"],
+            base_logprobs=sample_data["base_logprobs"],
+            response_mask=sample_data["response_mask"],
+            old_student_logprobs=sample_data["old_student_logprobs"],
+            response_ids=sample_data["response_ids"],
+            alpha=1.0,
+        )
+
+        # Should still produce valid loss
+        assert not torch.isnan(result["loss"])
+        assert result["distill_loss"] is not None
 
 
 if __name__ == "__main__":
