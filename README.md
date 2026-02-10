@@ -15,6 +15,16 @@ CLaaS provides a serverless API for continual learning via Self-Distillation Pol
 
 This enables real-time model personalization where the model learns from each interaction.
 
+## Execution Topology
+
+Current default topology for experiments:
+
+- API is run locally for development via `modal serve claas.api`
+- `DistillWorker` runs remotely on Modal (L40S)
+- `TeacherService` runs remotely on Modal (H100)
+
+Important: even when API is local, calls to `DistillWorker().distill.remote(...)` execute remotely on Modal.
+
 ## Architecture
 
 ```text
@@ -153,7 +163,7 @@ Initialize a new LoRA adapter.
 ```json
 {
   "lora_id": "user123/coder-v1",
-  "base_model": "Qwen/Qwen3-Coder-Next",
+  "base_model": "Qwen/Qwen3-Coder-Next-8B",
   "lora_r": 16,
   "lora_alpha": 32,
   "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
@@ -162,11 +172,44 @@ Initialize a new LoRA adapter.
 
 ### GET /v1/lora
 
-List all LoRA adapters (with optional `prefix` query parameter).
+List all LoRA adapters and aliases (with optional `prefix` query parameter).
+
+### GET /v1/lora/export
+
+Export a LoRA adapter as a zip archive for local inference.
+
+**Query params:**
+- `lora_id` (required)
+
+**Example:**
+```bash
+curl -L "https://your-app--claas-distill-fastapi-app.modal.run/v1/lora/export?lora_id=user123/coder-v1-init" \
+  -o coder-v1-init.zip
+unzip -o coder-v1-init.zip -d ./loras/coder-v1-init
+```
 
 ### GET /v1/health
 
 Health check for all services.
+
+## Local vLLM with CLaaS LoRA
+
+After you initialize/train a LoRA with CLaaS, export it and serve locally:
+
+```bash
+# 1) Export LoRA from CLaaS API
+curl -L "https://your-app--claas-distill-fastapi-app.modal.run/v1/lora/export?lora_id=user123/coder-v1-init" \
+  -o coder-v1-init.zip
+unzip -o coder-v1-init.zip -d ./loras/coder-v1-init
+
+# 2) Run local vLLM with LoRA enabled
+vllm serve Qwen/Qwen3-Coder-Next-8B \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --served-model-name qwen3-coder-next-8b \
+  --enable-lora \
+  --lora-modules coder=./loras/coder-v1-init
+```
 
 ## Storage
 
@@ -175,6 +218,7 @@ LoRA adapters are stored in **Modal Volumes** - no external storage needed:
 - Volume name: `claas-loras`
 - Path format: `/loras/{user_id}/{lora_name}`
 - Automatic versioning with timestamps
+- Stable alias for newest checkpoint: `{lora_id}-latest`
 
 Benefits:
 - No AWS credentials to manage
@@ -216,10 +260,33 @@ If not provided, logprobs are computed from the current model with a warning log
 modal serve claas.api
 ```
 
-### Run tests
+### Run checks
 
 ```bash
-pytest tests/ -v
+uv sync --extra dev
+uv run ruff check .
+uv run ty check
+uv run pytest -q
+```
+
+### Deploy
+
+```bash
+modal deploy claas.api
+```
+
+### Modal auth troubleshooting
+
+If local API starts but remote worker calls fail, verify:
+
+1. `modal token new` has been completed for the active user.
+2. The app has access to required Modal volumes (`claas-models`, `claas-loras`).
+3. `DistillWorker` and `TeacherService` are healthy via `/v1/health`.
+
+### Run unit tests only
+
+```bash
+uv run pytest -q
 ```
 
 ## Cold Start Performance

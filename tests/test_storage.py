@@ -258,6 +258,74 @@ class TestCleanupLocalLora:
 
         assert not local_dir.exists()
 
+
+class TestLoraAliases:
+    """Tests for latest alias behavior."""
+
+    def test_save_lora_creates_latest_alias(self, tmp_path, monkeypatch):
+        """Saving a LoRA should create/update a latest alias."""
+        from claas import storage
+
+        class MockVolume:
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(storage, "lora_volume", MockVolume())
+        monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
+
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        (local_dir / "adapter_config.json").write_text("{}")
+
+        saved_id = storage.save_lora(str(local_dir), "user/model", version_suffix="v1")
+        assert saved_id == "user/model-v1"
+
+        aliases = storage._read_aliases()
+        assert aliases["user/model-latest"] == "user/model-v1"
+
+    def test_alias_resolves_for_exists_and_export(self, tmp_path, monkeypatch):
+        """Alias IDs should resolve for existence and export operations."""
+        from claas import storage
+
+        class MockVolume:
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(storage, "lora_volume", MockVolume())
+        monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
+
+        lora_dir = tmp_path / "user" / "model-v2"
+        lora_dir.mkdir(parents=True)
+        (lora_dir / "adapter_config.json").write_text("{}")
+
+        storage._write_aliases({"user/model-latest": "user/model-v2"})
+
+        assert storage.lora_exists("user/model-latest") is True
+        exported = storage.export_lora_zip_bytes("user/model-latest")
+        assert isinstance(exported, bytes)
+        assert len(exported) > 0
+
+    def test_delete_lora_alias_only_removes_mapping(self, tmp_path, monkeypatch):
+        """Deleting an alias should not delete target LoRA files."""
+        from claas import storage
+
+        class MockVolume:
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(storage, "lora_volume", MockVolume())
+        monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
+
+        lora_dir = tmp_path / "user" / "model-v3"
+        lora_dir.mkdir(parents=True)
+        (lora_dir / "adapter_config.json").write_text("{}")
+
+        storage._write_aliases({"user/model-latest": "user/model-v3"})
+
+        assert storage.delete_lora("user/model-latest") is True
+        assert (lora_dir / "adapter_config.json").exists()
+        assert "user/model-latest" not in storage._read_aliases()
+
     def test_no_error_when_missing(self, tmp_path):
         """Doesn't raise when directory doesn't exist."""
         from claas.storage import cleanup_local_lora

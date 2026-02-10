@@ -70,14 +70,17 @@ training_image = (
         "/models": model_volume,
         LORA_MOUNT_PATH: lora_volume,
     },
-    container_idle_timeout=300,
+    scaledown_window=300,
     timeout=120,
     enable_memory_snapshot=True,
 )
 class DistillWorker:
     """Training worker for SDPO continual distillation."""
 
-    base_model_id: str = "Qwen/Qwen3-Coder-Next"
+    base_model_id: str = os.environ.get(
+        "CLAAS_BASE_MODEL_ID",
+        "Qwen/Qwen3-Coder-Next-8B",
+    )
 
     @modal.enter(snap=True)
     def load_base_model(self):
@@ -316,7 +319,7 @@ class DistillWorker:
             raise RuntimeError("Failed to get teacher logprobs")
 
         teacher_logprobs, teacher_indices = parse_teacher_result(
-            teacher_result[0], self.device
+            teacher_result[0], str(self.device)
         )
 
         # Ensure dimensions match

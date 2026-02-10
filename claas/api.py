@@ -30,9 +30,17 @@ from typing import Any
 
 import modal
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from .storage import LORA_MOUNT_PATH, create_initial_lora, list_loras, lora_exists, lora_volume
+from .storage import (
+    LORA_MOUNT_PATH,
+    create_initial_lora,
+    export_lora_zip_bytes,
+    list_loras,
+    lora_exists,
+    lora_volume,
+)
 from .types import TrainingConfig
 from .worker import DistillWorker
 from .worker import app as modal_app
@@ -103,7 +111,7 @@ class LoraInitRequest(BaseModel):
         description="LoRA identifier (e.g., 'user123/coder-v1')",
     )
     base_model: str = Field(
-        default="Qwen/Qwen3-Coder-Next",
+        default="Qwen/Qwen3-Coder-Next-8B",
         description="Base model the LoRA will be applied to",
     )
     lora_r: int = Field(
@@ -233,6 +241,35 @@ async def list_lora_adapters(prefix: str = "") -> LoraListResponse:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to list LoRAs: {str(e)}",
+        ) from e
+
+
+@web_app.get("/v1/lora/export")
+async def export_lora_adapter(lora_id: str) -> Response:
+    """Export a LoRA adapter as a zip archive for local inference servers."""
+    try:
+        exists = await asyncio.to_thread(lora_exists, lora_id)
+        if not exists:
+            raise HTTPException(
+                status_code=404,
+                detail=f"LoRA not found: {lora_id}",
+            )
+
+        zip_bytes = await asyncio.to_thread(export_lora_zip_bytes, lora_id)
+        safe_name = lora_id.strip("/").replace("/", "__")
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_name}.zip"',
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"LoRA export failed: {str(e)}",
         ) from e
 
 

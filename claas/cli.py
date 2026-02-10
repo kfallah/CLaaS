@@ -116,7 +116,7 @@ def main() -> int:
     )
     init_parser.add_argument(
         "--base-model",
-        default="Qwen/Qwen3-Coder-Next",
+        default="Qwen/Qwen3-Coder-Next-8B",
         help="Base model name",
     )
     init_parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")

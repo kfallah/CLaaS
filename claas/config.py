@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 class ModelConfig:
     """Model configuration."""
 
-    # Student model (Qwen3-Coder-Next)
-    student_model_id: str = "Qwen/Qwen3-Coder-Next"
+    # Student model (Qwen3-Coder-Next-8B)
+    student_model_id: str = "Qwen/Qwen3-Coder-Next-8B"
     student_dtype: str = "bfloat16"
     student_attn_implementation: str = "flash_attention_2"
 
@@ -66,13 +66,13 @@ class InfraConfig:
 
     # Training worker (student)
     student_gpu: str = "L40S"
-    student_container_idle_timeout: int = 300  # 5 minutes
+    student_scaledown_window: int = 300  # 5 minutes
     student_timeout: int = 120  # 2 minutes per request
 
     # Teacher worker (vLLM)
     teacher_gpu: str = "H100"
-    teacher_keep_warm: int = 1
-    teacher_container_idle_timeout: int = 600  # 10 minutes
+    teacher_min_containers: int = 1
+    teacher_scaledown_window: int = 600  # 10 minutes
     teacher_gpu_memory_utilization: float = 0.90
 
     # Volumes

@@ -12,11 +12,11 @@ Key features:
 
 from __future__ import annotations
 
+import importlib
 from typing import TypedDict
 
 import modal
 import torch
-from vllm import LLM, SamplingParams
 
 
 class TokenLogprobs(TypedDict):
@@ -56,8 +56,8 @@ vllm_image = (
     gpu="H100",
     image=vllm_image,
     volumes={"/models": model_volume},
-    keep_warm=1,
-    container_idle_timeout=600,
+    min_containers=1,
+    scaledown_window=600,
     enable_memory_snapshot=True,
     timeout=300,
 )
@@ -78,6 +78,10 @@ class TeacherService:
         Without snapshot: ~45-60s cold start
         With snapshot: ~3-5s cold start
         """
+        vllm_module = importlib.import_module("vllm")
+        LLM = getattr(vllm_module, "LLM")
+        SamplingParams = getattr(vllm_module, "SamplingParams")
+
         print(f"Initializing vLLM with {self.model_id}...")
 
         self.llm = LLM(
@@ -97,6 +101,7 @@ class TeacherService:
         # and kernel compilations before the snapshot is taken
         warmup_params = SamplingParams(max_tokens=1, temperature=0)
         _ = self.llm.generate(["Hello, world!"], warmup_params)
+        self._sampling_params_cls = SamplingParams
 
         print("vLLM engine initialized and warmed up. Snapshot will capture this state.")
 
@@ -127,7 +132,7 @@ class TeacherService:
         full_texts = [p + c for p, c in zip(prompts, completions, strict=True)]
         prompt_lengths = [len(self.tokenizer.encode(p)) for p in prompts]
 
-        params = SamplingParams(
+        params = self._sampling_params_cls(
             max_tokens=1,  # don't generate new tokens
             temperature=0,
             prompt_logprobs=top_k,  # vLLM supports arbitrary K here
