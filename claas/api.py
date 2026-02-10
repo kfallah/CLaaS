@@ -183,10 +183,10 @@ class FeedbackResponse(BaseModel):
     status: str
     request_id: str
     lora_id: str
-    distill_result: dict[str, Any]
-    vllm: dict[str, bool]
+    distill_result: DistillResponse | None = None
+    vllm: FeedbackLogVllmState
     feedback_log_path: str
-    timing_ms: dict[str, int]
+    timing_ms: FeedbackTimingMs
 
 
 class FeedbackLogRequest(BaseModel):
@@ -550,10 +550,10 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
         status="ok",
         request_id=request_id,
         lora_id=distill_result.lora_id if distill_result else request.lora_id,
-        distill_result=distill_result.model_dump() if distill_result else {},
-        vllm={"slept": slept, "woke": woke},
+        distill_result=distill_result,
+        vllm=FeedbackLogVllmState(slept=slept, woke=woke),
         feedback_log_path=log_path,
-        timing_ms=timing_ms.model_dump(),
+        timing_ms=timing_ms,
     )
 
 
