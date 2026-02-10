@@ -24,7 +24,7 @@ pytest tests/ -v
 
 ## Project Structure
 
-```
+```text
 claas/
 ├── api.py           # FastAPI endpoints
 ├── cli.py           # Command-line interface

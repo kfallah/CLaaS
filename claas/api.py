@@ -209,9 +209,9 @@ async def distill(request: DistillRequest) -> DistillResponse:
                 detail=f"LoRA not found: {request.lora_id}",
             )
 
-        # Call the Modal worker
+        # Call the Modal worker (use .remote.aio() in async context)
         worker = DistillWorker()
-        result = worker.distill.remote(request.model_dump())
+        result = await worker.distill.remote.aio(request.model_dump())
 
         return DistillResponse(**result)
 
@@ -233,7 +233,9 @@ async def init_lora(request: LoraInitRequest) -> LoraInitResponse:
     through distill calls.
     """
     try:
-        lora_id = create_initial_lora(
+        # Run sync function in thread pool to avoid blocking
+        lora_id = await asyncio.to_thread(
+            create_initial_lora,
             lora_id=request.lora_id,
             base_model_name=request.base_model,
             lora_r=request.lora_r,
@@ -257,7 +259,8 @@ async def list_lora_adapters(prefix: str = "") -> LoraListResponse:
         prefix: Optional prefix to filter by (e.g., 'user123/')
     """
     try:
-        loras = list_loras(prefix)
+        # Run sync function in thread pool to avoid blocking
+        loras = await asyncio.to_thread(list_loras, prefix)
         return LoraListResponse(loras=loras)
     except Exception as e:
         raise HTTPException(
@@ -273,7 +276,7 @@ async def health_check() -> HealthResponse:
 
     try:
         worker = DistillWorker()
-        result["worker"] = worker.health_check.remote()
+        result["worker"] = await worker.health_check.remote.aio()
     except Exception as e:
         result["worker"] = {"status": "unhealthy", "error": str(e)}
         result["status"] = "degraded"
@@ -282,7 +285,7 @@ async def health_check() -> HealthResponse:
         from .teacher import TeacherService
 
         teacher = TeacherService()
-        result["teacher"] = teacher.health_check.remote()
+        result["teacher"] = await teacher.health_check.remote.aio()
     except Exception as e:
         result["teacher"] = {"status": "unhealthy", "error": str(e)}
         result["status"] = "degraded"
@@ -304,6 +307,7 @@ async def root():
 # Mount FastAPI to Modal
 @modal_app.function(
     image=modal.Image.debian_slim(python_version="3.11").pip_install(
+        "modal>=1.0.0",
         "fastapi>=0.110.0",
         "pydantic>=2.6.0",
     ),

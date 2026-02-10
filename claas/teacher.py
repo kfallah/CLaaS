@@ -239,6 +239,9 @@ def parse_teacher_result(
 
     # Find max K across positions
     max_k = max(len(pos["indices"]) for pos in result)
+    if max_k == 0:
+        raise ValueError("All teacher positions have empty top-K results")
+
     T = len(result)
 
     # Initialize tensors with padding
@@ -247,8 +250,9 @@ def parse_teacher_result(
 
     for t, pos in enumerate(result):
         k = len(pos["indices"])
-        teacher_indices[t, :k] = torch.tensor(pos["indices"], device=device)
-        teacher_logprobs[t, :k] = torch.tensor(pos["logprobs"], device=device)
+        if k > 0:
+            teacher_indices[t, :k] = torch.tensor(pos["indices"], dtype=torch.long, device=device)
+            teacher_logprobs[t, :k] = torch.tensor(pos["logprobs"], dtype=torch.float, device=device)
 
     return teacher_logprobs, teacher_indices
 

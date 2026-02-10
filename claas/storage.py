@@ -36,8 +36,23 @@ def get_lora_path(lora_id: str) -> str:
 
     Returns:
         Full path like "/loras/user123/coder-v1"
+
+    Raises:
+        ValueError: If lora_id contains path traversal sequences
     """
-    return f"{LORA_MOUNT_PATH}/{lora_id.strip('/')}"
+    sanitized = lora_id.strip("/")
+
+    # Check for path traversal attempts
+    if ".." in sanitized.split("/"):
+        raise ValueError(f"Invalid lora_id: path traversal detected in '{lora_id}'")
+
+    full_path = os.path.normpath(os.path.join(LORA_MOUNT_PATH, sanitized))
+
+    # Verify the resolved path is within LORA_MOUNT_PATH
+    if not full_path.startswith(LORA_MOUNT_PATH + "/"):
+        raise ValueError(f"Invalid lora_id: resolves outside storage root")
+
+    return full_path
 
 
 def lora_exists(lora_id: str) -> bool:
@@ -215,11 +230,19 @@ def list_loras(prefix: str = "") -> list[str]:
     if not os.path.exists(base_path):
         return loras
 
-    for root, dirs, files in os.walk(base_path):
+    # Sanitize prefix to prevent path traversal
+    sanitized_prefix = os.path.normpath(prefix.strip("/"))
+    if sanitized_prefix == ".":
+        sanitized_prefix = ""
+    elif ".." in sanitized_prefix.split("/"):
+        # Reject prefixes with path traversal
+        return loras
+
+    for root, _dirs, files in os.walk(base_path):
         if "adapter_config.json" in files:
             # This is a LoRA directory
             rel_path = os.path.relpath(root, base_path)
-            if rel_path.startswith(prefix):
+            if not sanitized_prefix or rel_path.startswith(sanitized_prefix):
                 loras.append(rel_path)
 
     return sorted(loras)
