@@ -26,6 +26,7 @@ Example usage:
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import os
 import time
@@ -66,7 +67,6 @@ DISTILL_EXECUTION_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "modal_r
 
 _feedback_locks: dict[str, asyncio.Lock] = {}
 _feedback_locks_guard = asyncio.Lock()
-_local_worker: Any | None = None
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -294,21 +294,25 @@ def _safe_export_name(lora_id: str) -> str:
     return safe or "lora_export"
 
 
-def _get_local_worker() -> Any:
-    """Create or return process-local DistillWorker instance."""
-    global _local_worker
-    if _local_worker is None:
-        from .worker import DistillWorker
-
-        _local_worker = DistillWorker()
-    return _local_worker
-
-
 async def _run_distill(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute a distill request via configured execution backend."""
     if DISTILL_EXECUTION_MODE == "local":
-        worker = _get_local_worker()
-        return await asyncio.to_thread(worker.distill.local, payload)
+        from .worker import DistillWorker
+
+        worker = DistillWorker()
+        try:
+            return await asyncio.to_thread(worker.distill.local, payload)
+        finally:
+            # Release worker refs so vLLM can reclaim VRAM on wake.
+            del worker
+            gc.collect()
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
 
     distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
     return await distill_fn.remote.aio(payload)
