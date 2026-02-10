@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 class ModelConfig:
     """Model configuration."""
 
-    # Student model (Qwen3-Coder-Next-8B)
-    student_model_id: str = "Qwen/Qwen3-Coder-Next-8B"
+    # Student model (Qwen3-8B)
+    student_model_id: str = "Qwen/Qwen3-8B"
     student_dtype: str = "bfloat16"
     student_attn_implementation: str = "flash_attention_2"
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import warnings
 from typing import TypedDict
 
 import modal
@@ -53,6 +54,8 @@ vllm_image = (
         "HF_HOME": "/models/hf_cache",
         "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
         "HUGGING_FACE_HUB_TOKEN": os.environ.get("HF_TOKEN", ""),
+        "VLLM_SERVER_DEV_MODE": "1",
+        "TORCHINDUCTOR_COMPILE_THREADS": "1",
     })
 )
 
@@ -64,6 +67,8 @@ vllm_image = (
     min_containers=1,
     scaledown_window=600,
     enable_memory_snapshot=True,
+    experimental_options={"enable_gpu_snapshot": True},
+    startup_timeout=1800,
     timeout=900,
 )
 class TeacherService:
@@ -101,6 +106,7 @@ class TeacherService:
             tensor_parallel_size=1,
             max_model_len=self.max_model_len,
             gpu_memory_utilization=0.90,
+            enable_sleep_mode=True,
             trust_remote_code=True,
             download_dir="/models",
         )
@@ -114,7 +120,17 @@ class TeacherService:
         _ = self.llm.generate(["Hello, world!"], warmup_params)
         self._sampling_params_cls = SamplingParams
 
-        print("vLLM engine initialized and warmed up. Snapshot will capture this state.")
+        # Follow Modal's snapshot pattern: warmup then sleep before snapshotting.
+        self.llm.sleep(level=1)
+        print("vLLM initialized, warmed up, and put to sleep for snapshot capture.")
+
+    @modal.enter(snap=False)
+    def wake_up(self):
+        """Wake the engine after a snapshot restore."""
+        try:
+            self.llm.wake_up()
+        except Exception as exc:
+            warnings.warn(f"Teacher wake_up failed: {exc!r}", stacklevel=1)
 
     @modal.method()
     def score_tokens(

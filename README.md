@@ -8,7 +8,9 @@ CLaaS provides a serverless API for continual learning via Self-Distillation Pol
 
 1. Loads a user's LoRA adapter from Modal Volume
 2. Runs the student model (with LoRA) on the provided prompt/response
-3. Gets dense teacher logprobs from a 30B teacher model via vLLM
+3. Gets teacher logprobs from configured source:
+   - `self` (default): detached student logits (self-distillation)
+   - `remote`: 30B teacher model via vLLM
 4. Computes SDPO loss (Generalized JSD + KL regularization to base policy)
 5. Updates the LoRA parameters
 6. Saves the updated adapter back to Modal Volume
@@ -24,6 +26,10 @@ Current default topology for experiments:
 - `TeacherService` runs remotely on Modal (H100)
 
 Important: even when API is local, calls to `DistillWorker().distill.remote(...)` execute remotely on Modal.
+`TeacherService` is optional unless `teacher_mode=remote`.
+
+Teacher snapshot lifecycle follows Modal's vLLM low-latency pattern:
+warmup request -> `sleep(level=1)` before snapshot -> `wake_up()` on restore.
 
 ## Architecture
 
@@ -59,8 +65,8 @@ pip install -e .
 
 Set the student model with `CLAAS_BASE_MODEL_ID`:
 
-- Default smoke-test model: `Qwen/Qwen2.5-Coder-7B-Instruct`
-- Target experiment model: `Qwen/Qwen3-Coder-Next-8B` (requires HF auth in Modal)
+- Default model: `Qwen/Qwen3-8B`
+- Alternative: `Qwen/Qwen3-Coder-Next-8B` (requires HF auth in Modal)
 
 No AWS/S3 credentials are needed; LoRAs are stored in Modal Volumes.
 
@@ -69,7 +75,7 @@ No AWS/S3 credentials are needed; LoRAs are stored in Modal Volumes.
 ### 1. Deploy the service
 
 ```bash
-modal deploy claas.api
+modal deploy -m claas.deploy
 ```
 
 ### 2. Initialize a LoRA adapter
@@ -93,7 +99,8 @@ curl -X POST https://your-app--claas-distill-fastapi-app.modal.run/v1/distill \
     "rollout_logprobs": [-0.5, -1.2, -0.8, -0.3],
     "training": {
       "learning_rate": 1e-4,
-      "alpha": 0.5
+      "alpha": 0.5,
+      "teacher_mode": "self"
     }
   }'
 ```
@@ -118,7 +125,8 @@ Run a single SDPO distillation step.
     "is_clip": 5.0,
     "max_grad_norm": 1.0,
     "kl_reg_weight": 0.1,
-    "teacher_top_k": 20
+    "teacher_top_k": 20,
+    "teacher_mode": "self"
   }
 }
 ```
@@ -143,6 +151,7 @@ Run a single SDPO distillation step.
 | `max_grad_norm` | 1.0 | Gradient clipping |
 | `kl_reg_weight` | 0.1 | Weight for KL regularization to base policy |
 | `teacher_top_k` | 20 | Top-K logprobs from teacher |
+| `teacher_mode` | `self` | `self` (detached student logits) or `remote` (vLLM teacher) |
 
 **Response:**
 ```json
@@ -168,7 +177,7 @@ Initialize a new LoRA adapter.
 ```json
 {
   "lora_id": "user123/coder-v1",
-  "base_model": "Qwen/Qwen3-Coder-Next-8B",
+  "base_model": "Qwen/Qwen3-8B",
   "lora_r": 16,
   "lora_alpha": 32,
   "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
@@ -208,7 +217,7 @@ curl -L "https://your-app--claas-distill-fastapi-app.modal.run/v1/lora/export?lo
 unzip -o coder-v1-init.zip -d ./loras/coder-v1-init
 
 # 2) Run local vLLM with LoRA enabled
-vllm serve Qwen/Qwen3-Coder-Next-8B \
+vllm serve Qwen/Qwen3-8B \
   --host 0.0.0.0 \
   --port 8000 \
   --served-model-name qwen3-coder-next-8b \
@@ -287,7 +296,7 @@ deploy/serve so the Modal runtime can authenticate model downloads:
 
 ```bash
 export HF_TOKEN=...
-CLAAS_BASE_MODEL_ID=Qwen/Qwen3-Coder-Next-8B
+CLAAS_BASE_MODEL_ID=Qwen/Qwen3-8B
 modal deploy -m claas.deploy
 ```
 

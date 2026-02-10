@@ -6,7 +6,7 @@ and ensure consistency across the codebase.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,6 +51,11 @@ class TrainingConfig(BaseModel):
         ge=10,
         le=100,
         description="Number of top logprobs to request from teacher",
+    )
+    teacher_mode: Literal["self", "remote"] = Field(
+        default="self",
+        description="Teacher source: 'self' uses detached student logits; "
+        "'remote' scores with TeacherService.",
     )
 
 

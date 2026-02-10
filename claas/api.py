@@ -136,7 +136,7 @@ class LoraInitRequest(BaseModel):
         description="LoRA identifier (e.g., 'user123/coder-v1')",
     )
     base_model: str = Field(
-        default="Qwen/Qwen2.5-Coder-7B-Instruct",
+        default="Qwen/Qwen3-8B",
         description="Base model the LoRA will be applied to",
     )
     lora_r: int = Field(
@@ -193,7 +193,9 @@ async def distill(request: DistillRequest) -> DistillResponse:
     This endpoint:
     1. Loads the user's LoRA from Modal Volume
     2. Runs the student model forward pass
-    3. Gets teacher logprobs from the vLLM teacher service
+    3. Gets teacher logprobs from configured source
+       - self (default): detached student logits
+       - remote: vLLM TeacherService
     4. Computes SDPO loss (JSD-based policy gradient)
     5. Updates LoRA parameters
     6. Saves the updated LoRA back to Modal Volume
@@ -209,20 +211,21 @@ async def distill(request: DistillRequest) -> DistillResponse:
                 detail=f"LoRA not found: {request.lora_id}",
             )
 
-        # Score with teacher from the API process, then pass to worker.
-        teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-        teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback)
-        teacher_scored = await teacher_score_fn.remote.aio(
-            prompts=[teacher_prompt],
-            completions=[request.response],
-            top_k=request.training.teacher_top_k,
-        )
-        teacher_result = teacher_scored[0] if teacher_scored else []
-
         # Resolve worker by name to avoid importing training dependencies in API image.
         distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
         payload = request.model_dump()
-        payload["teacher_result"] = teacher_result
+
+        # Remote teacher is optional; self-distillation is the default path.
+        if request.training.teacher_mode == "remote":
+            teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
+            teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback)
+            teacher_scored = await teacher_score_fn.remote.aio(
+                prompts=[teacher_prompt],
+                completions=[request.response],
+                top_k=request.training.teacher_top_k,
+            )
+            payload["teacher_result"] = teacher_scored[0] if teacher_scored else []
+
         result = await distill_fn.remote.aio(payload)
 
         return DistillResponse(**result)

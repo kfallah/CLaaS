@@ -88,6 +88,8 @@ def cmd_distill(args: argparse.Namespace) -> int:
         "training": {
             "learning_rate": args.learning_rate,
             "alpha": args.alpha,
+            "teacher_mode": args.teacher_mode,
+            "teacher_top_k": args.teacher_top_k,
         },
     }
 
@@ -116,7 +118,7 @@ def main() -> int:
     )
     init_parser.add_argument(
         "--base-model",
-        default="Qwen/Qwen3-Coder-Next-8B",
+        default="Qwen/Qwen3-8B",
         help="Base model name",
     )
     init_parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
@@ -154,6 +156,18 @@ def main() -> int:
     distill_parser.add_argument("--feedback", required=True, help="Feedback text")
     distill_parser.add_argument("--learning-rate", type=float, default=1e-4)
     distill_parser.add_argument("--alpha", type=float, default=0.5)
+    distill_parser.add_argument(
+        "--teacher-mode",
+        choices=["self", "remote"],
+        default="self",
+        help="Teacher source for distillation",
+    )
+    distill_parser.add_argument(
+        "--teacher-top-k",
+        type=int,
+        default=20,
+        help="Top-K logprobs from teacher source",
+    )
     distill_parser.set_defaults(func=cmd_distill)
 
     args = parser.parse_args()

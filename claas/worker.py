@@ -86,8 +86,7 @@ class DistillWorker:
 
     base_model_id: str = os.environ.get(
         "CLAAS_BASE_MODEL_ID",
-        # Public default for smoke tests; override to Qwen3-Coder-Next-8B in env.
-        "Qwen/Qwen2.5-Coder-7B-Instruct",
+        "Qwen/Qwen3-8B",
     )
     attn_implementation: str = os.environ.get(
         "CLAAS_ATTN_IMPLEMENTATION",
@@ -193,6 +192,17 @@ class DistillWorker:
             model = get_peft_model(self.base_model, lora_config)
 
         return model
+
+    def _build_self_teacher_topk(self, student_logits, top_k: int):
+        """Build top-K teacher distribution from detached student logits."""
+        import torch
+
+        with torch.no_grad():
+            student_log_probs = self.F.log_softmax(student_logits.detach(), dim=-1)
+            vocab_size = student_log_probs.shape[-1]
+            k = min(max(1, top_k), vocab_size)
+            top_logprobs, top_indices = torch.topk(student_log_probs[0], k=k, dim=-1)
+        return top_logprobs, top_indices
 
     @modal.method()
     def distill(self, request: dict) -> dict:
@@ -313,15 +323,18 @@ class DistillWorker:
                     student_logits.detach(), dim=-1
                 ).gather(-1, response_ids[:, :T_resp].unsqueeze(-1)).squeeze(-1)
 
-        # 5. Parse teacher logprobs (scored by API side teacher call)
+        # 5. Build/parse teacher logprobs
         teacher_result = request.get("teacher_result")
-        if not teacher_result:
-            cleanup_local_lora(lora_local_path)
-            raise RuntimeError("Missing teacher_result in request")
-
-        teacher_logprobs, teacher_indices = parse_teacher_result(
-            teacher_result, str(self.device)
-        )
+        if teacher_result:
+            teacher_logprobs, teacher_indices = parse_teacher_result(
+                teacher_result, str(self.device)
+            )
+            teacher_mode = "remote"
+        else:
+            teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
+                student_logits, config.teacher_top_k
+            )
+            teacher_mode = "self"
 
         # Ensure dimensions match
         if teacher_logprobs.shape[0] != T_resp:
@@ -384,6 +397,7 @@ class DistillWorker:
                 "clip_fraction": loss_dict["clip_fraction"],
                 "grad_norm": grad_norm.item() if hasattr(grad_norm, "item") else grad_norm,
                 "tokens_processed": T_resp,
+                "teacher_mode": teacher_mode,
             },
         }
 
