@@ -189,6 +189,51 @@ class FeedbackResponse(BaseModel):
     timing_ms: dict[str, int]
 
 
+class FeedbackLogRequest(BaseModel):
+    """Redacted feedback request fields persisted to logs."""
+
+    lora_id: str
+    training: TrainingConfig
+    orchestration: FeedbackOrchestration
+    prompt_chars: int
+    response_chars: int
+    feedback_chars: int
+    rollout_logprobs_count: int | None = None
+
+
+class FeedbackLogVllmState(BaseModel):
+    """vLLM orchestration state persisted to logs."""
+
+    slept: bool
+    woke: bool
+
+
+class FeedbackTimingMs(BaseModel):
+    """Timing breakdown for feedback orchestration."""
+
+    sleep: int = 0
+    distill: int = 0
+    save: int = 0
+    wake: int = 0
+    total: int = 0
+
+
+class FeedbackLogRecord(BaseModel):
+    """Structured log record for feedback orchestration."""
+
+    request_id: str
+    timestamp_utc: str
+    status: str
+    phase: str
+    lora_id: str
+    teacher_mode: str
+    request: FeedbackLogRequest
+    vllm: FeedbackLogVllmState
+    timing_ms: FeedbackTimingMs
+    distill_result: DistillResponse | None = None
+    error: str | None = None
+
+
 class LoraInitRequest(BaseModel):
     """Request to initialize a new LoRA adapter."""
 
@@ -260,31 +305,38 @@ async def _vllm_post(path: str, *, params: dict[str, Any] | None = None, timeout
     resp.raise_for_status()
 
 
-def _write_feedback_log(record: dict[str, Any]) -> str:
+def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
     """Persist a feedback lifecycle record to disk and return its path."""
+    if isinstance(record, FeedbackLogRecord):
+        payload = record.model_dump(mode="json")
+        request_id = record.request_id
+    else:
+        payload = record
+        request_id = str(payload.get("request_id", ""))
+
     log_root = Path(FEEDBACK_LOG_DIR)
     log_root.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
-    request_id = record.get("request_id", uuid.uuid4().hex)
+    request_id = request_id or uuid.uuid4().hex
     path = log_root / f"{timestamp}-{request_id}.json"
     with path.open("w", encoding="utf-8") as f:
-        json.dump(record, f, indent=2, sort_keys=True)
+        json.dump(payload, f, indent=2, sort_keys=True)
     return str(path)
 
 
-def _redact_feedback_request(request: FeedbackRequest) -> dict[str, Any]:
+def _redact_feedback_request(request: FeedbackRequest) -> FeedbackLogRequest:
     """Return metadata-only request fields for feedback logs."""
-    return {
-        "lora_id": request.lora_id,
-        "training": request.training.model_dump(),
-        "orchestration": request.orchestration.model_dump(),
-        "prompt_chars": len(request.prompt),
-        "response_chars": len(request.response),
-        "feedback_chars": len(request.feedback),
-        "rollout_logprobs_count": (
+    return FeedbackLogRequest(
+        lora_id=request.lora_id,
+        training=request.training,
+        orchestration=request.orchestration,
+        prompt_chars=len(request.prompt),
+        response_chars=len(request.response),
+        feedback_chars=len(request.feedback),
+        rollout_logprobs_count=(
             None if request.rollout_logprobs is None else len(request.rollout_logprobs)
         ),
-    }
+    )
 
 
 def _safe_export_name(lora_id: str) -> str:
@@ -301,7 +353,8 @@ async def _run_distill(payload: dict[str, Any]) -> dict[str, Any]:
 
         worker = DistillWorker()
         try:
-            return await asyncio.to_thread(worker.distill.local, payload)
+            result = await asyncio.to_thread(worker.distill.local, payload)
+            return DistillResponse.model_validate(result).model_dump()
         finally:
             # Release worker refs so vLLM can reclaim VRAM on wake.
             del worker
@@ -315,7 +368,8 @@ async def _run_distill(payload: dict[str, Any]) -> dict[str, Any]:
                 pass
 
     distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
-    return await distill_fn.remote.aio(payload)
+    result = await distill_fn.remote.aio(payload)
+    return DistillResponse.model_validate(result).model_dump()
 
 
 # API Endpoints
@@ -385,10 +439,10 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
     slept = False
     woke = False
     phase = "validate"
-    distill_result: dict[str, Any] = {}
+    distill_result: DistillResponse | None = None
     error_message: str | None = None
     log_path = ""
-    timing_ms = {"sleep": 0, "distill": 0, "save": 0, "wake": 0, "total": 0}
+    timing_ms = FeedbackTimingMs()
     started_total = time.perf_counter()
 
     lock = await _get_feedback_lock(request.lora_id)
@@ -408,7 +462,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
                 "/sleep",
                 params={"level": request.orchestration.sleep_level},
             )
-            timing_ms["sleep"] = int((time.perf_counter() - sleep_start) * 1000)
+            timing_ms.sleep = int((time.perf_counter() - sleep_start) * 1000)
             slept = True
 
         phase = "distill"
@@ -431,17 +485,17 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
                 )
             payload["teacher_result"] = teacher_scored[0]
 
-        distill_result = await _run_distill(payload)
-        timing_ms["distill"] = int((time.perf_counter() - distill_start) * 1000)
+        distill_result = DistillResponse.model_validate(await _run_distill(payload))
+        timing_ms.distill = int((time.perf_counter() - distill_start) * 1000)
 
         if request.orchestration.wake_after:
             phase = "wake"
             wake_start = time.perf_counter()
             await _vllm_post("/wake_up")
-            timing_ms["wake"] = int((time.perf_counter() - wake_start) * 1000)
+            timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
             woke = True
 
-        timing_ms["total"] = int((time.perf_counter() - started_total) * 1000)
+        timing_ms.total = int((time.perf_counter() - started_total) * 1000)
     except asyncio.TimeoutError:
         phase = "lock"
         error_message = f"Timed out waiting for lock on LoRA '{request.lora_id}'"
@@ -459,44 +513,47 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             try:
                 await _vllm_post("/wake_up")
                 woke = True
-            except Exception:
+            except httpx.HTTPError:
                 pass
         raise HTTPException(
             status_code=500,
             detail=f"Feedback update failed in phase '{phase}': {error_message}",
         ) from e
     finally:
-        timing_ms["total"] = int((time.perf_counter() - started_total) * 1000)
+        timing_ms.total = int((time.perf_counter() - started_total) * 1000)
         if lock_acquired:
             lock.release()
 
-        log_record = {
-            "request_id": request_id,
-            "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "status": "ok" if error_message is None else "error",
-            "phase": phase,
-            "lora_id": request.lora_id,
-            "teacher_mode": request.training.teacher_mode,
-            "request": _redact_feedback_request(request),
-            "vllm": {"slept": slept, "woke": woke},
-            "timing_ms": timing_ms,
-            "distill_result": distill_result,
-            "error": error_message,
-        }
+        log_record = FeedbackLogRecord(
+            request_id=request_id,
+            timestamp_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            status="ok" if error_message is None else "error",
+            phase=phase,
+            lora_id=request.lora_id,
+            teacher_mode=request.training.teacher_mode,
+            request=_redact_feedback_request(request),
+            vllm=FeedbackLogVllmState(slept=slept, woke=woke),
+            timing_ms=timing_ms,
+            distill_result=distill_result,
+            error=error_message,
+        )
         try:
-            log_path = await asyncio.to_thread(_write_feedback_log, log_record)
-        except Exception:
+            log_path = await asyncio.to_thread(
+                _write_feedback_log,
+                log_record.model_dump(mode="json"),
+            )
+        except (OSError, TypeError, ValueError):
             # Logging failures should not hide the training result.
             log_path = ""
 
     return FeedbackResponse(
         status="ok",
         request_id=request_id,
-        lora_id=distill_result.get("lora_id", request.lora_id),
-        distill_result=distill_result,
+        lora_id=distill_result.lora_id if distill_result else request.lora_id,
+        distill_result=distill_result.model_dump() if distill_result else {},
         vllm={"slept": slept, "woke": woke},
         feedback_log_path=log_path,
-        timing_ms=timing_ms,
+        timing_ms=timing_ms.model_dump(),
     )
 
 

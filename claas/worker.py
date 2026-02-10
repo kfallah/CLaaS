@@ -335,7 +335,9 @@ class DistillWorker:
             )
             teacher_mode = "remote"
         else:
-            # Self-teacher should be a different distribution than student logits.
+            # SDPO core logic expects a separate teacher distribution.
+            # For local self mode, we use base-model logits as the teacher proxy
+            # so teacher and student are not identical at each step.
             teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
                 base_logits, config.teacher_top_k
             )

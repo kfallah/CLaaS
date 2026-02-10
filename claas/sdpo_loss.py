@@ -62,7 +62,7 @@ def compute_sdpo_loss(loss_input: SDPOLossInput) -> SDPOLossResult:
     if alpha < 1.0:
         # Full GJS with mixture distribution
         # log(alpha * teacher + (1-alpha) * student) via logsumexp
-        alpha_t = torch.tensor(alpha, dtype=torch.float32, device=student_log_probs.device)
+        alpha_t = torch.tensor(alpha, dtype=student_log_probs.dtype, device=student_log_probs.device)
         log_alpha = torch.log(alpha_t)
         log_one_minus_alpha = torch.log(1 - alpha_t)
 
