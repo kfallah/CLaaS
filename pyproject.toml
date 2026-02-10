@@ -13,7 +13,7 @@ authors = [
     { name = "CLaaS Team" }
 ]
 dependencies = [
-    "modal>=0.68.0",
+    "modal>=1.0.0",
     "torch>=2.1.0",
     "transformers>=4.40.0",
     "peft>=0.10.0",
@@ -28,7 +28,7 @@ dev = [
     "ruff>=0.3.0",
 ]
 teacher = [
-    "vllm>=0.4.0",
+    "vllm>=0.11.0",
 ]
 
 [project.scripts]
