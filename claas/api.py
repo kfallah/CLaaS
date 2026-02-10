@@ -62,9 +62,11 @@ web_app = FastAPI(
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
 FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
 FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
+DISTILL_EXECUTION_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "modal_rpc").strip().lower()
 
 _feedback_locks: dict[str, asyncio.Lock] = {}
 _feedback_locks_guard = asyncio.Lock()
+_local_worker: Any | None = None
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -270,6 +272,48 @@ def _write_feedback_log(record: dict[str, Any]) -> str:
     return str(path)
 
 
+def _redact_feedback_request(request: FeedbackRequest) -> dict[str, Any]:
+    """Return metadata-only request fields for feedback logs."""
+    return {
+        "lora_id": request.lora_id,
+        "training": request.training.model_dump(),
+        "orchestration": request.orchestration.model_dump(),
+        "prompt_chars": len(request.prompt),
+        "response_chars": len(request.response),
+        "feedback_chars": len(request.feedback),
+        "rollout_logprobs_count": (
+            None if request.rollout_logprobs is None else len(request.rollout_logprobs)
+        ),
+    }
+
+
+def _safe_export_name(lora_id: str) -> str:
+    """Sanitize LoRA identifier for Content-Disposition filename."""
+    base = lora_id.strip("/").replace("/", "__")
+    safe = "".join(c for c in base if c.isalnum() or c in "-_.")
+    return safe or "lora_export"
+
+
+def _get_local_worker() -> Any:
+    """Create or return process-local DistillWorker instance."""
+    global _local_worker
+    if _local_worker is None:
+        from .worker import DistillWorker
+
+        _local_worker = DistillWorker()
+    return _local_worker
+
+
+async def _run_distill(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute a distill request via configured execution backend."""
+    if DISTILL_EXECUTION_MODE == "local":
+        worker = _get_local_worker()
+        return await asyncio.to_thread(worker.distill.local, payload)
+
+    distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
+    return await distill_fn.remote.aio(payload)
+
+
 # API Endpoints
 
 
@@ -298,8 +342,6 @@ async def distill(request: DistillRequest) -> DistillResponse:
                 detail=f"LoRA not found: {request.lora_id}",
             )
 
-        # Resolve worker by name to avoid importing training dependencies in API image.
-        distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
         payload = request.model_dump()
 
         # Remote teacher is optional; self-distillation is the default path.
@@ -311,9 +353,14 @@ async def distill(request: DistillRequest) -> DistillResponse:
                 completions=[request.response],
                 top_k=request.training.teacher_top_k,
             )
-            payload["teacher_result"] = teacher_scored[0] if teacher_scored else []
+            if not teacher_scored or not teacher_scored[0]:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Remote teacher returned empty scores",
+                )
+            payload["teacher_result"] = teacher_scored[0]
 
-        result = await distill_fn.remote.aio(payload)
+        result = await _run_distill(payload)
 
         return DistillResponse(**result)
 
@@ -362,7 +409,6 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
 
         phase = "distill"
         distill_start = time.perf_counter()
-        distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
         payload = request.model_dump()
         payload["save_in_place"] = True
 
@@ -374,9 +420,14 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
                 completions=[request.response],
                 top_k=request.training.teacher_top_k,
             )
-            payload["teacher_result"] = teacher_scored[0] if teacher_scored else []
+            if not teacher_scored or not teacher_scored[0]:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Remote teacher returned empty scores",
+                )
+            payload["teacher_result"] = teacher_scored[0]
 
-        distill_result = await distill_fn.remote.aio(payload)
+        distill_result = await _run_distill(payload)
         timing_ms["distill"] = int((time.perf_counter() - distill_start) * 1000)
 
         if request.orchestration.wake_after:
@@ -422,7 +473,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             "phase": phase,
             "lora_id": request.lora_id,
             "teacher_mode": request.training.teacher_mode,
-            "request": request.model_dump(),
+            "request": _redact_feedback_request(request),
             "vllm": {"slept": slept, "woke": woke},
             "timing_ms": timing_ms,
             "distill_result": distill_result,
@@ -502,7 +553,7 @@ async def export_lora_adapter(lora_id: str) -> Response:
             )
 
         zip_bytes = await asyncio.to_thread(export_lora_zip_bytes, lora_id)
-        safe_name = lora_id.strip("/").replace("/", "__")
+        safe_name = _safe_export_name(lora_id)
         return Response(
             content=zip_bytes,
             media_type="application/zip",
