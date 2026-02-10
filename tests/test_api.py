@@ -57,6 +57,7 @@ def test_distill_404_when_lora_missing(monkeypatch):
 def test_distill_success(monkeypatch):
     from claas import api
 
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
     monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
     monkeypatch.setattr(
         api.modal.Function,
@@ -87,6 +88,7 @@ def test_distill_success(monkeypatch):
 def test_feedback_success_inplace_flow(monkeypatch):
     from claas import api
 
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
     calls = []
     captured = {}
     log_records = []
@@ -136,6 +138,7 @@ def test_feedback_success_inplace_flow(monkeypatch):
 def test_feedback_returns_500_and_logs_error(monkeypatch):
     from claas import api
 
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
     log_records = []
 
     def fake_from_name(_app, fn_name):
@@ -185,6 +188,7 @@ def test_export_404_when_missing(monkeypatch):
 def test_distill_returns_500_on_worker_failure(monkeypatch):
     from claas import api
 
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
     monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
     monkeypatch.setattr(
         api.modal.Function,
