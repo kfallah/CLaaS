@@ -52,12 +52,6 @@ class TrainingConfig(BaseModel):
         le=500,
         description="Number of top logprobs to request from teacher",
     )
-    rollout_logprobs: list[float] | None = Field(
-        default=None,
-        description="Log-probabilities from the inference server that generated the rollout. "
-        "Required for proper off-policy IS correction. If not provided, logprobs are computed "
-        "from the current model (which is incorrect for off-policy learning).",
-    )
 
 
 class SDPOLossInput(BaseModel):

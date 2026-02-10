@@ -273,9 +273,10 @@ class DistillWorker:
 
         # Old logprobs for importance sampling ratio
         # These should come from the inference server that generated the rollout
-        if config.rollout_logprobs is not None:
+        rollout_logprobs = request.get("rollout_logprobs")
+        if rollout_logprobs is not None:
             old_student_logprobs = torch.tensor(
-                config.rollout_logprobs,
+                rollout_logprobs,
                 dtype=torch.float32,
                 device=self.device,
             ).unsqueeze(0)  # Add batch dimension

@@ -70,6 +70,12 @@ class DistillRequest(BaseModel):
         min_length=1,
         description="Feedback about response quality",
     )
+    rollout_logprobs: list[float] | None = Field(
+        default=None,
+        description="Log-probabilities from the inference server that generated the rollout. "
+        "Required for proper off-policy IS correction. If not provided, logprobs are computed "
+        "from the current model (which is incorrect for off-policy learning).",
+    )
     training: TrainingConfig = Field(
         default_factory=TrainingConfig,
         description="Training configuration",
