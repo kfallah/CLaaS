@@ -96,6 +96,7 @@ def cmd_distill(args: argparse.Namespace) -> int:
     with modal.enable_output():
         if args.teacher_mode == "remote":
             teacher = TeacherService()
+            teacher.wake_up.remote()
             teacher_scored = teacher.score_tokens.remote(
                 [args.prompt],
                 [args.response],
