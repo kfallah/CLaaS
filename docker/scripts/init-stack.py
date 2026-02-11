@@ -52,8 +52,10 @@ def create_lora() -> None:
 
     if alias_key in aliases:
         target = aliases[alias_key]
-        adapter_cfg = Path(LORA_ROOT) / target / "adapter_config.json"
-        if adapter_cfg.exists():
+        adapter_dir = Path(LORA_ROOT) / target
+        has_config = (adapter_dir / "adapter_config.json").exists()
+        has_weights = (adapter_dir / "adapter_model.safetensors").exists()
+        if has_config and has_weights:
             print(f"LoRA alias '{alias_key}' already exists → {target}, skipping creation.")
             return
 

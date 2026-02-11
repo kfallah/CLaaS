@@ -308,7 +308,11 @@ def create_initial_lora(
     lora_alpha: int = 32,
     target_modules: list[str] | None = None,
 ) -> str:
-    """Create a new LoRA adapter with initial configuration.
+    """Create a new LoRA adapter with initial configuration and weights.
+
+    Downloads the base model config (not weights) to determine layer dimensions,
+    then creates properly-shaped zero-initialized LoRA weight tensors. The resulting
+    adapter can be loaded directly by vLLM without requiring a full model load.
 
     Args:
         lora_id: LoRA identifier
@@ -320,6 +324,10 @@ def create_initial_lora(
     Returns:
         The lora_id of the created adapter
     """
+    import torch
+    from safetensors.torch import save_file
+    from transformers import AutoConfig
+
     if target_modules is None:
         target_modules = [
             "q_proj", "k_proj", "v_proj", "o_proj",
@@ -340,13 +348,44 @@ def create_initial_lora(
         "task_type": "CAUSAL_LM",
     }
 
-    # Create temp directory with config
+    # Resolve layer dimensions from the base model config (no weights downloaded).
+    model_config = AutoConfig.from_pretrained(base_model_name, trust_remote_code=True)
+    hidden_size = model_config.hidden_size
+    intermediate_size = getattr(model_config, "intermediate_size", hidden_size * 4)
+    num_heads = model_config.num_attention_heads
+    head_dim = hidden_size // num_heads
+    num_kv_heads = getattr(model_config, "num_key_value_heads", num_heads)
+    num_layers = model_config.num_hidden_layers
+
+    dim_map = {
+        "q_proj": (num_heads * head_dim, hidden_size),
+        "k_proj": (num_kv_heads * head_dim, hidden_size),
+        "v_proj": (num_kv_heads * head_dim, hidden_size),
+        "o_proj": (hidden_size, num_heads * head_dim),
+        "gate_proj": (intermediate_size, hidden_size),
+        "up_proj": (intermediate_size, hidden_size),
+        "down_proj": (hidden_size, intermediate_size),
+    }
+
+    # Build zero-initialised LoRA A/B tensors for every target module in every layer.
+    tensors: dict[str, torch.Tensor] = {}
+    for layer_idx in range(num_layers):
+        for mod_name in target_modules:
+            out_dim, in_dim = dim_map[mod_name]
+            prefix = f"base_model.model.model.layers.{layer_idx}.self_attn.{mod_name}"
+            if mod_name in ("gate_proj", "up_proj", "down_proj"):
+                prefix = f"base_model.model.model.layers.{layer_idx}.mlp.{mod_name}"
+            tensors[f"{prefix}.lora_A.weight"] = torch.zeros(lora_r, in_dim)
+            tensors[f"{prefix}.lora_B.weight"] = torch.zeros(out_dim, lora_r)
+
     with tempfile.TemporaryDirectory(prefix="lora_init_") as temp_dir:
         config_path = os.path.join(temp_dir, "adapter_config.json")
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
-        # Save to storage
+        weights_path = os.path.join(temp_dir, "adapter_model.safetensors")
+        save_file(tensors, weights_path)
+
         full_lora_id = save_lora(temp_dir, lora_id, version_suffix="init")
 
     return full_lora_id
