@@ -1,40 +1,21 @@
 # CLaaS: Continual Learning as a Service
 
-SDPO-style continual distillation API for per-request model adaptation.
+SDPO-style continual distillation API for per-request model adaptation. Runs locally on a single GPU with optional Modal remote backend.
 
 ## Overview
 
-CLaaS provides a serverless API for continual learning via Self-Distillation Policy Optimization (SDPO). Each API call:
+CLaaS turns every user interaction into an online learning step via Self-Distillation Policy Optimization (SDPO). Each call:
 
-1. Loads a user's LoRA adapter from Modal Volume
-2. Runs the student model (with LoRA) on the provided prompt/response
-3. Gets dense teacher logprobs from a 30B teacher model via vLLM
-4. Computes SDPO loss (Generalized JSD + KL regularization to base policy)
+1. Loads a user's LoRA adapter from local storage (or Modal Volume)
+2. Runs the student model forward pass (Qwen3-8B + LoRA)
+3. Gets teacher logprobs:
+   - `self` (default): frozen base model conditioned on feedback
+   - `remote`: 30B teacher model via vLLM on Modal
+4. Computes SDPO loss (Generalized JSD + KL regularization)
 5. Updates the LoRA parameters
-6. Saves the updated adapter back to Modal Volume
+6. Saves the adapter back to storage
 
 This enables real-time model personalization where the model learns from each interaction.
-
-## Architecture
-
-```text
-┌──────────────────────────────────────────────────────────────────┐
-│  Modal App: claas-distill                                        │
-│                                                                  │
-│  ┌─────────────────────────────┐  ┌────────────────────────────┐│
-│  │  DistillWorker (L40S)       │  │  TeacherService (H100)     ││
-│  │  GPU memory snapshot        │  │  GPU memory snapshot        ││
-│  │                             │  │                            ││
-│  │  • Qwen3-Coder-Next         │  │  • vLLM                    ││
-│  │  • LoRA training            │◄─►│  • Qwen3-Coder-30B-A3B    ││
-│  │  • SDPO loss                │  │  • prompt_logprobs=100     ││
-│  │  Cold start: ~2s            │  │  Cold start: ~3-5s         ││
-│  └─────────────────────────────┘  └────────────────────────────┘│
-│                                                                  │
-│  Modal Volume: claas-loras (LoRA storage)                        │
-│  FastAPI endpoint: /v1/distill                                   │
-└──────────────────────────────────────────────────────────────────┘
-```
 
 ## Installation
 
@@ -42,200 +23,114 @@ This enables real-time model personalization where the model learns from each in
 pip install -e .
 ```
 
-## Prerequisites
-
-1. **Modal account**: Sign up at [modal.com](https://modal.com)
-2. **Modal CLI**: `pip install modal && modal token new`
-
-That's it! No AWS/S3 credentials needed - LoRAs are stored in Modal Volumes.
+**Prerequisites:** Python 3.11+, a CUDA GPU, and `vllm` for local serving. For remote execution, also install `modal` and run `modal token new`.
 
 ## Quick Start
 
-### 1. Deploy the service
-
 ```bash
-modal deploy claas.api
-```
+# 1. Start vLLM with LoRA support
+vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 \
+  --enable-lora --lora-modules my-lora=/loras/user/my-lora-init
 
-### 2. Initialize a LoRA adapter
+# 2. Start the CLaaS API
+uvicorn claas.api:web_app --host 0.0.0.0 --port 8080
 
-```bash
-curl -X POST https://your-app--claas-distill-fastapi-app.modal.run/v1/lora/init \
+# 3. Initialize a LoRA adapter
+curl -X POST http://localhost:8080/v1/lora/init \
   -H "Content-Type: application/json" \
-  -d '{"lora_id": "user123/coder-v1"}'
-```
+  -d '{"lora_id": "user/my-lora"}'
 
-### 3. Call the distillation API
-
-```bash
-curl -X POST https://your-app--claas-distill-fastapi-app.modal.run/v1/distill \
+# 4. Send a feedback update
+curl -X POST http://localhost:8080/v1/feedback \
   -H "Content-Type: application/json" \
   -d '{
-    "lora_id": "user123/coder-v1-init",
+    "lora_id": "user/my-lora-init",
     "prompt": "Write a function to calculate factorial",
-    "response": "def factorial(n):\n    if n <= 1:\n        return 1\n    return n * factorial(n-1)",
-    "feedback": "Good recursive solution",
-    "rollout_logprobs": [-0.5, -1.2, -0.8, -0.3],
-    "training": {
-      "learning_rate": 1e-4,
-      "alpha": 0.5
-    }
+    "response": "def factorial(n): ...",
+    "feedback": "Good recursive solution"
   }'
 ```
 
-## API Reference
+For the full local stack (vLLM + gateway + auto-restart), see [Local vLLM + OpenClaw](#local-vllm--openclaw).
 
-### POST /v1/distill
+## POST /v1/feedback
 
-Run a single SDPO distillation step.
+The primary endpoint. Runs one online update transaction for a served adapter.
+
+**Orchestration lifecycle:**
+
+1. Acquire per-LoRA lock (prevents concurrent updates)
+2. `POST /sleep?level=1` to local vLLM (frees GPU memory)
+3. Distill one SDPO step in-place via CLaaS worker
+4. `POST /wake_up` to local vLLM (reloads adapter)
+5. Write structured JSON log to `FEEDBACK_LOG_DIR`
 
 **Request body:**
+
 ```json
 {
-  "lora_id": "user123/coder-v1",
+  "lora_id": "user/my-lora-init",
   "prompt": "User prompt text",
   "response": "Model response to learn from",
-  "feedback": "Feedback about response quality (required)",
-  "rollout_logprobs": [-0.5, -1.2, -0.8, ...],
-  "training": {
-    "learning_rate": 1e-4,
-    "alpha": 0.5,
-    "is_clip": 5.0,
-    "max_grad_norm": 1.0,
-    "kl_reg_weight": 0.1,
-    "teacher_top_k": 100
-  }
+  "feedback": "Feedback about response quality",
+  "rollout_logprobs": [-0.5, -1.2, -0.8],
+  "training": { "learning_rate": 1e-4, "alpha": 0.5, "teacher_mode": "self" },
+  "orchestration": { "sleep_before": true, "wake_after": true, "sleep_level": 1 }
 }
 ```
 
-**Top-level parameters:**
+`rollout_logprobs` is optional; when provided, enables proper off-policy IS correction. `training` and `orchestration` have sensible defaults.
 
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `lora_id` | Yes | LoRA identifier (e.g., "user123/coder-v1") |
-| `prompt` | Yes | User prompt that generated the response |
-| `response` | Yes | Model response to learn from |
-| `feedback` | Yes | Feedback about response quality |
-| `rollout_logprobs` | No | Logprobs from inference server for off-policy IS correction |
+**Response:** returns `status`, `request_id`, updated `lora_id`, `distill_result` (loss metrics), `vllm` state, and `timing_ms`. See `/docs` for full schema.
 
-**Training parameters** (nested under `training`):
+## Other Endpoints
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `learning_rate` | 1e-4 | AdamW learning rate |
-| `alpha` | 0.5 | GJS interpolation (0.5 = symmetric JSD, 1.0 = reverse KL) |
-| `is_clip` | 5.0 | Importance sampling ratio clip (exp space) |
-| `max_grad_norm` | 1.0 | Gradient clipping |
-| `kl_reg_weight` | 0.1 | Weight for KL regularization to base policy |
-| `teacher_top_k` | 100 | Top-K logprobs from teacher |
+- **POST /v1/distill** — Run a single SDPO distillation step (low-level; returns versioned `lora_id` and training metrics).
+- **POST /v1/lora/init** — Initialize a new LoRA adapter (`lora_id`, optional `base_model`, `lora_r`, `lora_alpha`, `target_modules`).
+- **GET /v1/lora** — List all LoRA adapters and aliases (optional `prefix` query param).
+- **GET /v1/lora/export** — Download a LoRA as a zip archive (`?lora_id=...`).
+- **GET /v1/health** — Health check for the API and backing services.
 
-**Response:**
-```json
-{
-  "lora_id": "user123/coder-v1-20250209-123456",
-  "metadata": {
-    "total_loss": 0.234,
-    "distill_loss": 0.156,
-    "kl_reg": 0.078,
-    "mean_is_ratio": 1.001,
-    "clip_fraction": 0.05,
-    "grad_norm": 0.89,
-    "tokens_processed": 128
-  }
-}
-```
+## Execution Modes
 
-### POST /v1/lora/init
+Set `CLAAS_DISTILL_EXECUTION_MODE` to control where the distill worker runs:
 
-Initialize a new LoRA adapter.
-
-**Request body:**
-```json
-{
-  "lora_id": "user123/coder-v1",
-  "base_model": "Qwen/Qwen3-Coder-Next",
-  "lora_r": 16,
-  "lora_alpha": 32,
-  "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-}
-```
-
-### GET /v1/lora
-
-List all LoRA adapters (with optional `prefix` query parameter).
-
-### GET /v1/health
-
-Health check for all services.
+- **`local`** (default) — Runs on the same machine. Requires a GPU with enough VRAM for Qwen3-8B + LoRA training.
+- **`modal_rpc`** — Runs the distill step remotely on Modal (L40S). The API process itself can be CPU-only.
 
 ## Storage
 
-LoRA adapters are stored in **Modal Volumes** - no external storage needed:
+- **Local** (default): adapters are stored under `CLAAS_LORA_ROOT` (default `/loras`). Path format: `/loras/{user}/{model}`.
+- **Remote**: Modal Volume `claas-loras`, same path layout. Used automatically when `CLAAS_DISTILL_EXECUTION_MODE=modal_rpc`.
 
-- Volume name: `claas-loras`
-- Path format: `/loras/{user_id}/{lora_name}`
-- Automatic versioning with timestamps
+`/v1/feedback` updates adapters in-place (same `lora_id`). `/v1/distill` creates versioned checkpoints with timestamps.
 
-Benefits:
-- No AWS credentials to manage
-- Integrated with Modal infrastructure
-- ~100MB/s read/write throughput
-- Persists across container restarts
+## Local vLLM + OpenClaw
 
-## Off-Policy Learning
+See [`scripts/openclaw-local/README.md`](scripts/openclaw-local/README.md) for the full supervised local stack (vLLM + gateway + auto-restart, multi-LoRA, Telegram integration).
 
-For proper off-policy learning (when the response was generated by a different model checkpoint), pass `rollout_logprobs` at the top level with the log-probabilities from the inference server that generated the rollout:
+## Modal Deployment
 
-```json
-{
-  "lora_id": "user123/coder-v1",
-  "prompt": "...",
-  "response": "...",
-  "feedback": "...",
-  "rollout_logprobs": [-0.5, -1.2, -0.8, ...]
-}
+To deploy the service on Modal instead of running locally:
+
+```bash
+# Set HF_TOKEN if using gated models (e.g. Qwen/Qwen3-Coder-Next-8B)
+export HF_TOKEN=...
+export CLAAS_BASE_MODEL_ID=Qwen/Qwen3-8B
+
+modal deploy -m claas.deploy
 ```
 
-If not provided, logprobs are computed from the current model with a warning logged. This is incorrect for off-policy learning but acceptable for on-policy scenarios.
-
-## Configuration
-
-### LoRA Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `lora_r` | 16 | LoRA rank |
-| `lora_alpha` | 32 | LoRA scaling factor |
-| `target_modules` | attention + MLP | Modules to apply LoRA to |
+The deployed app exposes the same API at `https://your-app--claas-distill-fastapi-app.modal.run`. LoRAs are stored in the `claas-loras` Modal Volume.
 
 ## Development
 
-### Run locally
-
 ```bash
-modal serve claas.api
+uv sync --extra dev
+uv run ruff check claas/ tests/
+uv run ty check
+uv run pytest -q
 ```
-
-### Run tests
-
-```bash
-pytest tests/ -v
-```
-
-## Cold Start Performance
-
-| Worker | Without Snapshots | With GPU Snapshots |
-|--------|-------------------|-------------------|
-| Student (Qwen3-Coder-Next) | ~15-20s | ~2s |
-| Teacher (Qwen3-Coder-30B) | ~45-60s | ~3-5s |
-
-## Cost Estimate
-
-| Calls/day | Monthly cost | Note |
-|-----------|--------------|------|
-| 50 | ~$15 | Light use, personal |
-| 500 | ~$150 | CI pipeline |
-| 5000 | ~$1,500 | Production agent loop |
 
 ## References
 

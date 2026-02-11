@@ -32,8 +32,9 @@ from .storage import (
     load_lora,
     lora_volume,
     save_lora,
+    save_lora_inplace,
 )
-from .teacher import TeacherService, format_teacher_prompt, parse_teacher_result
+from .teacher import parse_teacher_result
 from .types import SDPOLossInput, TrainingConfig
 
 logger = logging.getLogger(__name__)
@@ -48,17 +49,24 @@ model_volume = modal.Volume.from_name("claas-models", create_if_missing=True)
 training_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "torch>=2.1.0",
-        "transformers>=4.40.0",
+        "torch==2.4.1",
+        "transformers>=4.40.0,<5.0.0",
         "peft>=0.10.0",
         "accelerate>=0.27.0",
         "bitsandbytes>=0.42.0",
-        "flash-attn>=2.5.0",
         "safetensors>=0.4.0",
+        "pydantic>=2.6.0",
+        "packaging>=24.0",
+    )
+    .pip_install(
+        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/"
+        "flash_attn-2.8.3%2Bcu12torch2.4cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
     )
     .env({
         "HF_HOME": "/models/hf_cache",
         "TRANSFORMERS_CACHE": "/models/hf_cache",
+        "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
+        "HUGGING_FACE_HUB_TOKEN": os.environ.get("HF_TOKEN", ""),
     })
 )
 
@@ -70,14 +78,21 @@ training_image = (
         "/models": model_volume,
         LORA_MOUNT_PATH: lora_volume,
     },
-    container_idle_timeout=300,
-    timeout=120,
+    scaledown_window=300,
+    timeout=600,
     enable_memory_snapshot=True,
 )
 class DistillWorker:
     """Training worker for SDPO continual distillation."""
 
-    base_model_id: str = "Qwen/Qwen3-Coder-Next"
+    base_model_id: str = os.environ.get(
+        "CLAAS_BASE_MODEL_ID",
+        "Qwen/Qwen3-8B",
+    )
+    attn_implementation: str = os.environ.get(
+        "CLAAS_ATTN_IMPLEMENTATION",
+        "flash_attention_2",
+    )
 
     @modal.enter(snap=True)
     def load_base_model(self):
@@ -109,7 +124,7 @@ class DistillWorker:
             torch_dtype=torch.bfloat16,
             device_map="cuda",
             trust_remote_code=True,
-            attn_implementation="flash_attention_2",
+            attn_implementation=self.attn_implementation,
             cache_dir="/models/hf_cache",
         )
 
@@ -178,6 +193,49 @@ class DistillWorker:
             model = get_peft_model(self.base_model, lora_config)
 
         return model
+
+    def _build_self_teacher_topk(
+        self,
+        prompt: str,
+        feedback: str,
+        response_ids,
+        top_k: int,
+    ):
+        """Build top-K teacher from base model conditioned on feedback.
+
+        The SDPO teacher is the base student model with the feedback
+        incorporated into its prompt.  A separate forward pass through
+        the frozen base model produces logits that reflect what the model
+        would generate *given* the feedback, creating a meaningful
+        distillation signal (non-zero log-ratio vs. the student).
+
+        Reference: https://arxiv.org/pdf/2601.20802, Section 3.
+        """
+        import torch
+
+        from .teacher import format_teacher_prompt
+
+        teacher_prompt = format_teacher_prompt(prompt, feedback)
+        teacher_prompt_ids = self.tokenizer.encode(
+            teacher_prompt,
+            add_special_tokens=True,
+            return_tensors="pt",
+        ).to(self.device)
+        teacher_full_ids = torch.cat([teacher_prompt_ids, response_ids], dim=-1)
+        teacher_resp_start = teacher_prompt_ids.shape[-1]
+        T_resp = response_ids.shape[-1]
+
+        with torch.no_grad():
+            teacher_output = self.base_model(input_ids=teacher_full_ids)
+            teacher_logits = teacher_output.logits[
+                :, teacher_resp_start - 1 : -1, :
+            ]  # (1, T_resp, V)
+            log_probs = self.F.log_softmax(teacher_logits, dim=-1)
+            vocab_size = log_probs.shape[-1]
+            k = min(max(1, top_k), vocab_size)
+            top_logprobs, top_indices = torch.topk(log_probs[0, :T_resp], k=k, dim=-1)
+
+        return top_logprobs, top_indices
 
     @modal.method()
     def distill(self, request: dict) -> dict:
@@ -298,26 +356,28 @@ class DistillWorker:
                     student_logits.detach(), dim=-1
                 ).gather(-1, response_ids[:, :T_resp].unsqueeze(-1)).squeeze(-1)
 
-        # 5. Get teacher logprobs from vLLM sidecar
-        teacher_prompt = format_teacher_prompt(
-            request["prompt"],
-            request["feedback"],
-        )
-
-        teacher_service = TeacherService()
-        teacher_result = teacher_service.score_tokens.remote(
-            prompts=[teacher_prompt],
-            completions=[request["response"]],
-            top_k=config.teacher_top_k,
-        )
-
-        if not teacher_result or not teacher_result[0]:
-            cleanup_local_lora(lora_local_path)
-            raise RuntimeError("Failed to get teacher logprobs")
-
-        teacher_logprobs, teacher_indices = parse_teacher_result(
-            teacher_result[0], self.device
-        )
+        # 5. Build/parse teacher logprobs
+        requested_teacher_mode = str(request.get("training", {}).get("teacher_mode", "self"))
+        teacher_result = request.get("teacher_result")
+        if requested_teacher_mode == "remote":
+            if not teacher_result:
+                raise ValueError("teacher_mode='remote' requires non-empty teacher_result")
+            teacher_logprobs, teacher_indices = parse_teacher_result(
+                teacher_result, str(self.device)
+            )
+            teacher_mode = "remote"
+        else:
+            # "self" teacher: base model conditioned on feedback.
+            # Forward pass through frozen base model with feedback in
+            # the prompt creates a distribution that reflects the feedback
+            # signal (SDPO paper, Section 3).
+            teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
+                request["prompt"],
+                request["feedback"],
+                response_ids,
+                config.teacher_top_k,
+            )
+            teacher_mode = "self"
 
         # Ensure dimensions match
         if teacher_logprobs.shape[0] != T_resp:
@@ -361,7 +421,10 @@ class DistillWorker:
         save_dir = tempfile.mkdtemp(prefix="lora_updated_")
         try:
             model.save_pretrained(save_dir)
-            new_lora_id = save_lora(save_dir, request["lora_id"])
+            if request.get("save_in_place", False):
+                new_lora_id = save_lora_inplace(save_dir, request["lora_id"])
+            else:
+                new_lora_id = save_lora(save_dir, request["lora_id"])
         finally:
             cleanup_local_lora(save_dir)
 
@@ -380,6 +443,7 @@ class DistillWorker:
                 "clip_fraction": loss_dict["clip_fraction"],
                 "grad_norm": grad_norm.item() if hasattr(grad_norm, "item") else grad_norm,
                 "tokens_processed": T_resp,
+                "teacher_mode": teacher_mode,
             },
         }
 

@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from claas.sdpo_loss import _lookup_token_in_topk, compute_sdpo_loss
+from claas.types import SDPOLossInput
 
 
 @pytest.fixture
@@ -103,17 +104,23 @@ class TestLookupTokenInTopk:
 class TestComputeSdpoLoss:
     """Tests for compute_sdpo_loss."""
 
+    @staticmethod
+    def _run_loss(sample_data: dict, **overrides):
+        payload = {
+            "student_logits": sample_data["student_logits"],
+            "teacher_logprobs": sample_data["teacher_logprobs"],
+            "teacher_indices": sample_data["teacher_indices"],
+            "base_logprobs": sample_data["base_logprobs"],
+            "response_mask": sample_data["response_mask"],
+            "old_student_logprobs": sample_data["old_student_logprobs"],
+            "response_ids": sample_data["response_ids"],
+        }
+        payload.update(overrides)
+        return compute_sdpo_loss(SDPOLossInput(**payload))
+
     def test_returns_expected_keys(self, sample_data):
         """Loss dict contains all expected keys."""
-        result = compute_sdpo_loss(
-            student_logits=sample_data["student_logits"],
-            teacher_logprobs=sample_data["teacher_logprobs"],
-            teacher_indices=sample_data["teacher_indices"],
-            base_logprobs=sample_data["base_logprobs"],
-            response_mask=sample_data["response_mask"],
-            old_student_logprobs=sample_data["old_student_logprobs"],
-            response_ids=sample_data["response_ids"],
-        )
+        result = self._run_loss(sample_data)
 
         expected_keys = {
             "loss",
@@ -126,15 +133,7 @@ class TestComputeSdpoLoss:
 
     def test_loss_is_differentiable(self, sample_data):
         """Loss should have gradient through student logits."""
-        result = compute_sdpo_loss(
-            student_logits=sample_data["student_logits"],
-            teacher_logprobs=sample_data["teacher_logprobs"],
-            teacher_indices=sample_data["teacher_indices"],
-            base_logprobs=sample_data["base_logprobs"],
-            response_mask=sample_data["response_mask"],
-            old_student_logprobs=sample_data["old_student_logprobs"],
-            response_ids=sample_data["response_ids"],
-        )
+        result = self._run_loss(sample_data)
 
         result["loss"].backward()
 
@@ -148,14 +147,9 @@ class TestComputeSdpoLoss:
             # Need fresh logits for each run
             logits = torch.randn_like(sample_data["student_logits"], requires_grad=True)
 
-            result = compute_sdpo_loss(
+            result = self._run_loss(
+                sample_data,
                 student_logits=logits,
-                teacher_logprobs=sample_data["teacher_logprobs"],
-                teacher_indices=sample_data["teacher_indices"],
-                base_logprobs=sample_data["base_logprobs"],
-                response_mask=sample_data["response_mask"],
-                old_student_logprobs=sample_data["old_student_logprobs"],
-                response_ids=sample_data["response_ids"],
                 alpha=alpha,
             )
             results.append(result["loss"].item())
@@ -170,14 +164,9 @@ class TestComputeSdpoLoss:
             # Need fresh logits for each run
             logits = torch.randn_like(sample_data["student_logits"], requires_grad=True)
 
-            result = compute_sdpo_loss(
+            result = self._run_loss(
+                sample_data,
                 student_logits=logits,
-                teacher_logprobs=sample_data["teacher_logprobs"],
-                teacher_indices=sample_data["teacher_indices"],
-                base_logprobs=sample_data["base_logprobs"],
-                response_mask=sample_data["response_mask"],
-                old_student_logprobs=sample_data["old_student_logprobs"],
-                response_ids=sample_data["response_ids"],
                 kl_reg_weight=weight,
             )
             results.append(result["loss"].item())
@@ -187,15 +176,7 @@ class TestComputeSdpoLoss:
 
     def test_clip_fraction_in_bounds(self, sample_data):
         """Clip fraction should be between 0 and 1."""
-        result = compute_sdpo_loss(
-            student_logits=sample_data["student_logits"],
-            teacher_logprobs=sample_data["teacher_logprobs"],
-            teacher_indices=sample_data["teacher_indices"],
-            base_logprobs=sample_data["base_logprobs"],
-            response_mask=sample_data["response_mask"],
-            old_student_logprobs=sample_data["old_student_logprobs"],
-            response_ids=sample_data["response_ids"],
-        )
+        result = self._run_loss(sample_data)
 
         assert 0.0 <= result["clip_fraction"] <= 1.0
 
@@ -208,14 +189,9 @@ class TestComputeSdpoLoss:
                 -1, sample_data["response_ids"].unsqueeze(-1)
             ).squeeze(-1)
 
-        result = compute_sdpo_loss(
-            student_logits=sample_data["student_logits"],
-            teacher_logprobs=sample_data["teacher_logprobs"],
-            teacher_indices=sample_data["teacher_indices"],
-            base_logprobs=sample_data["base_logprobs"],
-            response_mask=sample_data["response_mask"],
+        result = self._run_loss(
+            sample_data,
             old_student_logprobs=old_logprobs,
-            response_ids=sample_data["response_ids"],
         )
 
         # Mean IS ratio should be very close to 1 for on-policy
@@ -232,25 +208,15 @@ class TestComputeSdpoLoss:
             # Old logprobs very different from current
             off_policy_old = sample_data["old_student_logprobs"] - 3.0
 
-        result_high = compute_sdpo_loss(
-            student_logits=sample_data["student_logits"],
-            teacher_logprobs=sample_data["teacher_logprobs"],
-            teacher_indices=sample_data["teacher_indices"],
-            base_logprobs=sample_data["base_logprobs"],
-            response_mask=sample_data["response_mask"],
+        result_high = self._run_loss(
+            sample_data,
             old_student_logprobs=off_policy_old,
-            response_ids=sample_data["response_ids"],
             is_clip=10.0,
         )
 
-        result_low = compute_sdpo_loss(
-            student_logits=sample_data["student_logits"],
-            teacher_logprobs=sample_data["teacher_logprobs"],
-            teacher_indices=sample_data["teacher_indices"],
-            base_logprobs=sample_data["base_logprobs"],
-            response_mask=sample_data["response_mask"],
+        result_low = self._run_loss(
+            sample_data,
             old_student_logprobs=off_policy_old,
-            response_ids=sample_data["response_ids"],
             is_clip=2.0,
         )
 
@@ -265,24 +231,11 @@ class TestComputeSdpoLoss:
         partial_mask = torch.ones(B, T, device=device)
         partial_mask[:, -2:] = 0
 
-        result_full = compute_sdpo_loss(
-            student_logits=sample_data["student_logits"],
-            teacher_logprobs=sample_data["teacher_logprobs"],
-            teacher_indices=sample_data["teacher_indices"],
-            base_logprobs=sample_data["base_logprobs"],
-            response_mask=sample_data["response_mask"],
-            old_student_logprobs=sample_data["old_student_logprobs"],
-            response_ids=sample_data["response_ids"],
-        )
+        result_full = self._run_loss(sample_data)
 
-        result_partial = compute_sdpo_loss(
-            student_logits=sample_data["student_logits"],
-            teacher_logprobs=sample_data["teacher_logprobs"],
-            teacher_indices=sample_data["teacher_indices"],
-            base_logprobs=sample_data["base_logprobs"],
+        result_partial = self._run_loss(
+            sample_data,
             response_mask=partial_mask,
-            old_student_logprobs=sample_data["old_student_logprobs"],
-            response_ids=sample_data["response_ids"],
         )
 
         # Losses should differ when mask is different
@@ -290,16 +243,7 @@ class TestComputeSdpoLoss:
 
     def test_reverse_kl_mode(self, sample_data):
         """alpha=1.0 should use reverse KL mode."""
-        result = compute_sdpo_loss(
-            student_logits=sample_data["student_logits"],
-            teacher_logprobs=sample_data["teacher_logprobs"],
-            teacher_indices=sample_data["teacher_indices"],
-            base_logprobs=sample_data["base_logprobs"],
-            response_mask=sample_data["response_mask"],
-            old_student_logprobs=sample_data["old_student_logprobs"],
-            response_ids=sample_data["response_ids"],
-            alpha=1.0,
-        )
+        result = self._run_loss(sample_data, alpha=1.0)
 
         # Should still produce valid loss
         assert not torch.isnan(result["loss"])

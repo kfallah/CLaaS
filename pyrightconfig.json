@@ -1,9 +1,0 @@
-{
-  "include": ["claas", "tests"],
-  "exclude": ["**/__pycache__"],
-  "reportMissingImports": "warning",
-  "reportMissingTypeStubs": false,
-  "reportAttributeAccessIssue": "warning",
-  "pythonVersion": "3.10",
-  "typeCheckingMode": "basic"
-}

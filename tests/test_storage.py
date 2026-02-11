@@ -157,6 +157,38 @@ class TestSaveLora:
         assert result.startswith("user/model-")
         assert len(result) > len("user/model-")
 
+    def test_inplace_overwrites_fixed_path(self, tmp_path, monkeypatch):
+        """In-place save keeps a stable lora_id and replaces adapter files."""
+        from claas import storage
+
+        class MockVolume:
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(storage, "lora_volume", MockVolume())
+
+        volume_path = tmp_path / "volume"
+        volume_path.mkdir()
+        monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(volume_path))
+
+        initial = tmp_path / "initial"
+        initial.mkdir()
+        (initial / "adapter_config.json").write_text('{"r": 16}')
+        (initial / "weights.txt").write_text("old")
+        storage.save_lora_inplace(str(initial), "user/model")
+
+        updated = tmp_path / "updated"
+        updated.mkdir()
+        (updated / "adapter_config.json").write_text('{"r": 16}')
+        (updated / "weights.txt").write_text("new")
+        result = storage.save_lora_inplace(str(updated), "user/model")
+
+        assert result == "user/model"
+        fixed_path = volume_path / "user" / "model"
+        assert fixed_path.exists()
+        assert (fixed_path / "weights.txt").read_text() == "new"
+        assert not (volume_path / "user" / "model.bak").exists()
+
 
 class TestCreateInitialLora:
     """Tests for create_initial_lora."""
@@ -265,6 +297,73 @@ class TestCleanupLocalLora:
         # Should not raise
         cleanup_local_lora(str(tmp_path / "nonexistent"))
 
+
+class TestLoraAliases:
+    """Tests for latest alias behavior."""
+
+    def test_save_lora_creates_latest_alias(self, tmp_path, monkeypatch):
+        """Saving a LoRA should create/update a latest alias."""
+        from claas import storage
+
+        class MockVolume:
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(storage, "lora_volume", MockVolume())
+        monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
+
+        local_dir = tmp_path / "local"
+        local_dir.mkdir()
+        (local_dir / "adapter_config.json").write_text("{}")
+
+        saved_id = storage.save_lora(str(local_dir), "user/model", version_suffix="v1")
+        assert saved_id == "user/model-v1"
+
+        aliases = storage._read_aliases()
+        assert aliases["user/model-latest"] == "user/model-v1"
+
+    def test_alias_resolves_for_exists_and_export(self, tmp_path, monkeypatch):
+        """Alias IDs should resolve for existence and export operations."""
+        from claas import storage
+
+        class MockVolume:
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(storage, "lora_volume", MockVolume())
+        monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
+
+        lora_dir = tmp_path / "user" / "model-v2"
+        lora_dir.mkdir(parents=True)
+        (lora_dir / "adapter_config.json").write_text("{}")
+
+        storage._write_aliases({"user/model-latest": "user/model-v2"})
+
+        assert storage.lora_exists("user/model-latest") is True
+        exported = storage.export_lora_zip_bytes("user/model-latest")
+        assert isinstance(exported, bytes)
+        assert len(exported) > 0
+
+    def test_delete_lora_alias_only_removes_mapping(self, tmp_path, monkeypatch):
+        """Deleting an alias should not delete target LoRA files."""
+        from claas import storage
+
+        class MockVolume:
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(storage, "lora_volume", MockVolume())
+        monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
+
+        lora_dir = tmp_path / "user" / "model-v3"
+        lora_dir.mkdir(parents=True)
+        (lora_dir / "adapter_config.json").write_text("{}")
+
+        storage._write_aliases({"user/model-latest": "user/model-v3"})
+
+        assert storage.delete_lora("user/model-latest") is True
+        assert (lora_dir / "adapter_config.json").exists()
+        assert "user/model-latest" not in storage._read_aliases()
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

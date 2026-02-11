@@ -26,16 +26,48 @@ Example usage:
 from __future__ import annotations
 
 import asyncio
+import gc
+import json
+import logging
+import os
+import time
+import uuid
+from pathlib import Path
 from typing import Any
 
+import httpx
 import modal
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi.responses import Response
 
-from .storage import LORA_MOUNT_PATH, create_initial_lora, list_loras, lora_exists, lora_volume
-from .types import TrainingConfig
-from .worker import DistillWorker
-from .worker import app as modal_app
+from .storage import (
+    LORA_MOUNT_PATH,
+    create_initial_lora,
+    export_lora_zip_bytes,
+    list_loras,
+    lora_exists,
+    lora_volume,
+    resolve_lora_id,
+)
+from .types import (
+    DistillRequest,
+    DistillResponse,
+    FeedbackLogRecord,
+    FeedbackLogVllmState,
+    FeedbackRequest,
+    FeedbackResponse,
+    FeedbackTimingMs,
+    HealthResponse,
+    LoraInitRequest,
+    LoraInitResponse,
+    LoraListResponse,
+    ServiceHealth,
+)
+
+logger = logging.getLogger(__name__)
+
+# Modal app for API surface; worker/teacher are resolved by name at runtime.
+app = modal.App("claas-distill")
 
 # FastAPI app
 web_app = FastAPI(
@@ -44,110 +76,119 @@ web_app = FastAPI(
     version="0.1.0",
 )
 
+VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
+FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
+FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
+# Default "local" assumes GPU deps (torch, etc.) are available on this machine.
+# Set to "modal_rpc" for Modal deployments where the API image is CPU-only.
+DISTILL_EXECUTION_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local").strip().lower()
 
-# Request/Response Models
-
-
-class DistillRequest(BaseModel):
-    """Request for a distillation step."""
-
-    lora_id: str = Field(
-        ...,
-        description="LoRA identifier (e.g., 'user123/coder-v1')",
-    )
-    prompt: str = Field(
-        ...,
-        min_length=1,
-        description="User prompt that generated the response",
-    )
-    response: str = Field(
-        ...,
-        min_length=1,
-        description="Student's response to learn from",
-    )
-    feedback: str = Field(
-        ...,
-        min_length=1,
-        description="Feedback about response quality",
-    )
-    rollout_logprobs: list[float] | None = Field(
-        default=None,
-        description="Log-probabilities from the inference server that generated the rollout. "
-        "Required for proper off-policy IS correction. If not provided, logprobs are computed "
-        "from the current model (which is incorrect for off-policy learning).",
-    )
-    training: TrainingConfig = Field(
-        default_factory=TrainingConfig,
-        description="Training configuration",
-    )
+_feedback_locks: dict[str, asyncio.Lock] = {}
+_feedback_locks_guard = asyncio.Lock()
 
 
-class DistillResponse(BaseModel):
-    """Response from a distillation step."""
-
-    lora_id: str = Field(
-        ...,
-        description="Updated LoRA identifier",
-    )
-    metadata: dict[str, Any] = Field(
-        ...,
-        description="Training metrics and diagnostics",
-    )
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-class LoraInitRequest(BaseModel):
-    """Request to initialize a new LoRA adapter."""
-
-    lora_id: str = Field(
-        ...,
-        description="LoRA identifier (e.g., 'user123/coder-v1')",
-    )
-    base_model: str = Field(
-        default="Qwen/Qwen3-Coder-Next",
-        description="Base model the LoRA will be applied to",
-    )
-    lora_r: int = Field(
-        default=16,
-        ge=4,
-        le=128,
-        description="LoRA rank",
-    )
-    lora_alpha: int = Field(
-        default=32,
-        ge=8,
-        le=256,
-        description="LoRA alpha scaling factor",
-    )
-    target_modules: list[str] | None = Field(
-        default=None,
-        description="Modules to apply LoRA to (defaults to attention + MLP)",
-    )
+FEEDBACK_WAKE_ON_FAILURE = _env_flag("FEEDBACK_WAKE_ON_FAILURE", True)
 
 
-class LoraInitResponse(BaseModel):
-    """Response from LoRA initialization."""
+def _format_teacher_prompt(
+    user_prompt: str,
+    feedback: str | None = None,
+    system_prompt: str | None = None,
+) -> str:
+    """Format prompt for teacher scoring without importing training deps."""
+    if system_prompt is None:
+        system_prompt = (
+            "You are an expert coding assistant. Provide high-quality, "
+            "correct, and well-explained code solutions."
+        )
 
-    lora_id: str = Field(
-        ...,
-        description="LoRA identifier of the initialized adapter",
-    )
+    parts = [f"<|im_start|>system\n{system_prompt}<|im_end|>"]
+    if feedback:
+        parts.append(
+            f"<|im_start|>user\n{user_prompt}\n\n"
+            f"[Feedback on previous attempt: {feedback}]<|im_end|>"
+        )
+    else:
+        parts.append(f"<|im_start|>user\n{user_prompt}<|im_end|>")
+    parts.append("<|im_start|>assistant\n")
+    return "".join(parts)
 
 
-class LoraListResponse(BaseModel):
-    """Response listing all LoRA adapters."""
 
-    loras: list[str] = Field(
-        ...,
-        description="List of LoRA identifiers",
-    )
+async def _get_feedback_lock(lora_id: str) -> asyncio.Lock:
+    """Return a per-LoRA lock used to serialize feedback updates."""
+    key = lora_id.strip("/")
+    async with _feedback_locks_guard:
+        if key not in _feedback_locks:
+            _feedback_locks[key] = asyncio.Lock()
+        return _feedback_locks[key]
 
 
-class HealthResponse(BaseModel):
-    """Health check response."""
+async def _vllm_post(path: str, *, params: dict[str, Any] | None = None, timeout_s: float = 30.0) -> None:
+    """Call a vLLM control endpoint and raise on non-success."""
+    async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
+        resp = await client.post(path, params=params)
+    resp.raise_for_status()
 
-    status: str
-    worker: dict[str, Any] | None = None
-    teacher: dict[str, Any] | None = None
+
+def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
+    """Persist a feedback lifecycle record to disk and return its path."""
+    if isinstance(record, FeedbackLogRecord):
+        payload = record.model_dump(mode="json")
+        request_id = record.request_id
+    else:
+        payload = record
+        request_id = str(payload.get("request_id", ""))
+
+    log_root = Path(FEEDBACK_LOG_DIR)
+    log_root.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    request_id = request_id or uuid.uuid4().hex
+    path = log_root / f"{timestamp}-{request_id}.json"
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+    return str(path)
+
+
+
+def _safe_export_name(lora_id: str) -> str:
+    """Sanitize LoRA identifier for Content-Disposition filename."""
+    base = lora_id.strip("/").replace("/", "__")
+    safe = "".join(c for c in base if c.isalnum() or c in "-_.")
+    return safe or "lora_export"
+
+
+async def _run_distill(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute a distill request via configured execution backend."""
+    if DISTILL_EXECUTION_MODE == "local":
+        from .worker import DistillWorker
+
+        worker = DistillWorker()
+        try:
+            result = await asyncio.to_thread(worker.distill.local, payload)
+            return DistillResponse.model_validate(result).model_dump()
+        finally:
+            # Release worker refs so vLLM can reclaim VRAM on wake.
+            del worker
+            gc.collect()
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
+
+    distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
+    result = await distill_fn.remote.aio(payload)
+    return DistillResponse.model_validate(result).model_dump()
 
 
 # API Endpoints
@@ -158,12 +199,14 @@ async def distill(request: DistillRequest) -> DistillResponse:
     """Run a single SDPO distillation step.
 
     This endpoint:
-    1. Loads the user's LoRA from Modal Volume
+    1. Loads the user's LoRA from local storage (or Modal Volume in remote mode)
     2. Runs the student model forward pass
-    3. Gets teacher logprobs from the vLLM teacher service
+    3. Gets teacher logprobs from configured source
+       - self (default): base model conditioned on feedback
+       - remote: vLLM TeacherService
     4. Computes SDPO loss (JSD-based policy gradient)
     5. Updates LoRA parameters
-    6. Saves the updated LoRA back to Modal Volume
+    6. Saves the updated LoRA back to local storage (or Modal Volume in remote mode)
 
     Returns the new LoRA ID and training metrics.
     """
@@ -176,19 +219,173 @@ async def distill(request: DistillRequest) -> DistillResponse:
                 detail=f"LoRA not found: {request.lora_id}",
             )
 
-        # Call the Modal worker (use .remote.aio() in async context)
-        worker = DistillWorker()
-        result = await worker.distill.remote.aio(request.model_dump())
+        payload = request.model_dump()
+
+        # Remote teacher is optional; self-distillation is the default path.
+        if request.training.teacher_mode == "remote":
+            teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
+            teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback)
+            teacher_scored = await teacher_score_fn.remote.aio(
+                prompts=[teacher_prompt],
+                completions=[request.response],
+                top_k=request.training.teacher_top_k,
+            )
+            if not teacher_scored or not teacher_scored[0]:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Remote teacher returned empty scores",
+                )
+            payload["teacher_result"] = teacher_scored[0]
+
+        result = await _run_distill(payload)
 
         return DistillResponse(**result)
 
     except HTTPException:
         raise
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError) as e:
         raise HTTPException(
             status_code=500,
             detail=f"Distillation failed: {str(e)}",
         ) from e
+
+
+@web_app.post("/v1/feedback", response_model=FeedbackResponse)
+async def feedback(request: FeedbackRequest) -> FeedbackResponse:
+    """Run feedback orchestration: sleep vLLM, distill in-place, wake vLLM."""
+    request_id = uuid.uuid4().hex
+    lock_acquired = False
+    slept = False
+    woke = False
+    phase = "validate"
+    distill_result: DistillResponse | None = None
+    error_message: str | None = None
+    log_path = ""
+    timing_ms = FeedbackTimingMs()
+    started_total = time.perf_counter()
+
+    resolved_id = await asyncio.to_thread(resolve_lora_id, request.lora_id)
+    lock = await _get_feedback_lock(resolved_id)
+    try:
+        # Validate LoRA exists before attempting orchestration.
+        exists = await asyncio.to_thread(lora_exists, request.lora_id)
+        if not exists:
+            raise HTTPException(status_code=404, detail=f"LoRA not found: {request.lora_id}")
+
+        await asyncio.wait_for(lock.acquire(), timeout=FEEDBACK_LOCK_TIMEOUT_S)
+        lock_acquired = True
+
+        if request.orchestration.sleep_before:
+            phase = "sleep"
+            sleep_start = time.perf_counter()
+            await _vllm_post(
+                "/sleep",
+                params={"level": request.orchestration.sleep_level},
+            )
+            timing_ms.sleep = int((time.perf_counter() - sleep_start) * 1000)
+            slept = True
+
+        phase = "distill"
+        distill_start = time.perf_counter()
+        payload = request.model_dump()
+        payload["save_in_place"] = True
+
+        if request.training.teacher_mode == "remote":
+            teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
+            teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback)
+            teacher_scored = await teacher_score_fn.remote.aio(
+                prompts=[teacher_prompt],
+                completions=[request.response],
+                top_k=request.training.teacher_top_k,
+            )
+            if not teacher_scored or not teacher_scored[0]:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Remote teacher returned empty scores",
+                )
+            payload["teacher_result"] = teacher_scored[0]
+
+        distill_result = DistillResponse.model_validate(await _run_distill(payload))
+        timing_ms.distill = int((time.perf_counter() - distill_start) * 1000)
+
+        if request.orchestration.wake_after:
+            phase = "wake"
+            wake_start = time.perf_counter()
+            await _vllm_post("/wake_up")
+            timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
+            woke = True
+
+        timing_ms.total = int((time.perf_counter() - started_total) * 1000)
+    except asyncio.TimeoutError:
+        phase = "lock"
+        error_message = f"Timed out waiting for lock on LoRA '{request.lora_id}'"
+        raise HTTPException(status_code=409, detail=error_message) from None
+    except HTTPException as e:
+        error_message = str(e.detail)
+        if (
+            slept
+            and not woke
+            and request.orchestration.wake_after
+            and (request.orchestration.wake_on_failure or FEEDBACK_WAKE_ON_FAILURE)
+        ):
+            try:
+                await _vllm_post("/wake_up")
+                woke = True
+            except httpx.HTTPError as wake_err:
+                logger.warning("Failed to wake vLLM after HTTP error: %s", wake_err)
+        raise
+    except (ValueError, RuntimeError, OSError, httpx.HTTPError) as e:
+        error_message = str(e)
+        if (
+            slept
+            and request.orchestration.wake_after
+            and (request.orchestration.wake_on_failure or FEEDBACK_WAKE_ON_FAILURE)
+        ):
+            try:
+                await _vllm_post("/wake_up")
+                woke = True
+            except httpx.HTTPError as wake_err:
+                logger.warning("Failed to wake vLLM after error: %s", wake_err)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Feedback update failed in phase '{phase}': {error_message}",
+        ) from e
+    finally:
+        timing_ms.total = int((time.perf_counter() - started_total) * 1000)
+        if lock_acquired:
+            lock.release()
+
+        log_record = FeedbackLogRecord(
+            request_id=request_id,
+            timestamp_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            status="ok" if error_message is None else "error",
+            phase=phase,
+            lora_id=request.lora_id,
+            teacher_mode=request.training.teacher_mode,
+            request=request,
+            vllm=FeedbackLogVllmState(slept=slept, woke=woke),
+            timing_ms=timing_ms,
+            distill_result=distill_result,
+            error=error_message,
+        )
+        try:
+            log_path = await asyncio.to_thread(
+                _write_feedback_log,
+                log_record.model_dump(mode="json"),
+            )
+        except (OSError, TypeError, ValueError):
+            logger.warning("Failed to write feedback log for request %s", request_id, exc_info=True)
+            log_path = ""
+
+    return FeedbackResponse(
+        status="ok",
+        request_id=request_id,
+        lora_id=distill_result.lora_id if distill_result else request.lora_id,
+        distill_result=distill_result,
+        vllm=FeedbackLogVllmState(slept=slept, woke=woke),
+        feedback_log_path=log_path,
+        timing_ms=timing_ms,
+    )
 
 
 @web_app.post("/v1/lora/init", response_model=LoraInitResponse)
@@ -211,7 +408,7 @@ async def init_lora(request: LoraInitRequest) -> LoraInitResponse:
         )
         return LoraInitResponse(lora_id=lora_id)
 
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError) as e:
         raise HTTPException(
             status_code=500,
             detail=f"LoRA initialization failed: {str(e)}",
@@ -229,35 +426,66 @@ async def list_lora_adapters(prefix: str = "") -> LoraListResponse:
         # Run sync function in thread pool to avoid blocking
         loras = await asyncio.to_thread(list_loras, prefix)
         return LoraListResponse(loras=loras)
-    except Exception as e:
+    except (ValueError, OSError) as e:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to list LoRAs: {str(e)}",
         ) from e
 
 
+@web_app.get("/v1/lora/export")
+async def export_lora_adapter(lora_id: str) -> Response:
+    """Export a LoRA adapter as a zip archive for local inference servers."""
+    try:
+        exists = await asyncio.to_thread(lora_exists, lora_id)
+        if not exists:
+            raise HTTPException(
+                status_code=404,
+                detail=f"LoRA not found: {lora_id}",
+            )
+
+        zip_bytes = await asyncio.to_thread(export_lora_zip_bytes, lora_id)
+        safe_name = _safe_export_name(lora_id)
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_name}.zip"',
+            },
+        )
+    except HTTPException:
+        raise
+    except (ValueError, OSError) as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"LoRA export failed: {str(e)}",
+        ) from e
+
+
 @web_app.get("/v1/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
     """Check health of the API and backing services."""
-    result: dict[str, Any] = {"status": "healthy"}
+    status = "healthy"
+    worker: ServiceHealth | None = None
+    teacher: ServiceHealth | None = None
 
     try:
-        worker = DistillWorker()
-        result["worker"] = await worker.health_check.remote.aio()
-    except Exception as e:
-        result["worker"] = {"status": "unhealthy", "error": str(e)}
-        result["status"] = "degraded"
+        worker_health_fn = modal.Function.from_name("claas-distill", "DistillWorker.health_check")
+        data = await asyncio.wait_for(worker_health_fn.remote.aio(), timeout=15)
+        worker = ServiceHealth.model_validate(data)
+    except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
+        worker = ServiceHealth(status="unhealthy", error=str(e))
+        status = "degraded"
 
     try:
-        from .teacher import TeacherService
+        teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
+        data = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
+        teacher = ServiceHealth.model_validate(data)
+    except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
+        teacher = ServiceHealth(status="unhealthy", error=str(e))
+        status = "degraded"
 
-        teacher = TeacherService()
-        result["teacher"] = await teacher.health_check.remote.aio()
-    except Exception as e:
-        result["teacher"] = {"status": "unhealthy", "error": str(e)}
-        result["status"] = "degraded"
-
-    return HealthResponse(**result)
+    return HealthResponse(status=status, worker=worker, teacher=teacher)
 
 
 @web_app.get("/")
@@ -272,11 +500,12 @@ async def root():
 
 
 # Mount FastAPI to Modal
-@modal_app.function(
+@app.function(
     image=modal.Image.debian_slim(python_version="3.11").pip_install(
         "modal>=1.0.0",
         "fastapi>=0.110.0",
         "pydantic>=2.6.0",
+        "httpx>=0.27.0",
     ),
     volumes={LORA_MOUNT_PATH: lora_volume},
 )

@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LOG_DIR="${LOG_DIR:-$ROOT_DIR/.run-logs}"
+mkdir -p "$LOG_DIR"
+
+VLLM_LOG="${VLLM_LOG:-$HOME/.openclaw-vllm-8000-sleep.log}"
+VLLM_PID_FILE="${VLLM_PID_FILE:-$HOME/.openclaw-vllm-8000-sleep.pid}"
+GATEWAY_LOG="${GATEWAY_LOG:-$LOG_DIR/gateway.log}"
+GATEWAY_PID_FILE="${GATEWAY_PID_FILE:-$LOG_DIR/gateway.pid}"
+
+VLLM_START_SCRIPT="${VLLM_START_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/start_vllm_qwen3_8b.sh}"
+GATEWAY_START_SCRIPT="${GATEWAY_START_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/start_openclaw_gateway_local.sh}"
+CONFIGURE_SCRIPT="${CONFIGURE_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/configure_openclaw_local_models.py}"
+
+STACK_NAME="openclaw-local"
+RESTART_BACKOFF_SECONDS="${RESTART_BACKOFF_SECONDS:-3}"
+VLLM_HEALTH_URL="${VLLM_HEALTH_URL:-http://127.0.0.1:8000/health}"
+VLLM_WAIT_SECONDS="${VLLM_WAIT_SECONDS:-180}"
+
+MODEL_IDS="${MODEL_IDS:-qwen3-8b}"
+PRIMARY_MODEL="${PRIMARY_MODEL:-qwen3-8b}"
+
+cleanup_old_pid() {
+  local pid_file="$1"
+  if [[ -f "$pid_file" ]]; then
+    local pid
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$pid_file"
+    fi
+  fi
+}
+
+wait_for_health() {
+  local url="$1"
+  local timeout="$2"
+  for ((i=1; i<=timeout; i++)); do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+stop_pid_if_running() {
+  local pid_file="$1"
+  if [[ -f "$pid_file" ]]; then
+    local pid
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" || true
+      sleep 1
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f "$pid_file"
+  fi
+}
+
+start_stack_once() {
+  cleanup_old_pid "$VLLM_PID_FILE"
+  cleanup_old_pid "$GATEWAY_PID_FILE"
+
+  BASE_URL="${BASE_URL:-http://127.0.0.1:8000/v1}" \
+  API_KEY="${API_KEY:-sk-local}" \
+  MODEL_IDS="$MODEL_IDS" \
+  PRIMARY_MODEL="$PRIMARY_MODEL" \
+  python3 "$CONFIGURE_SCRIPT" >/dev/null 2>&1 || true
+
+  echo "[$STACK_NAME] starting vLLM..."
+  nohup "$VLLM_START_SCRIPT" >>"$VLLM_LOG" 2>&1 &
+  local vllm_pid=$!
+  echo "$vllm_pid" >"$VLLM_PID_FILE"
+
+  if ! wait_for_health "$VLLM_HEALTH_URL" "$VLLM_WAIT_SECONDS"; then
+    echo "[$STACK_NAME] vLLM failed health check; see $VLLM_LOG"
+    return 1
+  fi
+  echo "[$STACK_NAME] vLLM healthy at $VLLM_HEALTH_URL"
+
+  echo "[$STACK_NAME] starting OpenClaw gateway..."
+  nohup "$GATEWAY_START_SCRIPT" >>"$GATEWAY_LOG" 2>&1 &
+  local gw_pid=$!
+  echo "$gw_pid" >"$GATEWAY_PID_FILE"
+
+  echo "[$STACK_NAME] started (vLLM pid=$vllm_pid, gateway pid=$gw_pid)"
+  return 0
+}
+
+monitor_loop() {
+  while true; do
+    local vpid=""
+    local gpid=""
+    vpid="$(cat "$VLLM_PID_FILE" 2>/dev/null || true)"
+    gpid="$(cat "$GATEWAY_PID_FILE" 2>/dev/null || true)"
+
+    if [[ -z "$vpid" || -z "$gpid" ]]; then
+      echo "[$STACK_NAME] missing pid file(s), restarting..."
+      return 1
+    fi
+    if ! kill -0 "$vpid" 2>/dev/null; then
+      echo "[$STACK_NAME] vLLM process exited (pid=$vpid), restarting..."
+      return 1
+    fi
+    if ! kill -0 "$gpid" 2>/dev/null; then
+      echo "[$STACK_NAME] gateway process exited (pid=$gpid), restarting..."
+      return 1
+    fi
+    if ! curl -fsS "$VLLM_HEALTH_URL" >/dev/null 2>&1; then
+      echo "[$STACK_NAME] vLLM health check failed, restarting..."
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+trap 'stop_pid_if_running "$GATEWAY_PID_FILE"; stop_pid_if_running "$VLLM_PID_FILE"; exit 0' INT TERM
+
+while true; do
+  if ! start_stack_once; then
+    stop_pid_if_running "$GATEWAY_PID_FILE"
+    stop_pid_if_running "$VLLM_PID_FILE"
+    sleep "$RESTART_BACKOFF_SECONDS"
+    continue
+  fi
+  if ! monitor_loop; then
+    stop_pid_if_running "$GATEWAY_PID_FILE"
+    stop_pid_if_running "$VLLM_PID_FILE"
+    sleep "$RESTART_BACKOFF_SECONDS"
+    continue
+  fi
+done

@@ -47,6 +47,10 @@ htmlcov/
 *.log
 .env
 .env.local
+.env.openclaw-local
+feedback_logs/
+.local_loras/
+.run-logs/
 
 # OS
 .DS_Store

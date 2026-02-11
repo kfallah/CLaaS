@@ -6,17 +6,19 @@ generated tokens and returns top-K log-probabilities at each position.
 
 Key features:
 - GPU memory snapshots for sub-second cold starts (~3-5s vs ~45-60s)
-- prompt_logprobs=100 for dense teacher signal (vs Fireworks' K=5 limit)
+- prompt_logprobs up to 100 (matching SDPO reference)
 - Stateless service that can be shared across users/LoRAs
 """
 
 from __future__ import annotations
 
+import importlib
+import os
+import warnings
 from typing import TypedDict
 
 import modal
 import torch
-from vllm import LLM, SamplingParams
 
 
 class TokenLogprobs(TypedDict):
@@ -38,6 +40,8 @@ app = modal.App("claas-distill")
 
 # Volume for model weights
 model_volume = modal.Volume.from_name("claas-models", create_if_missing=True)
+hf_secret_name = os.environ.get("CLAAS_HF_SECRET_NAME", "").strip()
+teacher_secrets = [modal.Secret.from_name(hf_secret_name)] if hf_secret_name else []
 
 # vLLM image with dependencies
 vllm_image = (
@@ -48,7 +52,11 @@ vllm_image = (
         "transformers>=4.40.0",
         "huggingface_hub",
     )
-    .env({"HF_HOME": "/models/hf_cache"})
+    .env({
+        "HF_HOME": "/models/hf_cache",
+        "VLLM_SERVER_DEV_MODE": "1",
+        "TORCHINDUCTOR_COMPILE_THREADS": "1",
+    })
 )
 
 
@@ -56,17 +64,20 @@ vllm_image = (
     gpu="H100",
     image=vllm_image,
     volumes={"/models": model_volume},
-    keep_warm=1,
-    container_idle_timeout=600,
+    secrets=teacher_secrets,
+    min_containers=1,
+    scaledown_window=600,
     enable_memory_snapshot=True,
-    timeout=300,
+    experimental_options={"enable_gpu_snapshot": True},
+    startup_timeout=1800,
+    timeout=900,
 )
 class TeacherService:
     """vLLM-based teacher model service for SDPO logprob scoring."""
 
     model_id: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
     max_model_len: int = 8192
-    default_top_k: int = 100
+    top_k: int = 100
 
     @modal.enter(snap=True)
     def start_vllm(self):
@@ -78,6 +89,20 @@ class TeacherService:
         Without snapshot: ~45-60s cold start
         With snapshot: ~3-5s cold start
         """
+        # vLLM model inspection subprocess expects a numeric CUDA device ID.
+        # Modal can expose "none" during early init in some snapshots.
+        if os.environ.get("CUDA_VISIBLE_DEVICES", "").lower() == "none":
+            os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+        # Ensure runtime-injected tokens are visible to huggingface_hub/vLLM.
+        hf_token = os.environ.get("HF_TOKEN")
+        if hf_token and not os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_token
+
+        vllm_module = importlib.import_module("vllm")
+        LLM = getattr(vllm_module, "LLM")
+        SamplingParams = getattr(vllm_module, "SamplingParams")
+
         print(f"Initializing vLLM with {self.model_id}...")
 
         self.llm = LLM(
@@ -86,6 +111,7 @@ class TeacherService:
             tensor_parallel_size=1,
             max_model_len=self.max_model_len,
             gpu_memory_utilization=0.90,
+            enable_sleep_mode=True,
             trust_remote_code=True,
             download_dir="/models",
         )
@@ -97,8 +123,20 @@ class TeacherService:
         # and kernel compilations before the snapshot is taken
         warmup_params = SamplingParams(max_tokens=1, temperature=0)
         _ = self.llm.generate(["Hello, world!"], warmup_params)
+        self._sampling_params_cls = SamplingParams
 
-        print("vLLM engine initialized and warmed up. Snapshot will capture this state.")
+        # Follow Modal's snapshot pattern: warmup then sleep before snapshotting.
+        self.llm.sleep(level=1)
+        print("vLLM initialized, warmed up, and put to sleep for snapshot capture.")
+
+    @modal.enter(snap=False)
+    def wake_up(self):
+        """Wake the engine after a snapshot restore."""
+        try:
+            self.llm.wake_up()
+        except Exception as exc:
+            warnings.warn(f"Teacher wake_up failed: {exc!r}", stacklevel=1)
+            raise
 
     @modal.method()
     def score_tokens(
@@ -120,14 +158,14 @@ class TeacherService:
         """
 
         if top_k is None:
-            top_k = self.default_top_k
+            top_k = self.top_k
 
         # Concatenate prompt + completion as a single prompt
         # Use prompt_logprobs to get logprobs at every position
         full_texts = [p + c for p, c in zip(prompts, completions, strict=True)]
         prompt_lengths = [len(self.tokenizer.encode(p)) for p in prompts]
 
-        params = SamplingParams(
+        params = self._sampling_params_cls(
             max_tokens=1,  # don't generate new tokens
             temperature=0,
             prompt_logprobs=top_k,  # vLLM supports arbitrary K here
