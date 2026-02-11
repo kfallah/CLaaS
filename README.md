@@ -105,6 +105,19 @@ Set `CLAAS_DISTILL_EXECUTION_MODE` to control where the distill worker runs:
 
 `/v1/feedback` updates adapters in-place (same `lora_id`). `/v1/distill` creates versioned checkpoints with timestamps.
 
+## Docker Compose (Recommended)
+
+The fastest way to get the full stack running — vLLM, CLaaS API, and OpenClaw with Telegram:
+
+```bash
+cd docker
+cp .env.example .env
+# Edit .env — set TELEGRAM_BOT_TOKEN (from @BotFather)
+docker compose up --build
+```
+
+This brings up four services: an init container (creates the LoRA + config), vLLM with Qwen3-8B and LoRA serving, the CLaaS feedback API, and OpenClaw's Telegram gateway. See [`docker/README.md`](docker/README.md) for details.
+
 ## Local vLLM + OpenClaw
 
 See [`scripts/openclaw-local/README.md`](scripts/openclaw-local/README.md) for the full supervised local stack (vLLM + gateway + auto-restart, multi-LoRA, Telegram integration).

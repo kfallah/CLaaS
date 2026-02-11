@@ -1,0 +1,122 @@
+services:
+  # ------------------------------------------------------------------
+  # init: one-shot container — creates LoRA adapter + OpenClaw config
+  # ------------------------------------------------------------------
+  init:
+    build:
+      context: .
+      dockerfile: Dockerfile.init
+    environment:
+      - CLAAS_STORAGE_BACKEND=local_fs
+      - CLAAS_LORA_ROOT=/loras
+      - LORA_NAME=${LORA_NAME:-openclaw/assistant}
+      - MODEL=${MODEL:-Qwen/Qwen3-8B}
+      - VLLM_BASE_URL=http://vllm:8000/v1
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - OPENCLAW_HOME=/openclaw-config
+    volumes:
+      - lora-storage:/loras
+      - openclaw-config:/openclaw-config
+
+  # ------------------------------------------------------------------
+  # vllm: Qwen3-8B + LoRA serving (GPU)
+  # ------------------------------------------------------------------
+  vllm:
+    image: vllm/vllm-openai:latest
+    entrypoint: ["/scripts/start_vllm_qwen3_8b.sh"]
+    environment:
+      - MODEL=${MODEL:-Qwen/Qwen3-8B}
+      - HOST=0.0.0.0
+      # PORT deliberately unset — script defaults to 8000
+      - API_KEY=sk-local
+      - SERVED_MODEL_NAMES=qwen3-8b
+      - MAX_MODEL_LEN=${MAX_MODEL_LEN:-32768}
+      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.95}
+      - ENABLE_SLEEP_MODE=1
+      - VLLM_SERVER_DEV_MODE=1
+      - ENABLE_AUTO_TOOL_CHOICE=1
+      - TOOL_CALL_PARSER=qwen3_xml
+      - LORA_ROOT=/loras
+      - LORA_ALIAS_FILE=/loras/.aliases.json
+      - INCLUDE_ALIAS_LORAS=1
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - ../scripts/openclaw-local/start_vllm_qwen3_8b.sh:/scripts/start_vllm_qwen3_8b.sh:ro
+      - hf-cache:/root/.cache/huggingface
+      - lora-storage:/loras
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      start_period: 180s
+      retries: 80
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  # ------------------------------------------------------------------
+  # claas-api: Feedback API + distill worker (GPU, shared with vLLM
+  # via sleep/wake)
+  # ------------------------------------------------------------------
+  claas-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.claas-api
+    environment:
+      - CLAAS_STORAGE_BACKEND=local_fs
+      - CLAAS_LORA_ROOT=/loras
+      - CLAAS_DISTILL_EXECUTION_MODE=local
+      - VLLM_BASE_URL=http://vllm:8000
+      - FEEDBACK_LOG_DIR=/feedback-logs
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - lora-storage:/loras
+      - hf-cache:/root/.cache/huggingface
+      - claas-feedback-logs:/feedback-logs
+    ports:
+      - "${CLAAS_API_PORT:-8080}:8080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      vllm:
+        condition: service_healthy
+
+  # ------------------------------------------------------------------
+  # openclaw: Telegram bot gateway
+  # ------------------------------------------------------------------
+  openclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile.openclaw
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - VLLM_BASE_URL=http://vllm:8000
+    volumes:
+      - openclaw-config:/home/node/.openclaw
+    ports:
+      - "${OPENCLAW_PORT:-18789}:18789"
+    depends_on:
+      vllm:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+
+volumes:
+  hf-cache:
+  lora-storage:
+  openclaw-config:
+  claas-feedback-logs:

@@ -52,6 +52,9 @@ feedback_logs/
 .local_loras/
 .run-logs/
 
+# Docker
+docker/.env
+
 # OS
 .DS_Store
 Thumbs.db
