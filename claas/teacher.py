@@ -136,6 +136,7 @@ class TeacherService:
             self.llm.wake_up()
         except Exception as exc:
             warnings.warn(f"Teacher wake_up failed: {exc!r}", stacklevel=1)
+            raise
 
     @modal.method()
     def score_tokens(
