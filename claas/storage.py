@@ -252,7 +252,8 @@ def save_lora_inplace(local_dir: str, lora_id: str) -> str:
     partially written adapter files.
     """
     sanitized_id = lora_id.strip("/")
-    target_path = get_lora_path(sanitized_id)
+    resolved_id = resolve_lora_id(sanitized_id)
+    target_path = get_lora_path(resolved_id)
     parent = os.path.dirname(target_path)
     os.makedirs(parent, exist_ok=True)
 
@@ -297,7 +298,7 @@ def save_lora_inplace(local_dir: str, lora_id: str) -> str:
             shutil.rmtree(stage_path)
 
     _commit_storage()
-    return sanitized_id
+    return resolved_id
 
 
 def create_initial_lora(
