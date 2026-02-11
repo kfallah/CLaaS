@@ -47,6 +47,7 @@ from .storage import (
     list_loras,
     lora_exists,
     lora_volume,
+    resolve_lora_id,
 )
 from .types import (
     DistillRequest,
@@ -263,7 +264,8 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
     timing_ms = FeedbackTimingMs()
     started_total = time.perf_counter()
 
-    lock = await _get_feedback_lock(request.lora_id)
+    resolved_id = await asyncio.to_thread(resolve_lora_id, request.lora_id)
+    lock = await _get_feedback_lock(resolved_id)
     try:
         # Validate LoRA exists before attempting orchestration.
         exists = await asyncio.to_thread(lora_exists, request.lora_id)
