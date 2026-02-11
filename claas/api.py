@@ -322,6 +322,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
         error_message = str(e.detail)
         if (
             slept
+            and not woke
             and request.orchestration.wake_after
             and (request.orchestration.wake_on_failure or FEEDBACK_WAKE_ON_FAILURE)
         ):
@@ -329,7 +330,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
                 await _vllm_post("/wake_up")
                 woke = True
             except httpx.HTTPError as wake_err:
-                logger.warning("Failed to wake vLLM after error: %s", wake_err)
+                logger.warning("Failed to wake vLLM after HTTP error: %s", wake_err)
         raise
     except (ValueError, RuntimeError, OSError, httpx.HTTPError) as e:
         error_message = str(e)
@@ -370,8 +371,8 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
                 _write_feedback_log,
                 log_record.model_dump(mode="json"),
             )
-        except (OSError, TypeError, ValueError) as log_err:
-            logger.warning("Failed to write feedback log: %s", log_err)
+        except (OSError, TypeError, ValueError):
+            logger.warning("Failed to write feedback log for request %s", request_id, exc_info=True)
             log_path = ""
 
     return FeedbackResponse(
@@ -405,7 +406,7 @@ async def init_lora(request: LoraInitRequest) -> LoraInitResponse:
         )
         return LoraInitResponse(lora_id=lora_id)
 
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError) as e:
         raise HTTPException(
             status_code=500,
             detail=f"LoRA initialization failed: {str(e)}",
@@ -423,7 +424,7 @@ async def list_lora_adapters(prefix: str = "") -> LoraListResponse:
         # Run sync function in thread pool to avoid blocking
         loras = await asyncio.to_thread(list_loras, prefix)
         return LoraListResponse(loras=loras)
-    except Exception as e:
+    except (ValueError, OSError) as e:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to list LoRAs: {str(e)}",
@@ -452,7 +453,7 @@ async def export_lora_adapter(lora_id: str) -> Response:
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except (ValueError, OSError) as e:
         raise HTTPException(
             status_code=500,
             detail=f"LoRA export failed: {str(e)}",
@@ -470,7 +471,7 @@ async def health_check() -> HealthResponse:
         worker_health_fn = modal.Function.from_name("claas-distill", "DistillWorker.health_check")
         data = await asyncio.wait_for(worker_health_fn.remote.aio(), timeout=15)
         worker = ServiceHealth.model_validate(data)
-    except Exception as e:
+    except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
         worker = ServiceHealth(status="unhealthy", error=str(e))
         status = "degraded"
 
@@ -478,7 +479,7 @@ async def health_check() -> HealthResponse:
         teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
         data = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
         teacher = ServiceHealth.model_validate(data)
-    except Exception as e:
+    except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
         teacher = ServiceHealth(status="unhealthy", error=str(e))
         status = "degraded"
 
