@@ -255,16 +255,17 @@ async def _run_distill(payload: dict[str, Any]) -> dict[str, Any]:
             result = await asyncio.to_thread(worker.distill.local, payload)
             return DistillResponse.model_validate(result).model_dump()
         finally:
-            # Release worker refs so vLLM can reclaim VRAM on wake.
+            # Offload the base model to CPU so vLLM can reclaim full VRAM.
+            # This must happen even on failure — otherwise the 16GB base model
+            # stays on GPU and vLLM's wake triggers CUDA memory conflicts.
+            try:
+                logger.info("_run_distill: calling _offload_base_model")
+                await asyncio.to_thread(worker._offload_base_model)
+                logger.info("_run_distill: offload complete")
+            except Exception as offload_err:
+                logger.error("_run_distill: offload FAILED: %s", offload_err)
             del worker
             gc.collect()
-            try:
-                import torch
-
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except ImportError:
-                pass
 
     distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
     result = await distill_fn.remote.aio(payload)
@@ -405,6 +406,18 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
         raise HTTPException(status_code=409, detail=error_message) from None
     except HTTPException as e:
         error_message = str(e.detail)
+        logger.error("Feedback %s failed in phase '%s' (HTTP %d): %s", request_id, phase, e.status_code, error_message)
+        raise
+    except (ValueError, RuntimeError, ImportError, OSError, httpx.HTTPError) as e:
+        error_message = str(e)
+        logger.error("Feedback %s failed in phase '%s': %s", request_id, phase, error_message, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Feedback update failed in phase '{phase}': {error_message}",
+        ) from e
+    finally:
+        # Always attempt to wake vLLM if we slept it and haven't woken it yet.
+        # This lives in `finally` so it runs regardless of exception type.
         if (
             slept
             and not woke
@@ -414,26 +427,10 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             try:
                 await _vllm_post("/wake_up")
                 woke = True
+                logger.info("Feedback %s: woke vLLM after failure in phase '%s'", request_id, phase)
             except httpx.HTTPError as wake_err:
-                logger.warning("Failed to wake vLLM after HTTP error: %s", wake_err)
-        raise
-    except (ValueError, RuntimeError, OSError, httpx.HTTPError) as e:
-        error_message = str(e)
-        if (
-            slept
-            and request.orchestration.wake_after
-            and (request.orchestration.wake_on_failure or FEEDBACK_WAKE_ON_FAILURE)
-        ):
-            try:
-                await _vllm_post("/wake_up")
-                woke = True
-            except httpx.HTTPError as wake_err:
-                logger.warning("Failed to wake vLLM after error: %s", wake_err)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Feedback update failed in phase '{phase}': {error_message}",
-        ) from e
-    finally:
+                logger.warning("Feedback %s: failed to wake vLLM after error: %s", request_id, wake_err)
+
         timing_ms.total = int((time.perf_counter() - started_total) * 1000)
         if lock_acquired:
             lock.release()

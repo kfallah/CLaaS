@@ -107,6 +107,21 @@ export default function register(api: OpenClawPluginApi) {
         return { text: "No bot response found in the last conversation." };
       }
 
+      // Send a "processing" indicator before the long-running CLaaS call
+      const target = ctx.to ?? ctx.senderId;
+      const sendOpts: Record<string, unknown> = {};
+      if (ctx.messageThreadId) sendOpts.messageThreadId = ctx.messageThreadId;
+      if (ctx.accountId) sendOpts.accountId = ctx.accountId;
+
+      const sendTelegram = api.runtime?.channel?.telegram?.sendMessageTelegram;
+      if (sendTelegram && target) {
+        try {
+          await sendTelegram(target, "\u{1F9E0} Learning from your feedback\u2026", sendOpts);
+        } catch {
+          // Best-effort; don't block on notification failure
+        }
+      }
+
       // Submit to CLaaS
       const startMs = Date.now();
       try {
@@ -121,12 +136,19 @@ export default function register(api: OpenClawPluginApi) {
         const elapsed = Date.now() - startMs;
         const totalMs = result.timing_ms?.total ?? elapsed;
         const seconds = (totalMs / 1000).toFixed(1);
+        const meta = result.distill_result?.metadata;
+        const loss = meta?.total_loss;
+        const tokens = meta?.tokens_processed;
+
+        let detail = `${seconds}s`;
+        if (loss !== undefined) detail += ` | loss: ${loss.toFixed(4)}`;
+        if (tokens !== undefined) detail += ` | ${tokens} tokens`;
 
         return {
-          text: `Feedback submitted successfully (${seconds}s). The model will improve from your input.`,
+          text: `\u2705 Feedback applied (${detail})`,
         };
       } catch (err: any) {
-        return { text: `Feedback failed: ${err.message}` };
+        return { text: `\u274C Feedback failed: ${err.message}` };
       }
     },
   });

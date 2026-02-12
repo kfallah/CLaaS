@@ -28,6 +28,14 @@ export interface FeedbackResult {
     sleep?: number;
     wake?: number;
   };
+  distill_result?: {
+    metadata?: {
+      total_loss?: number;
+      distill_loss?: number;
+      tokens_processed?: number;
+      grad_norm?: number;
+    };
+  };
 }
 
 export async function submitFeedback(

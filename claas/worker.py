@@ -91,7 +91,7 @@ class DistillWorker:
     )
     attn_implementation: str = os.environ.get(
         "CLAAS_ATTN_IMPLEMENTATION",
-        "flash_attention_2",
+        "sdpa",
     )
 
     @modal.enter(snap=True)
@@ -126,7 +126,7 @@ class DistillWorker:
 
         self.base_model = AutoModelForCausalLM.from_pretrained(
             self.base_model_id,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             device_map="cuda",
             trust_remote_code=True,
             attn_implementation=self.attn_implementation,
@@ -247,6 +247,29 @@ class DistillWorker:
 
         return top_logprobs, top_indices
 
+    def _offload_base_model(self):
+        """Move base model to CPU and release all GPU memory.
+
+        Called after distill completes (success or failure) so that vLLM
+        can reclaim the full VRAM when it wakes up.
+        """
+        import torch
+
+        try:
+            before_mb = torch.cuda.memory_allocated() / 1e6
+            self.base_model.to("cpu")
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            after_mb = torch.cuda.memory_allocated() / 1e6
+            free_bytes, total_bytes = torch.cuda.mem_get_info()
+            print(
+                f"[offload] base model moved to CPU. "
+                f"VRAM: {before_mb:.0f}MB -> {after_mb:.0f}MB allocated, "
+                f"{free_bytes / 1e9:.1f}GB / {total_bytes / 1e9:.1f}GB free"
+            )
+        except Exception as e:
+            print(f"[offload] FAILED: {e}")  # Don't mask the original error
+
     @modal.method()
     def distill(self, request: dict) -> dict:
         """Run a single SDPO distillation step.
@@ -268,6 +291,11 @@ class DistillWorker:
 
         F = self.F  # Use pre-imported functional module
         torch.cuda.empty_cache()
+
+        # Ensure base model is on GPU (may have been offloaded to CPU after
+        # the previous distill step to free VRAM for vLLM).
+        if next(self.base_model.parameters()).device.type != "cuda":
+            self.base_model.to(self.device)
 
         # Validate request
         if "lora_id" not in request:
@@ -291,7 +319,9 @@ class DistillWorker:
             # Gradient checkpointing: recompute activations during backward
             # instead of storing them all.  Trades ~30% more compute for
             # significantly lower peak VRAM on the student forward/backward.
-            model.gradient_checkpointing_enable()
+            model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False},
+            )
         except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
             cleanup_local_lora(lora_local_path)
             raise RuntimeError(f"Failed to load LoRA: {e}") from e
@@ -470,7 +500,14 @@ class DistillWorker:
         del teacher_logprobs, teacher_indices
         del full_ids, prompt_ids, response_ids, response_mask
         cleanup_local_lora(lora_local_path)
-        torch.cuda.empty_cache()
+
+        self._offload_base_model()
+
+        print(
+            f"[distill] SUCCESS: loss={total_loss:.4f} "
+            f"grad_norm={grad_norm_val:.4f} tokens={T_resp} "
+            f"lora={new_lora_id} teacher={teacher_mode}"
+        )
 
         return {
             "lora_id": new_lora_id,
