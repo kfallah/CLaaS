@@ -178,6 +178,7 @@ class FeedbackTimingMs(BaseModel):
     distill: int = 0
     save: int = 0
     wake: int = 0
+    logprobs: int = 0
     total: int = 0
 
 

@@ -103,15 +103,24 @@ FEEDBACK_MIN_FREE_VRAM_GB = float(os.environ.get("FEEDBACK_MIN_FREE_VRAM_GB", "2
 FEEDBACK_SLEEP_VERIFY_TIMEOUT_S = float(os.environ.get("FEEDBACK_SLEEP_VERIFY_TIMEOUT_S", "30"))
 # Maximum seconds to wait for in-flight vLLM requests to drain before sleeping.
 FEEDBACK_DRAIN_TIMEOUT_S = float(os.environ.get("FEEDBACK_DRAIN_TIMEOUT_S", "30"))
+# vLLM model name for fetching rollout logprobs.
+# None = auto-derive from LoRA ID.  "" = disabled.
+VLLM_ROLLOUT_MODEL = os.environ.get("VLLM_ROLLOUT_MODEL")
 
 
 
 def _format_teacher_prompt(
     user_prompt: str,
     feedback: str | None = None,
+    response: str | None = None,
     system_prompt: str | None = None,
 ) -> str:
-    """Format prompt for teacher scoring without importing training deps."""
+    """Format prompt for teacher scoring without importing training deps.
+
+    The template shows the teacher the original prompt, the student's
+    response, and any feedback — so the teacher conditions on the full
+    context of what was attempted and what needs improvement.
+    """
     if system_prompt is None:
         system_prompt = (
             "You are an expert coding assistant. Provide high-quality, "
@@ -119,13 +128,13 @@ def _format_teacher_prompt(
         )
 
     parts = [f"<|im_start|>system\n{system_prompt}<|im_end|>"]
+    parts.append(f"<|im_start|>user\n{user_prompt}<|im_end|>")
+    if response:
+        parts.append(f"<|im_start|>assistant\n{response}<|im_end|>")
     if feedback:
         parts.append(
-            f"<|im_start|>user\n{user_prompt}\n\n"
-            f"[Feedback on previous attempt: {feedback}]<|im_end|>"
+            f"<|im_start|>user\n[Feedback on previous attempt: {feedback}]<|im_end|>"
         )
-    else:
-        parts.append(f"<|im_start|>user\n{user_prompt}<|im_end|>")
     parts.append("<|im_start|>assistant\n")
     return "".join(parts)
 
@@ -193,6 +202,68 @@ async def _wait_for_vllm_idle(
             waiting,
         )
         await asyncio.sleep(0.5)
+
+
+def _resolve_vllm_model_name(lora_id: str) -> str | None:
+    """Derive the vLLM model name for a LoRA, matching _vllm_reload_lora logic.
+
+    Returns ``None`` when rollout-logprob fetching is explicitly disabled
+    (``VLLM_ROLLOUT_MODEL=""``) or when *lora_id* is empty.
+    """
+    import re
+
+    if VLLM_ROLLOUT_MODEL == "":
+        return None
+    if VLLM_ROLLOUT_MODEL is not None:
+        return VLLM_ROLLOUT_MODEL
+    return re.sub(r"[^a-zA-Z0-9._-]+", "-", lora_id.strip("/")).strip("-") or None
+
+
+async def _fetch_rollout_logprobs(
+    prompt: str,
+    response: str,
+    model: str,
+    timeout_s: float = 60.0,
+) -> list[float]:
+    """Fetch per-token logprobs for *response* from the vLLM completions API.
+
+    1. Tokenize the prompt to learn its token count.
+    2. Submit ``prompt + response`` with ``max_tokens=0`` and ``prompt_logprobs=1``.
+    3. Strip the prompt portion and extract the log-probability for each
+       response token.
+    """
+    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
+    async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
+        tok_resp = await client.post(
+            "/tokenize",
+            json={"model": model, "prompt": prompt},
+            headers=headers,
+        )
+        tok_resp.raise_for_status()
+        prompt_token_count = tok_resp.json()["count"]
+
+        comp_resp = await client.post(
+            "/v1/completions",
+            json={
+                "model": model,
+                "prompt": prompt + response,
+                "max_tokens": 0,
+                "prompt_logprobs": 1,
+            },
+            headers=headers,
+        )
+        comp_resp.raise_for_status()
+
+    raw_logprobs = comp_resp.json()["choices"][0]["prompt_logprobs"]
+
+    # Skip prompt tokens and null entries; extract logprob values.
+    logprobs: list[float] = []
+    for entry in raw_logprobs[prompt_token_count:]:
+        if entry is None:
+            continue
+        top = next(iter(entry.values()))
+        logprobs.append(top["logprob"])
+    return logprobs
 
 
 async def _verify_gpu_ready(
@@ -349,7 +420,7 @@ async def distill(request: DistillRequest) -> DistillResponse:
         # Remote teacher is optional; self-distillation is the default path.
         if request.training.teacher_mode == "remote":
             teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-            teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback)
+            teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback, request.response)
             teacher_scored = await teacher_score_fn.remote.aio(
                 prompts=[teacher_prompt],
                 completions=[request.response],
@@ -407,6 +478,20 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             except (TimeoutError, httpx.HTTPError) as e:
                 raise HTTPException(status_code=503, detail=f"vLLM not idle: {e}") from e
 
+            if request.rollout_logprobs is None:
+                phase = "logprobs"
+                logprobs_start = time.perf_counter()
+                vllm_model = _resolve_vllm_model_name(request.lora_id)
+                if vllm_model:
+                    try:
+                        fetched = await _fetch_rollout_logprobs(
+                            request.prompt, request.response, vllm_model,
+                        )
+                        request = request.model_copy(update={"rollout_logprobs": fetched})
+                    except (httpx.HTTPError, ValueError, KeyError) as e:
+                        logger.warning("Failed to fetch rollout logprobs: %s", e)
+                timing_ms.logprobs = int((time.perf_counter() - logprobs_start) * 1000)
+
             phase = "sleep"
             sleep_start = time.perf_counter()
             await _vllm_post(
@@ -424,7 +509,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
 
         if request.training.teacher_mode == "remote":
             teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-            teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback)
+            teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback, request.response)
             teacher_scored = await teacher_score_fn.remote.aio(
                 prompts=[teacher_prompt],
                 completions=[request.response],

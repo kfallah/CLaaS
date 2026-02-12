@@ -28,6 +28,10 @@ class _RemoteCallFailure:
         raise RuntimeError("modal rpc failure")
 
 
+async def _noop_fetch_logprobs(_prompt, _response, _model, timeout_s=60.0):
+    return [-0.1, -0.2]
+
+
 class _FunctionFailureStub:
     def __init__(self):
         self.remote = _RemoteCallFailure()
@@ -116,6 +120,7 @@ def test_feedback_success_inplace_flow(monkeypatch):
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
     monkeypatch.setattr(api, "_write_feedback_log", fake_write_feedback_log)
+    monkeypatch.setattr(api, "_fetch_rollout_logprobs", _noop_fetch_logprobs)
 
     client = TestClient(web_app)
     response = client.post(
@@ -170,6 +175,7 @@ def test_feedback_returns_500_and_logs_error(monkeypatch):
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
     monkeypatch.setattr(api, "_write_feedback_log", fake_write_feedback_log)
+    monkeypatch.setattr(api, "_fetch_rollout_logprobs", _noop_fetch_logprobs)
 
     client = TestClient(web_app)
     response = client.post(
@@ -249,6 +255,7 @@ def test_feedback_calls_drain_before_sleep(monkeypatch):
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
     monkeypatch.setattr(api, "_write_feedback_log", lambda _r: "/tmp/log.json")
+    monkeypatch.setattr(api, "_fetch_rollout_logprobs", _noop_fetch_logprobs)
 
     client = TestClient(web_app)
     response = client.post(
@@ -299,3 +306,136 @@ def test_feedback_drain_timeout_returns_503(monkeypatch):
 
     assert response.status_code == 503
     assert "vLLM not idle" in response.json()["detail"]
+
+
+def test_feedback_fetches_rollout_logprobs(monkeypatch):
+    """Rollout logprobs are fetched and forwarded to the distill worker."""
+    from claas import api
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    captured = {}
+
+    def fake_from_name(_app, fn_name):
+        if fn_name == "DistillWorker.distill":
+            return _FunctionStub(
+                {"lora_id": "user/model", "metadata": {"tokens_processed": 1}},
+                capture=captured,
+            )
+        raise AssertionError(f"unexpected modal function: {fn_name}")
+
+    async def fake_fetch(_prompt, _response, _model, timeout_s=60.0):
+        return [-0.5, -1.2, -0.3]
+
+    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
+    monkeypatch.setattr(api, "_vllm_post", lambda *a, **kw: _noop_coro())
+    monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: "/tmp/log.json")
+    monkeypatch.setattr(api, "_fetch_rollout_logprobs", fake_fetch)
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "lora_id": "user/model",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "training": {"teacher_mode": "self"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["request"]["rollout_logprobs"] == [-0.5, -1.2, -0.3]
+
+
+def test_feedback_logprobs_fetch_failure_continues(monkeypatch):
+    """A failing logprobs fetch logs a warning but returns 200."""
+    import httpx as _httpx
+
+    from claas import api
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    captured = {}
+
+    def fake_from_name(_app, fn_name):
+        if fn_name == "DistillWorker.distill":
+            return _FunctionStub(
+                {"lora_id": "user/model", "metadata": {"tokens_processed": 1}},
+                capture=captured,
+            )
+        raise AssertionError(f"unexpected modal function: {fn_name}")
+
+    async def failing_fetch(_prompt, _response, _model, timeout_s=60.0):
+        raise _httpx.HTTPError("connection refused")
+
+    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
+    monkeypatch.setattr(api, "_vllm_post", lambda *a, **kw: _noop_coro())
+    monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: "/tmp/log.json")
+    monkeypatch.setattr(api, "_fetch_rollout_logprobs", failing_fetch)
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "lora_id": "user/model",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "training": {"teacher_mode": "self"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["request"]["rollout_logprobs"] is None
+
+
+def test_feedback_skips_logprobs_when_provided(monkeypatch):
+    """When rollout_logprobs is already provided, the fetch is skipped."""
+    from claas import api
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    captured = {}
+    fetch_called = []
+
+    def fake_from_name(_app, fn_name):
+        if fn_name == "DistillWorker.distill":
+            return _FunctionStub(
+                {"lora_id": "user/model", "metadata": {"tokens_processed": 1}},
+                capture=captured,
+            )
+        raise AssertionError(f"unexpected modal function: {fn_name}")
+
+    async def spy_fetch(_prompt, _response, _model, timeout_s=60.0):
+        fetch_called.append(True)
+        return [-9.9]
+
+    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
+    monkeypatch.setattr(api, "_vllm_post", lambda *a, **kw: _noop_coro())
+    monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: "/tmp/log.json")
+    monkeypatch.setattr(api, "_fetch_rollout_logprobs", spy_fetch)
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "lora_id": "user/model",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "rollout_logprobs": [-0.1, -0.2],
+            "training": {"teacher_mode": "self"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["request"]["rollout_logprobs"] == [-0.1, -0.2]
+    assert fetch_called == []
+
+
+async def _noop_coro():
+    pass
