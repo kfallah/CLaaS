@@ -1,0 +1,18 @@
+{
+  "id": "claas-feedback",
+  "name": "CLaaS Feedback",
+  "description": "Submit feedback to CLaaS for continual learning via /feedback command",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "claasApiUrl": {
+        "type": "string",
+        "description": "Base URL of the CLaaS API (e.g. http://claas-api:8080)"
+      },
+      "loraId": {
+        "type": "string",
+        "description": "LoRA adapter ID to update (e.g. openclaw/assistant-latest)"
+      }
+    }
+  }
+}

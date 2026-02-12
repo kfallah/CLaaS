@@ -57,6 +57,15 @@ OPENCLAW_HOME=/openclaw-config \
 
 Verify: `/loras/.aliases.json` should exist with an `openclaw/assistant-latest` entry.
 
+### 2b. Install feedback plugin
+
+Copy the CLaaS feedback plugin into the OpenClaw extensions directory so it loads on startup:
+
+```bash
+mkdir -p /openclaw-config/extensions
+cp -r plugins/claas-feedback /openclaw-config/extensions/claas-feedback
+```
+
 ### 3. Start vLLM (background)
 
 ```bash

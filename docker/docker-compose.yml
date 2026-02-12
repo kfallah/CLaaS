@@ -14,9 +14,11 @@ services:
       - VLLM_BASE_URL=http://vllm:8000/v1
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - OPENCLAW_HOME=/openclaw-config
+      - CLAAS_API_URL=http://claas-api:8080
     volumes:
       - lora-storage:/loras
       - openclaw-config:/openclaw-config
+      - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro
 
   # ------------------------------------------------------------------
   # vllm: Qwen3-8B + LoRA serving (GPU)
@@ -31,7 +33,7 @@ services:
       - API_KEY=sk-local
       - SERVED_MODEL_NAMES=qwen3-8b
       - MAX_MODEL_LEN=${MAX_MODEL_LEN:-32768}
-      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.90}
+      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.70}
       - ENABLE_SLEEP_MODE=1
       - VLLM_SERVER_DEV_MODE=1
       - VLLM_ALLOW_RUNTIME_LORA_UPDATING=1

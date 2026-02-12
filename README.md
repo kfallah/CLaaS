@@ -136,6 +136,16 @@ modal deploy -m claas.deploy
 
 The deployed app exposes the same API at `https://your-app--claas-distill-fastapi-app.modal.run`. LoRAs are stored in the `claas-loras` Modal Volume.
 
+## Claude Code Setup
+
+If you use [Claude Code](https://claude.ai/claude-code), you can set up the full local stack automatically:
+
+```
+/setup-local <TELEGRAM_BOT_TOKEN>
+```
+
+This skill installs all dependencies (CLaaS, vLLM, OpenClaw), initializes the LoRA adapter, and starts the full stack (vLLM + CLaaS API + Telegram gateway). See [`.claude/skills/setup-local/SKILL.md`](.claude/skills/setup-local/SKILL.md) for what it does under the hood.
+
 ## Development
 
 ```bash

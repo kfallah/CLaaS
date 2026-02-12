@@ -97,6 +97,11 @@ def _env_flag(name: str, default: bool) -> bool:
 
 FEEDBACK_WAKE_ON_FAILURE = _env_flag("FEEDBACK_WAKE_ON_FAILURE", True)
 
+# Minimum free GPU memory (GB) required before starting training.
+FEEDBACK_MIN_FREE_VRAM_GB = float(os.environ.get("FEEDBACK_MIN_FREE_VRAM_GB", "20"))
+# Maximum seconds to wait for GPU memory after vLLM sleep.
+FEEDBACK_SLEEP_VERIFY_TIMEOUT_S = float(os.environ.get("FEEDBACK_SLEEP_VERIFY_TIMEOUT_S", "30"))
+
 
 def _format_teacher_prompt(
     user_prompt: str,
@@ -144,6 +149,47 @@ async def _vllm_post(
     async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
         resp = await client.post(path, params=params, json=json_body, headers=headers)
     resp.raise_for_status()
+
+
+async def _verify_gpu_ready(
+    min_free_gb: float = FEEDBACK_MIN_FREE_VRAM_GB,
+    timeout_s: float = FEEDBACK_SLEEP_VERIFY_TIMEOUT_S,
+) -> None:
+    """Poll GPU memory until *min_free_gb* is available or *timeout_s* expires.
+
+    Called after ``POST /sleep`` so training only starts once vLLM has
+    actually released its VRAM.  If torch is not installed (CPU-only API
+    image) the check is skipped silently.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return
+    except ImportError:
+        return
+
+    deadline = time.perf_counter() + timeout_s
+    while True:
+        free_bytes, _total = torch.cuda.mem_get_info()
+        free_gb = free_bytes / (1024**3)
+        if free_gb >= min_free_gb:
+            logger.info("GPU has %.1f GB free — ready for training", free_gb)
+            return
+        if time.perf_counter() >= deadline:
+            logger.warning(
+                "Only %.1f GB GPU memory free after waiting %.0fs for vLLM sleep. "
+                "Training may OOM.",
+                free_gb,
+                timeout_s,
+            )
+            return
+        logger.info(
+            "GPU has %.1f GB free (need %.1f GB) — waiting for vLLM to release memory…",
+            free_gb,
+            min_free_gb,
+        )
+        await asyncio.sleep(1.0)
 
 
 async def _vllm_reload_lora(lora_id: str) -> None:
@@ -316,6 +362,8 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
                 "/sleep",
                 params={"level": request.orchestration.sleep_level},
             )
+            # Wait until vLLM has actually released GPU memory.
+            await _verify_gpu_ready()
             timing_ms.sleep = int((time.perf_counter() - sleep_start) * 1000)
             slept = True
 

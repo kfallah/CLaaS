@@ -109,10 +109,15 @@ class DistillWorker:
 
         self.device = torch.device("cuda")
 
+        # Resolve HF cache: respect user env, fall back to Modal volume path.
+        hf_cache = os.environ.get(
+            "HF_HOME", os.environ.get("TRANSFORMERS_CACHE", "/models/hf_cache")
+        )
+
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.base_model_id,
             trust_remote_code=True,
-            cache_dir="/models/hf_cache",
+            cache_dir=hf_cache,
         )
 
         # Ensure pad token is set
@@ -125,7 +130,7 @@ class DistillWorker:
             device_map="cuda",
             trust_remote_code=True,
             attn_implementation=self.attn_implementation,
-            cache_dir="/models/hf_cache",
+            cache_dir=hf_cache,
         )
 
         # Freeze all base parameters
@@ -235,6 +240,11 @@ class DistillWorker:
             k = min(max(1, top_k), vocab_size)
             top_logprobs, top_indices = torch.topk(log_probs[0, :T_resp], k=k, dim=-1)
 
+        # --- Layered cleanup: free teacher intermediates before student pass ---
+        del teacher_output, teacher_logits, log_probs
+        del teacher_full_ids, teacher_prompt_ids
+        torch.cuda.empty_cache()
+
         return top_logprobs, top_indices
 
     @modal.method()
@@ -278,6 +288,10 @@ class DistillWorker:
         try:
             model = self._load_or_create_lora(lora_local_path)
             model.train()
+            # Gradient checkpointing: recompute activations during backward
+            # instead of storing them all.  Trades ~30% more compute for
+            # significantly lower peak VRAM on the student forward/backward.
+            model.gradient_checkpointing_enable()
         except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
             cleanup_local_lora(lora_local_path)
             raise RuntimeError(f"Failed to load LoRA: {e}") from e
@@ -316,7 +330,10 @@ class DistillWorker:
         response_mask = torch.zeros(1, full_ids.shape[-1], device=self.device)
         response_mask[:, response_start:] = 1.0
 
-        # 3. Base model forward pass (for KL regularization, no grad)
+        # ---------------------------------------------------------------
+        # Phase 1: Base model forward pass (KL regularization target)
+        # Extract base_logprobs then FREE all intermediates.
+        # ---------------------------------------------------------------
         with torch.no_grad():
             base_output = self.base_model(input_ids=full_ids)
             base_logits = base_output.logits[:, response_start - 1 : -1, :]  # (1, T_resp, V)
@@ -324,10 +341,16 @@ class DistillWorker:
                 -1, response_ids[:, :T_resp].unsqueeze(-1)
             ).squeeze(-1)  # (1, T_resp)
 
-        # 4. Student forward pass (WITH gradient)
+        del base_output, base_logits
+        torch.cuda.empty_cache()
+
+        # ---------------------------------------------------------------
+        # Phase 2: Student forward pass (WITH gradient)
+        # ---------------------------------------------------------------
         student_output = model(input_ids=full_ids)
         # Logits at positions [response_start-1, ..., end-1] predict tokens at [response_start, ..., end]
-        student_logits = student_output.logits[:, response_start - 1 : -1, :]  # (1, T_resp, V)
+        student_logits = student_output.logits[:, response_start - 1 : -1, :].contiguous()
+        del student_output  # free the CausalLMOutput shell immediately
 
         # Old logprobs for importance sampling ratio
         # These should come from the inference server that generated the rollout
@@ -417,6 +440,9 @@ class DistillWorker:
         optimizer.step()
         optimizer.zero_grad()
 
+        # Disable gradient checkpointing before save to avoid serialisation issues.
+        model.gradient_checkpointing_disable()
+
         # 8. Save LoRA to Modal Volume
         save_dir = tempfile.mkdtemp(prefix="lora_updated_")
         try:
@@ -428,20 +454,33 @@ class DistillWorker:
         finally:
             cleanup_local_lora(save_dir)
 
-        # 9. Cleanup
-        del model, optimizer, student_output, student_logits, base_output
+        # ---------------------------------------------------------------
+        # Phase 5: Cleanup — extract scalars, then free everything so
+        # vLLM can reclaim the VRAM on wake.
+        # ---------------------------------------------------------------
+        total_loss = loss_dict["loss"].item()
+        distill_loss = loss_dict["distill_loss"]
+        kl_reg = loss_dict["kl_reg"]
+        mean_is_ratio = loss_dict["mean_is_ratio"]
+        clip_fraction = loss_dict["clip_fraction"]
+        grad_norm_val = grad_norm.item() if hasattr(grad_norm, "item") else grad_norm
+
+        del model, optimizer, loss_dict, loss_input
+        del student_logits, base_logprobs, old_student_logprobs
+        del teacher_logprobs, teacher_indices
+        del full_ids, prompt_ids, response_ids, response_mask
         cleanup_local_lora(lora_local_path)
         torch.cuda.empty_cache()
 
         return {
             "lora_id": new_lora_id,
             "metadata": {
-                "total_loss": loss_dict["loss"].item(),
-                "distill_loss": loss_dict["distill_loss"],
-                "kl_reg": loss_dict["kl_reg"],
-                "mean_is_ratio": loss_dict["mean_is_ratio"],
-                "clip_fraction": loss_dict["clip_fraction"],
-                "grad_norm": grad_norm.item() if hasattr(grad_norm, "item") else grad_norm,
+                "total_loss": total_loss,
+                "distill_loss": distill_loss,
+                "kl_reg": kl_reg,
+                "mean_is_ratio": mean_is_ratio,
+                "clip_fraction": clip_fraction,
+                "grad_norm": grad_norm_val,
                 "tokens_processed": T_resp,
                 "teacher_mode": teacher_mode,
             },

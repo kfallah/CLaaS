@@ -1,0 +1,12 @@
+{
+  "name": "claas-feedback",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenClaw plugin: submit feedback to CLaaS for continual learning",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

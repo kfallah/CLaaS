@@ -101,7 +101,7 @@ def test_feedback_success_inplace_flow(monkeypatch):
             )
         raise AssertionError(f"unexpected modal function: {fn_name}")
 
-    async def fake_vllm_post(path, *, params=None, timeout_s=30.0):
+    async def fake_vllm_post(path, *, params=None, json_body=None, timeout_s=30.0):
         calls.append((path, params))
 
     def fake_write_feedback_log(record):
@@ -130,7 +130,11 @@ def test_feedback_success_inplace_flow(monkeypatch):
     assert body["status"] == "ok"
     assert body["lora_id"] == "user/model"
     assert body["feedback_log_path"] == "/tmp/feedback-log.json"
-    assert calls == [("/sleep", {"level": 1}), ("/wake_up", None)]
+    # sleep → wake → unload old LoRA → load updated LoRA
+    assert calls[0] == ("/sleep", {"level": 1})
+    assert calls[1] == ("/wake_up", None)
+    assert calls[2] == ("/v1/unload_lora_adapter", None)
+    assert calls[3] == ("/v1/load_lora_adapter", None)
     assert captured["request"]["save_in_place"] is True
     assert log_records and log_records[0]["status"] == "ok"
 
@@ -146,7 +150,7 @@ def test_feedback_returns_500_and_logs_error(monkeypatch):
             return _FunctionFailureStub()
         raise AssertionError(f"unexpected modal function: {fn_name}")
 
-    async def fake_vllm_post(_path, *, params=None, timeout_s=30.0):
+    async def fake_vllm_post(_path, *, params=None, json_body=None, timeout_s=30.0):
         return None
 
     def fake_write_feedback_log(record):
