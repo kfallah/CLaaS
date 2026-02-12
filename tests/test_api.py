@@ -108,9 +108,13 @@ def test_feedback_success_inplace_flow(monkeypatch):
         log_records.append(record)
         return "/tmp/feedback-log.json"
 
+    async def fake_wait_idle():
+        calls.append(("_wait_for_vllm_idle",))
+
     monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
+    monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
     monkeypatch.setattr(api, "_write_feedback_log", fake_write_feedback_log)
 
     client = TestClient(web_app)
@@ -130,11 +134,12 @@ def test_feedback_success_inplace_flow(monkeypatch):
     assert body["status"] == "ok"
     assert body["lora_id"] == "user/model"
     assert body["feedback_log_path"] == "/tmp/feedback-log.json"
-    # sleep → wake → unload old LoRA → load updated LoRA
-    assert calls[0] == ("/sleep", {"level": 1})
-    assert calls[1] == ("/wake_up", None)
-    assert calls[2] == ("/v1/unload_lora_adapter", None)
-    assert calls[3] == ("/v1/load_lora_adapter", None)
+    # drain → sleep → wake → unload old LoRA → load updated LoRA
+    assert calls[0] == ("_wait_for_vllm_idle",)
+    assert calls[1] == ("/sleep", {"level": 1})
+    assert calls[2] == ("/wake_up", None)
+    assert calls[3] == ("/v1/unload_lora_adapter", None)
+    assert calls[4] == ("/v1/load_lora_adapter", None)
     assert captured["request"]["save_in_place"] is True
     assert log_records and log_records[0]["status"] == "ok"
 
@@ -157,9 +162,13 @@ def test_feedback_returns_500_and_logs_error(monkeypatch):
         log_records.append(record)
         return "/tmp/feedback-log.json"
 
+    async def fake_wait_idle():
+        pass
+
     monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
+    monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
     monkeypatch.setattr(api, "_write_feedback_log", fake_write_feedback_log)
 
     client = TestClient(web_app)
@@ -213,3 +222,80 @@ def test_distill_returns_500_on_worker_failure(monkeypatch):
     )
     assert response.status_code == 500
     assert "Distillation failed" in response.json()["detail"]
+
+
+def test_feedback_calls_drain_before_sleep(monkeypatch):
+    """_wait_for_vllm_idle is called before /sleep."""
+    from claas import api
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    order = []
+
+    def fake_from_name(_app, fn_name):
+        if fn_name == "DistillWorker.distill":
+            return _FunctionStub(
+                {"lora_id": "user/model", "metadata": {"tokens_processed": 1}},
+            )
+        raise AssertionError(f"unexpected modal function: {fn_name}")
+
+    async def fake_wait_idle():
+        order.append("drain")
+
+    async def fake_vllm_post(path, *, params=None, json_body=None, timeout_s=30.0):
+        order.append(path)
+
+    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
+    monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
+    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: "/tmp/log.json")
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "lora_id": "user/model",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "training": {"teacher_mode": "self"},
+        },
+    )
+
+    assert response.status_code == 200
+    # drain must come before /sleep
+    assert order[0] == "drain"
+    assert order[1] == "/sleep"
+
+
+def test_feedback_drain_timeout_returns_503(monkeypatch):
+    """A drain timeout produces a 503 response."""
+    from claas import api
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+
+    async def fake_wait_idle():
+        raise TimeoutError("still busy")
+
+    async def fake_vllm_post(_path, *, params=None, json_body=None, timeout_s=30.0):
+        pass
+
+    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
+    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: "/tmp/log.json")
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "lora_id": "user/model",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "training": {"teacher_mode": "self"},
+        },
+    )
+
+    assert response.status_code == 503
+    assert "vLLM not idle" in response.json()["detail"]

@@ -101,6 +101,9 @@ FEEDBACK_WAKE_ON_FAILURE = _env_flag("FEEDBACK_WAKE_ON_FAILURE", True)
 FEEDBACK_MIN_FREE_VRAM_GB = float(os.environ.get("FEEDBACK_MIN_FREE_VRAM_GB", "20"))
 # Maximum seconds to wait for GPU memory after vLLM sleep.
 FEEDBACK_SLEEP_VERIFY_TIMEOUT_S = float(os.environ.get("FEEDBACK_SLEEP_VERIFY_TIMEOUT_S", "30"))
+# Maximum seconds to wait for in-flight vLLM requests to drain before sleeping.
+FEEDBACK_DRAIN_TIMEOUT_S = float(os.environ.get("FEEDBACK_DRAIN_TIMEOUT_S", "30"))
+
 
 
 def _format_teacher_prompt(
@@ -149,6 +152,47 @@ async def _vllm_post(
     async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
         resp = await client.post(path, params=params, json=json_body, headers=headers)
     resp.raise_for_status()
+
+
+async def _wait_for_vllm_idle(
+    timeout_s: float = FEEDBACK_DRAIN_TIMEOUT_S,
+) -> None:
+    """Poll vLLM ``/metrics`` until no requests are running or waiting.
+
+    Raises :class:`TimeoutError` if vLLM is still busy after *timeout_s*.
+    """
+    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
+    deadline = time.perf_counter() + timeout_s
+
+    while True:
+        async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=10) as client:
+            resp = await client.get("/metrics", headers=headers)
+        resp.raise_for_status()
+
+        running = 0
+        waiting = 0
+        for line in resp.text.splitlines():
+            if line.startswith("vllm:num_requests_running"):
+                running += int(float(line.split()[-1]))
+            elif line.startswith("vllm:num_requests_waiting"):
+                waiting += int(float(line.split()[-1]))
+
+        if running == 0 and waiting == 0:
+            logger.info("vLLM idle (0 running, 0 waiting) — safe to sleep")
+            return
+
+        if time.perf_counter() >= deadline:
+            raise TimeoutError(
+                f"vLLM still busy after {timeout_s}s: "
+                f"{running} running, {waiting} waiting"
+            )
+
+        logger.info(
+            "vLLM busy (%d running, %d waiting) — polling again in 0.5s",
+            running,
+            waiting,
+        )
+        await asyncio.sleep(0.5)
 
 
 async def _verify_gpu_ready(
@@ -357,13 +401,18 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
         lock_acquired = True
 
         if request.orchestration.sleep_before:
+            phase = "drain"
+            try:
+                await _wait_for_vllm_idle()
+            except (TimeoutError, httpx.HTTPError) as e:
+                raise HTTPException(status_code=503, detail=f"vLLM not idle: {e}") from e
+
             phase = "sleep"
             sleep_start = time.perf_counter()
             await _vllm_post(
                 "/sleep",
                 params={"level": request.orchestration.sleep_level},
             )
-            # Wait until vLLM has actually released GPU memory.
             await _verify_gpu_ready()
             timing_ms.sleep = int((time.perf_counter() - sleep_start) * 1000)
             slept = True
