@@ -94,7 +94,7 @@ All settings are in `.env`. Only `TELEGRAM_BOT_TOKEN` is required:
 | `HF_TOKEN` | — | HuggingFace token for gated models |
 | `MODEL` | `Qwen/Qwen3-8B` | Base model ID |
 | `MAX_MODEL_LEN` | `32768` | Max sequence length |
-| `GPU_MEMORY_UTILIZATION` | `0.95` | GPU VRAM fraction |
+| `GPU_MEMORY_UTILIZATION` | `0.90` | GPU VRAM fraction |
 | `LORA_NAME` | `openclaw/assistant` | LoRA adapter identity |
 | `CLAAS_API_PORT` | `8080` | Host port for CLaaS API |
 | `OPENCLAW_PORT` | `18789` | Host port for OpenClaw gateway |

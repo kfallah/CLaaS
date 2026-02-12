@@ -115,7 +115,7 @@ All variables have sensible defaults. Edit `.env.openclaw-local` to override.
 | `API_KEY` | `sk-local` | vLLM API key |
 | `SERVED_MODEL_NAMES` | `qwen3-8b` | Comma-separated model names for the OpenAI-compatible API |
 | `MAX_MODEL_LEN` | `32768` | Maximum sequence length |
-| `GPU_MEMORY_UTILIZATION` | `0.95` | Fraction of GPU VRAM to use |
+| `GPU_MEMORY_UTILIZATION` | `0.90` | Fraction of GPU VRAM to use |
 | `ENABLE_SLEEP_MODE` | `1` | Enable vLLM sleep/wake for CLaaS feedback |
 | `ENABLE_AUTO_TOOL_CHOICE` | `1` | Enable tool calling |
 | `TOOL_CALL_PARSER` | `qwen3_xml` | Tool call format parser |
