@@ -77,6 +77,7 @@ web_app = FastAPI(
 )
 
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
+VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "sk-local")
 FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
 FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
 # Default "local" assumes GPU deps (torch, etc.) are available on this machine.
@@ -131,11 +132,44 @@ async def _get_feedback_lock(lora_id: str) -> asyncio.Lock:
         return _feedback_locks[key]
 
 
-async def _vllm_post(path: str, *, params: dict[str, Any] | None = None, timeout_s: float = 30.0) -> None:
+async def _vllm_post(
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    json_body: dict[str, Any] | None = None,
+    timeout_s: float = 30.0,
+) -> None:
     """Call a vLLM control endpoint and raise on non-success."""
+    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
     async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
-        resp = await client.post(path, params=params)
+        resp = await client.post(path, params=params, json=json_body, headers=headers)
     resp.raise_for_status()
+
+
+async def _vllm_reload_lora(lora_id: str) -> None:
+    """Unload and reload a LoRA adapter so vLLM picks up on-disk changes.
+
+    Requires VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 on the vLLM server.
+    """
+    import re
+
+    resolved = resolve_lora_id(lora_id)
+    vllm_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", lora_id.strip("/")).strip("-") or "lora"
+    lora_path = os.path.join(LORA_MOUNT_PATH, resolved)
+
+    try:
+        await _vllm_post(
+            "/v1/unload_lora_adapter",
+            json_body={"lora_name": vllm_name},
+        )
+    except httpx.HTTPStatusError as e:
+        # 400 = adapter not found (first run or already unloaded) — safe to ignore
+        if e.response.status_code != 400:
+            raise
+    await _vllm_post(
+        "/v1/load_lora_adapter",
+        json_body={"lora_name": vllm_name, "lora_path": lora_path},
+    )
 
 
 def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
@@ -312,6 +346,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             phase = "wake"
             wake_start = time.perf_counter()
             await _vllm_post("/wake_up")
+            await _vllm_reload_lora(request.lora_id)
             timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
             woke = True
 
@@ -469,21 +504,25 @@ async def health_check() -> HealthResponse:
     worker: ServiceHealth | None = None
     teacher: ServiceHealth | None = None
 
-    try:
-        worker_health_fn = modal.Function.from_name("claas-distill", "DistillWorker.health_check")
-        data = await asyncio.wait_for(worker_health_fn.remote.aio(), timeout=15)
-        worker = ServiceHealth.model_validate(data)
-    except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
-        worker = ServiceHealth(status="unhealthy", error=str(e))
-        status = "degraded"
+    if DISTILL_EXECUTION_MODE == "local":
+        worker = ServiceHealth(status="healthy", error=None)
+        teacher = ServiceHealth(status="healthy", error=None)
+    else:
+        try:
+            worker_health_fn = modal.Function.from_name("claas-distill", "DistillWorker.health_check")
+            data = await asyncio.wait_for(worker_health_fn.remote.aio(), timeout=15)
+            worker = ServiceHealth.model_validate(data)
+        except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
+            worker = ServiceHealth(status="unhealthy", error=str(e))
+            status = "degraded"
 
-    try:
-        teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
-        data = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
-        teacher = ServiceHealth.model_validate(data)
-    except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
-        teacher = ServiceHealth(status="unhealthy", error=str(e))
-        status = "degraded"
+        try:
+            teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
+            data = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
+            teacher = ServiceHealth.model_validate(data)
+        except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
+            teacher = ServiceHealth(status="unhealthy", error=str(e))
+            status = "degraded"
 
     return HealthResponse(status=status, worker=worker, teacher=teacher)
 

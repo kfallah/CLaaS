@@ -367,7 +367,10 @@ def create_initial_lora(
         "down_proj": (hidden_size, intermediate_size),
     }
 
-    # Build zero-initialised LoRA A/B tensors for every target module in every layer.
+    # Build LoRA A/B tensors for every target module in every layer.
+    # lora_A: Kaiming uniform (enables gradient flow), lora_B: zeros.
+    # This matches PEFT's default init and ensures the initial LoRA output is zero
+    # (B @ A @ x = 0 since B=0) while allowing gradients to propagate through A.
     tensors: dict[str, torch.Tensor] = {}
     for layer_idx in range(num_layers):
         for mod_name in target_modules:
@@ -375,7 +378,9 @@ def create_initial_lora(
             prefix = f"base_model.model.model.layers.{layer_idx}.self_attn.{mod_name}"
             if mod_name in ("gate_proj", "up_proj", "down_proj"):
                 prefix = f"base_model.model.model.layers.{layer_idx}.mlp.{mod_name}"
-            tensors[f"{prefix}.lora_A.weight"] = torch.zeros(lora_r, in_dim)
+            lora_a = torch.empty(lora_r, in_dim)
+            torch.nn.init.kaiming_uniform_(lora_a, a=5**0.5)
+            tensors[f"{prefix}.lora_A.weight"] = lora_a
             tensors[f"{prefix}.lora_B.weight"] = torch.zeros(out_dim, lora_r)
 
     with tempfile.TemporaryDirectory(prefix="lora_init_") as temp_dir:
