@@ -19,8 +19,12 @@ RESTART_BACKOFF_SECONDS="${RESTART_BACKOFF_SECONDS:-3}"
 VLLM_HEALTH_URL="${VLLM_HEALTH_URL:-http://127.0.0.1:8000/health}"
 VLLM_WAIT_SECONDS="${VLLM_WAIT_SECONDS:-180}"
 
-MODEL_IDS="${MODEL_IDS:-qwen3-8b}"
-PRIMARY_MODEL="${PRIMARY_MODEL:-qwen3-8b}"
+LORA_NAME="${LORA_NAME:-openclaw/assistant}"
+LORA_MODEL="${LORA_MODEL:-openclaw-assistant-latest}"
+MODEL_IDS="${MODEL_IDS:-qwen3-8b,$LORA_MODEL}"
+PRIMARY_MODEL="${PRIMARY_MODEL:-$LORA_MODEL}"
+
+INIT_SCRIPT="${INIT_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/init_lora.py}"
 
 cleanup_old_pid() {
   local pid_file="$1"
@@ -62,6 +66,12 @@ stop_pid_if_running() {
 start_stack_once() {
   cleanup_old_pid "$VLLM_PID_FILE"
   cleanup_old_pid "$GATEWAY_PID_FILE"
+
+  # Ensure LoRA adapter exists before vLLM tries to load it
+  echo "[$STACK_NAME] initializing LoRA adapter..."
+  CLAAS_STORAGE_BACKEND=local_fs \
+  LORA_NAME="$LORA_NAME" \
+  python3 "$INIT_SCRIPT" 2>&1 | sed "s/^/[$STACK_NAME] /"
 
   BASE_URL="${BASE_URL:-http://127.0.0.1:8000/v1}" \
   API_KEY="${API_KEY:-sk-local}" \

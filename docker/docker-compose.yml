@@ -77,6 +77,7 @@ services:
       - CLAAS_LORA_ROOT=/loras
       - CLAAS_DISTILL_EXECUTION_MODE=local
       - VLLM_BASE_URL=http://vllm:8000
+      - VLLM_API_KEY=sk-local
       - FEEDBACK_LOG_DIR=/feedback-logs
       - HF_TOKEN=${HF_TOKEN:-}
     volumes:
