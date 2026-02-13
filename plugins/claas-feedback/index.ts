@@ -26,10 +26,22 @@ import { submitFeedback } from "./src/feedback-client.ts";
 // FIFO queue: message_received pushes sender keys, agent_end pops them.
 const pendingSenders: string[] = [];
 
+const redactIdentifier = (value: string): string => {
+  const firstColon = value.indexOf(":");
+  if (firstColon < 0) return "***";
+  return `${value.slice(0, firstColon + 1)}***`;
+};
+
 export default function register(api: OpenClawPluginApi) {
   const config = api.config ?? ({} as Record<string, unknown>);
   const claasApiUrl: string = (config as any).claasApiUrl ?? "http://localhost:8080";
   const loraId: string = (config as any).loraId ?? "openclaw/assistant-latest";
+  const debugEnabled = (config as any).debug === true || process.env.CLAAS_FEEDBACK_DEBUG === "true";
+  const logDebug = (message: string): void => {
+    if (debugEnabled) {
+      console.debug(message);
+    }
+  };
 
   // -----------------------------------------------------------------------
   // Hook: message_received
@@ -47,7 +59,9 @@ export default function register(api: OpenClawPluginApi) {
     const prefix = `${channelId}:`;
     const rawFrom = from.startsWith(prefix) ? from.slice(prefix.length) : from;
     const senderKey = `${channelId}:${rawFrom}`;
-    console.log(`[claas-feedback] message_received: channelId=${channelId} from=${from} rawFrom=${rawFrom} senderKey=${senderKey}`);
+    logDebug(
+      `[claas-feedback] message_received: channelId=${channelId} senderKey=${redactIdentifier(senderKey)}`,
+    );
     pendingSenders.push(senderKey);
 
     // Safety: cap queue at 50 to prevent unbounded growth
@@ -71,7 +85,9 @@ export default function register(api: OpenClawPluginApi) {
     }
     if (!Array.isArray(messages) || messages.length === 0) return;
 
-    console.log(`[claas-feedback] agent_end: senderKey=${senderKey} messageCount=${messages.length}`);
+    logDebug(
+      `[claas-feedback] agent_end: senderKey=${redactIdentifier(senderKey)} messageCount=${messages.length}`,
+    );
     contextStore.set(senderKey, {
       messages,
       sessionKey: senderKey,
@@ -109,8 +125,7 @@ export default function register(api: OpenClawPluginApi) {
       const prefix = `${channel}:`;
       const rawFrom = from.startsWith(prefix) ? from.slice(prefix.length) : from;
       const senderKey = `${channel}:${rawFrom}`;
-      console.log(`[claas-feedback] /feedback lookup: senderKey=${senderKey} from=${from}`);
-      console.log(`[claas-feedback] contextStore keys: ${JSON.stringify(contextStore.keys())}`);
+      logDebug(`[claas-feedback] /feedback lookup: senderKey=${redactIdentifier(senderKey)}`);
       const cached = contextStore.get(senderKey);
       if (!cached) {
         return {

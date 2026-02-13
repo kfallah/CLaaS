@@ -289,12 +289,13 @@ class TestComputeSdpoLoss:
         response_ids = torch.randint(0, V, (B, T), device=device)
         response_mask = torch.ones(B, T, device=device)
 
-        # Create teacher logprobs from full-vocab softmax (already normalized)
-        full_logprobs = torch.log_softmax(torch.randn(B, T, V, device=device), dim=-1)
-        teacher_logprobs_norm, teacher_indices = full_logprobs.topk(K, dim=-1)
+        # Create an un-normalized top-K variant (raw logits)
+        full_logits = torch.randn(B, T, V, device=device)
+        teacher_logprobs_raw, teacher_indices = full_logits.topk(K, dim=-1)
 
-        # Create un-normalized version (raw top-K that don't sum to 1)
-        teacher_logprobs_raw = teacher_logprobs_norm.clone()
+        # Create normalized top-K variant from full-vocab log-softmax
+        full_logprobs = torch.log_softmax(full_logits, dim=-1)
+        teacher_logprobs_norm = full_logprobs.gather(-1, teacher_indices)
 
         with torch.no_grad():
             base_logprobs = torch.log_softmax(
@@ -304,21 +305,28 @@ class TestComputeSdpoLoss:
                 student_logits.detach(), dim=-1
             ).gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
 
-        common = dict(
-            student_logits=student_logits,
-            teacher_indices=teacher_indices,
-            base_logprobs=base_logprobs,
-            response_mask=response_mask,
-            old_student_logprobs=old_student_logprobs,
-            response_ids=response_ids,
+        result_norm = compute_sdpo_loss(
+            SDPOLossInput(
+                student_logits=student_logits,
+                teacher_logprobs=teacher_logprobs_norm,
+                teacher_indices=teacher_indices,
+                base_logprobs=base_logprobs,
+                response_mask=response_mask,
+                old_student_logprobs=old_student_logprobs,
+                response_ids=response_ids,
+            )
         )
-
-        result_norm = compute_sdpo_loss(SDPOLossInput(
-            teacher_logprobs=teacher_logprobs_norm, **common
-        ))
-        result_raw = compute_sdpo_loss(SDPOLossInput(
-            teacher_logprobs=teacher_logprobs_raw, **common
-        ))
+        result_raw = compute_sdpo_loss(
+            SDPOLossInput(
+                student_logits=student_logits,
+                teacher_logprobs=teacher_logprobs_raw,
+                teacher_indices=teacher_indices,
+                base_logprobs=base_logprobs,
+                response_mask=response_mask,
+                old_student_logprobs=old_student_logprobs,
+                response_ids=response_ids,
+            )
+        )
 
         assert torch.isclose(
             torch.tensor(result_norm["distill_loss"]),

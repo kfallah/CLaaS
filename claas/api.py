@@ -108,6 +108,27 @@ FEEDBACK_DRAIN_TIMEOUT_S = float(os.environ.get("FEEDBACK_DRAIN_TIMEOUT_S", "30"
 # None = auto-derive from LoRA ID.  "" = disabled.
 VLLM_ROLLOUT_MODEL = os.environ.get("VLLM_ROLLOUT_MODEL")
 
+ALLOWED_INIT_BASE_MODELS = {
+    model.strip()
+    for model in os.environ.get("CLAAS_ALLOWED_INIT_BASE_MODELS", "Qwen/Qwen3-8B").split(",")
+    if model.strip()
+}
+
+
+def _validate_init_base_model(base_model: str) -> None:
+    if base_model in ALLOWED_INIT_BASE_MODELS:
+        return
+
+    logger.warning("Rejected /v1/lora/init for disallowed base_model: %s", base_model)
+    allowed = ", ".join(sorted(ALLOWED_INIT_BASE_MODELS))
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"base_model '{base_model}' is not allowed for initialization. "
+            f"Allowed models: {allowed}"
+        ),
+    )
+
 
 
 
@@ -582,6 +603,8 @@ async def init_lora(request: LoraInitRequest) -> LoraInitResponse:
     The adapter will have zero weights initially and will be trained
     through distill calls.
     """
+    _validate_init_base_model(request.base_model)
+
     try:
         # Run sync function in thread pool to avoid blocking
         lora_id = await asyncio.to_thread(
