@@ -39,9 +39,19 @@ def _read_aliases() -> dict[str, str]:
     if not p.exists():
         return {}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        raw_aliases = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+
+    if not isinstance(raw_aliases, dict):
+        return {}
+
+    aliases: dict[str, str] = {}
+    for alias, target in raw_aliases.items():
+        if not isinstance(alias, str) or not isinstance(target, str):
+            continue
+        aliases[alias.strip("/")] = target.strip("/")
+    return aliases
 
 
 # ---------------------------------------------------------------------------
