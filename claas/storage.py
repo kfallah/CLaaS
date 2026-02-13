@@ -366,6 +366,14 @@ def create_initial_lora(
         "up_proj": (intermediate_size, hidden_size),
         "down_proj": (hidden_size, intermediate_size),
     }
+    unsupported_modules = sorted(set(target_modules) - set(dim_map))
+    if unsupported_modules:
+        raise ValueError(
+            "Unsupported target_modules: "
+            + ", ".join(unsupported_modules)
+            + ". Supported modules: "
+            + ", ".join(sorted(dim_map))
+        )
 
     # Build LoRA A/B tensors for every target module in every layer.
     # lora_A: Kaiming uniform (enables gradient flow), lora_B: zeros.
