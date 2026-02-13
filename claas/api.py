@@ -287,7 +287,7 @@ async def _vllm_reload_lora(lora_id: str) -> None:
     import re
 
     resolved = resolve_lora_id(lora_id)
-    vllm_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", lora_id.strip("/")).strip("-") or "lora"
+    vllm_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", resolved.strip("/")).strip("-") or "lora"
     lora_path = os.path.join(LORA_MOUNT_PATH, resolved)
 
     try:
@@ -296,8 +296,8 @@ async def _vllm_reload_lora(lora_id: str) -> None:
             json_body={"lora_name": vllm_name},
         )
     except httpx.HTTPStatusError as e:
-        # 400 = adapter not found (first run or already unloaded) — safe to ignore
-        if e.response.status_code != 400:
+        # 404 = adapter not found (first run or already unloaded) — safe to ignore
+        if e.response.status_code != 404:
             raise
     await _vllm_post(
         "/v1/load_lora_adapter",
