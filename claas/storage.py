@@ -21,6 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import modal
+import torch
+from safetensors.torch import save_file
+from transformers import AutoConfig
 
 # Modal volume for LoRA storage
 lora_volume = modal.Volume.from_name("claas-loras", create_if_missing=True)
@@ -324,10 +327,6 @@ def create_initial_lora(
     Returns:
         The lora_id of the created adapter
     """
-    import torch
-    from safetensors.torch import save_file
-    from transformers import AutoConfig
-
     if target_modules is None:
         target_modules = [
             "q_proj", "k_proj", "v_proj", "o_proj",
@@ -376,9 +375,12 @@ def create_initial_lora(
         )
 
     # Build LoRA A/B tensors for every target module in every layer.
+    # PEFT normally does this inside get_peft_model(), but that path requires
+    # loading the full base model in memory. Here we only need adapter artifacts
+    # for storage/vLLM bootstrap, so we reproduce PEFT's init directly.
     # lora_A: Kaiming uniform (enables gradient flow), lora_B: zeros.
-    # This matches PEFT's default init and ensures the initial LoRA output is zero
-    # (B @ A @ x = 0 since B=0) while allowing gradients to propagate through A.
+    # This ensures the initial LoRA output is zero (B @ A @ x = 0 since B=0)
+    # while allowing gradients to propagate through A.
     tensors: dict[str, torch.Tensor] = {}
     for layer_idx in range(num_layers):
         for mod_name in target_modules:

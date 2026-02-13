@@ -35,7 +35,11 @@ from .storage import (
     save_lora,
     save_lora_inplace,
 )
-from .teacher import parse_teacher_result
+from .teacher import (
+    build_teacher_messages,
+    parse_teacher_result,
+    teacher_messages_to_chat_template,
+)
 from .types import SDPOLossInput, TrainingConfig
 
 if TYPE_CHECKING:
@@ -232,11 +236,13 @@ class DistillWorker:
         """
         import torch
 
-        from .teacher import build_teacher_messages
-
         messages = build_teacher_messages(prompt, feedback)
+        template_messages = teacher_messages_to_chat_template(messages)
         teacher_prompt_ids_raw = self.tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, return_tensors="pt", tokenize=True,
+            template_messages,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            tokenize=True,
         )
         teacher_prompt_ids = cast("torch.Tensor", teacher_prompt_ids_raw).to(self.device)
         teacher_full_ids = torch.cat([teacher_prompt_ids, response_ids], dim=-1)
