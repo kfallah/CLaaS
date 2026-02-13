@@ -21,11 +21,8 @@ When this skill is invoked, perform the following steps. The user may pass a Tel
 ### 1. Install dependencies
 
 ```bash
-# Install CLaaS (from repo root)
-pip install -e .
-
-# Install vLLM
-pip install vllm
+# Install CLaaS + vLLM (from repo root)
+uv sync --extra teacher --extra dev
 
 # Install OpenClaw
 npm install -g openclaw@latest

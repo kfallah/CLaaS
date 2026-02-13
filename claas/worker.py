@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import tempfile
+from typing import TYPE_CHECKING, cast
 
 import modal
 
@@ -36,6 +37,10 @@ from .storage import (
 )
 from .teacher import parse_teacher_result
 from .types import SDPOLossInput, TrainingConfig
+
+if TYPE_CHECKING:
+    import torch
+    from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +90,9 @@ training_image = (
 class DistillWorker:
     """Training worker for SDPO continual distillation."""
 
+    device: "torch.device"
+    tokenizer: "PreTrainedTokenizerBase"
+    base_model: "PreTrainedModel"
     base_model_id: str = os.environ.get(
         "CLAAS_BASE_MODEL_ID",
         "Qwen/Qwen3-8B",
@@ -227,9 +235,10 @@ class DistillWorker:
         from .teacher import build_teacher_messages
 
         messages = build_teacher_messages(prompt, feedback)
-        teacher_prompt_ids = self.tokenizer.apply_chat_template(
+        teacher_prompt_ids_raw = self.tokenizer.apply_chat_template(
             messages, add_generation_prompt=True, return_tensors="pt", tokenize=True,
-        ).to(self.device)
+        )
+        teacher_prompt_ids = cast("torch.Tensor", teacher_prompt_ids_raw).to(self.device)
         teacher_full_ids = torch.cat([teacher_prompt_ids, response_ids], dim=-1)
         teacher_resp_start = teacher_prompt_ids.shape[-1]
         T_resp = response_ids.shape[-1]
@@ -261,7 +270,7 @@ class DistillWorker:
 
         try:
             before_mb = torch.cuda.memory_allocated() / 1e6
-            self.base_model.to("cpu")
+            torch.nn.Module.to(self.base_model, "cpu")
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
             after_mb = torch.cuda.memory_allocated() / 1e6
@@ -299,7 +308,7 @@ class DistillWorker:
         # Ensure base model is on GPU (may have been offloaded to CPU after
         # the previous distill step to free VRAM for vLLM).
         if next(self.base_model.parameters()).device.type != "cuda":
-            self.base_model.to(self.device)
+            torch.nn.Module.to(self.base_model, self.device)
 
         # Validate request
         if "lora_id" not in request:

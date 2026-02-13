@@ -20,10 +20,11 @@ This enables real-time model personalization where the model learns from each in
 ## Installation
 
 ```bash
-pip install -e .
+uv sync
 ```
 
-**Prerequisites:** Python 3.11+, a CUDA GPU, and `vllm` for local serving. For remote execution, also install `modal` and run `modal token new`.
+**Prerequisites:** Python 3.11+, `uv`, a CUDA GPU, and `vllm` for local serving.
+For remote execution, also run `uv run modal token new`.
 
 ## Quick Start
 
@@ -33,7 +34,7 @@ vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 \
   --enable-lora --lora-modules my-lora=/loras/user/my-lora-init
 
 # 2. Start the CLaaS API
-uvicorn claas.api:web_app --host 0.0.0.0 --port 8080
+uv run uvicorn claas.api:web_app --host 0.0.0.0 --port 8080
 
 # 3. Initialize a LoRA adapter
 curl -X POST http://localhost:8080/v1/lora/init \
@@ -131,7 +132,7 @@ To deploy the service on Modal instead of running locally:
 export HF_TOKEN=...
 export CLAAS_BASE_MODEL_ID=Qwen/Qwen3-8B
 
-modal deploy -m claas.deploy
+uv run modal deploy -m claas.deploy
 ```
 
 The deployed app exposes the same API at `https://your-app--claas-distill-fastapi-app.modal.run`. LoRAs are stored in the `claas-loras` Modal Volume.

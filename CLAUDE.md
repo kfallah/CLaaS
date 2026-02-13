@@ -7,11 +7,13 @@
 Run lint and type checking after every code change:
 
 ```bash
+uv sync --extra dev
+
 # Lint and auto-fix
-uvx ruff check claas/ tests/ --fix
+uv run ruff check claas/ tests/ --fix
 
 # Type check (import errors for modal/torch/vllm are expected)
-uvx ty check
+uv run ty check
 ```
 
 Note: GPU dependencies (modal, torch, vllm, transformers, peft) are not installed locally. `ty check` will report `unresolved-import` errors for these - this is expected and can be ignored.
@@ -19,7 +21,7 @@ Note: GPU dependencies (modal, torch, vllm, transformers, peft) are not installe
 ### Run Tests
 
 ```bash
-pytest tests/ -v
+uv run pytest tests/ -v
 ```
 
 ## Project Structure
