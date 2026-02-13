@@ -5,9 +5,15 @@ Run OpenClaw with a local vLLM server serving Qwen3-8B and CLaaS LoRA adapters.
 ## Prerequisites
 
 - NVIDIA GPU with >= 24 GB VRAM (L40S, A100, RTX 4090, etc.)
-- vLLM >= 0.11.0 (`pip install vllm`)
+- `uv` installed
 - OpenClaw CLI (`openclaw` binary in PATH)
 - Python 3.10+
+
+Install project dependencies (including vLLM) from repo root:
+
+```bash
+uv sync --extra teacher --extra dev
+```
 
 Verify your setup:
 
@@ -29,7 +35,7 @@ cp scripts/openclaw-local/openclaw-local.env.example .env.openclaw-local
 set -a; source .env.openclaw-local; set +a
 
 # 3. Run the supervised stack (auto-restarts on crash)
-bash scripts/openclaw-local/run_openclaw_local_stack.sh
+uv run bash scripts/openclaw-local/run_openclaw_local_stack.sh
 ```
 
 This starts vLLM + the OpenClaw gateway and monitors both. If either
@@ -50,7 +56,7 @@ set -a; source .env.openclaw-local; set +a
 ### 2. Start vLLM
 
 ```bash
-bash scripts/openclaw-local/start_vllm_qwen3_8b.sh
+uv run bash scripts/openclaw-local/start_vllm_qwen3_8b.sh
 ```
 
 This runs `vllm serve Qwen/Qwen3-8B` with:
@@ -73,7 +79,7 @@ curl http://127.0.0.1:8000/v1/models -H "Authorization: Bearer sk-local"
 ### 3. Configure OpenClaw to use local vLLM
 
 ```bash
-python3 scripts/openclaw-local/configure_openclaw_local_models.py
+uv run python scripts/openclaw-local/configure_openclaw_local_models.py
 ```
 
 This writes `~/.openclaw/openclaw.json` and
@@ -89,7 +95,7 @@ openclaw gateway --port 18789 --verbose
 Or use the script (waits for vLLM health first):
 
 ```bash
-bash scripts/openclaw-local/start_openclaw_gateway_local.sh
+uv run bash scripts/openclaw-local/start_openclaw_gateway_local.sh
 ```
 
 ### 5. Verify
@@ -115,7 +121,7 @@ All variables have sensible defaults. Edit `.env.openclaw-local` to override.
 | `API_KEY` | `sk-local` | vLLM API key |
 | `SERVED_MODEL_NAMES` | `qwen3-8b` | Comma-separated model names for the OpenAI-compatible API |
 | `MAX_MODEL_LEN` | `32768` | Maximum sequence length |
-| `GPU_MEMORY_UTILIZATION` | `0.95` | Fraction of GPU VRAM to use |
+| `GPU_MEMORY_UTILIZATION` | `0.70` | Fraction of GPU VRAM to use |
 | `ENABLE_SLEEP_MODE` | `1` | Enable vLLM sleep/wake for CLaaS feedback |
 | `ENABLE_AUTO_TOOL_CHOICE` | `1` | Enable tool calling |
 | `TOOL_CALL_PARSER` | `qwen3_xml` | Tool call format parser |
@@ -217,7 +223,7 @@ The gateway startup script waits up to 180s for vLLM health. If vLLM
 is slow to load (large model, cold HF cache), increase `VLLM_WAIT_SECONDS`:
 
 ```bash
-VLLM_WAIT_SECONDS=300 bash scripts/openclaw-local/run_openclaw_local_stack.sh
+VLLM_WAIT_SECONDS=300 uv run bash scripts/openclaw-local/run_openclaw_local_stack.sh
 ```
 
 ## Scripts Reference

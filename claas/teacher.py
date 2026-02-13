@@ -15,7 +15,7 @@ from __future__ import annotations
 import importlib
 import os
 import warnings
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 import modal
 import torch
@@ -34,6 +34,13 @@ class HealthCheckResult(TypedDict):
     status: str
     model: str
     ready: bool
+
+
+class ChatMessage(TypedDict):
+    """Typed chat message invariant for teacher prompt formatting."""
+
+    role: Literal["system", "user", "assistant"]
+    content: str
 
 # Modal app (shared with training worker)
 app = modal.App("claas-distill")
@@ -214,47 +221,67 @@ class TeacherService:
         )
 
 
-def format_teacher_prompt(
-    user_prompt: str,
+def build_teacher_messages(
+    prompt: str,
     feedback: str | None = None,
     system_prompt: str | None = None,
-) -> str:
-    """Format prompt for the teacher model.
+) -> list[ChatMessage]:
+    """Build chat messages for teacher prompt (veRL-compatible template).
 
-    The teacher evaluates the student's response in context, providing
-    logprobs that indicate how likely the teacher would have generated
-    each token.
+    Template matches veRL's reprompt_template structure:
+    {prompt}{feedback}\\n\\nCorrectly solve the original question.
 
     Args:
-        user_prompt: The original user prompt
+        prompt: The original user prompt
         feedback: Optional feedback about the response quality
         system_prompt: Optional system prompt
 
     Returns:
-        Formatted prompt string for the teacher
+        List of message dicts with 'role' and 'content' keys
     """
     if system_prompt is None:
         system_prompt = (
             "You are an expert coding assistant. Provide high-quality, "
             "correct, and well-explained code solutions."
         )
+    messages: list[ChatMessage] = [{"role": "system", "content": system_prompt}]
 
-    # For scoring, we want the teacher to see the same context the student saw
-    # The teacher's logprobs on the response tokens indicate agreement/disagreement
-    parts = [f"<|im_start|>system\n{system_prompt}<|im_end|>"]
-
-    # Include feedback in the prompt if provided
+    # Build user content with veRL-style template
     if feedback:
-        parts.append(
-            f"<|im_start|>user\n{user_prompt}\n\n"
-            f"[Feedback on previous attempt: {feedback}]<|im_end|>"
+        feedback_section = (
+            "\n\nThe following is feedback from your unsuccessful earlier attempt:"
+            f"\n\n{feedback}\n"
         )
+        user_content = f"{prompt}{feedback_section}\n\nCorrectly solve the original question.\n"
     else:
-        parts.append(f"<|im_start|>user\n{user_prompt}<|im_end|>")
+        user_content = prompt
 
+    messages.append({"role": "user", "content": user_content})
+    return messages
+
+
+def teacher_messages_to_chat_template(messages: list[ChatMessage]) -> list[dict[str, str]]:
+    """Convert typed chat messages to transformers chat-template input."""
+    return [{"role": msg["role"], "content": msg["content"]} for msg in messages]
+
+
+def messages_to_chatml(messages: list[ChatMessage]) -> str:
+    """Convert chat messages to a ChatML string ending with assistant prompt."""
+    parts = []
+    for msg in messages:
+        parts.append(f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>")
     parts.append("<|im_start|>assistant\n")
-
     return "".join(parts)
+
+
+def format_teacher_prompt(
+    user_prompt: str,
+    feedback: str | None = None,
+    system_prompt: str | None = None,
+) -> str:
+    """Format prompt for the teacher model as a ChatML string."""
+    messages = build_teacher_messages(user_prompt, feedback, system_prompt)
+    return messages_to_chatml(messages)
 
 
 def parse_teacher_result(

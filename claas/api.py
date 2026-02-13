@@ -49,6 +49,7 @@ from .storage import (
     lora_volume,
     resolve_lora_id,
 )
+from .teacher import format_teacher_prompt
 from .types import (
     DistillRequest,
     DistillResponse,
@@ -77,6 +78,7 @@ web_app = FastAPI(
 )
 
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
+VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "sk-local")
 FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
 FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
 # Default "local" assumes GPU deps (torch, etc.) are available on this machine.
@@ -96,29 +98,36 @@ def _env_flag(name: str, default: bool) -> bool:
 
 FEEDBACK_WAKE_ON_FAILURE = _env_flag("FEEDBACK_WAKE_ON_FAILURE", True)
 
+# Minimum free GPU memory (GB) required before starting training.
+FEEDBACK_MIN_FREE_VRAM_GB = float(os.environ.get("FEEDBACK_MIN_FREE_VRAM_GB", "20"))
+# Maximum seconds to wait for GPU memory after vLLM sleep.
+FEEDBACK_SLEEP_VERIFY_TIMEOUT_S = float(os.environ.get("FEEDBACK_SLEEP_VERIFY_TIMEOUT_S", "30"))
+# Maximum seconds to wait for in-flight vLLM requests to drain before sleeping.
+FEEDBACK_DRAIN_TIMEOUT_S = float(os.environ.get("FEEDBACK_DRAIN_TIMEOUT_S", "30"))
+# vLLM model name for fetching rollout logprobs.
+# None = auto-derive from LoRA ID.  "" = disabled.
+VLLM_ROLLOUT_MODEL = os.environ.get("VLLM_ROLLOUT_MODEL")
 
-def _format_teacher_prompt(
-    user_prompt: str,
-    feedback: str | None = None,
-    system_prompt: str | None = None,
-) -> str:
-    """Format prompt for teacher scoring without importing training deps."""
-    if system_prompt is None:
-        system_prompt = (
-            "You are an expert coding assistant. Provide high-quality, "
-            "correct, and well-explained code solutions."
-        )
+ALLOWED_INIT_BASE_MODELS = {
+    model.strip()
+    for model in os.environ.get("CLAAS_ALLOWED_INIT_BASE_MODELS", "Qwen/Qwen3-8B").split(",")
+    if model.strip()
+}
 
-    parts = [f"<|im_start|>system\n{system_prompt}<|im_end|>"]
-    if feedback:
-        parts.append(
-            f"<|im_start|>user\n{user_prompt}\n\n"
-            f"[Feedback on previous attempt: {feedback}]<|im_end|>"
-        )
-    else:
-        parts.append(f"<|im_start|>user\n{user_prompt}<|im_end|>")
-    parts.append("<|im_start|>assistant\n")
-    return "".join(parts)
+
+def _validate_init_base_model(base_model: str) -> None:
+    if base_model in ALLOWED_INIT_BASE_MODELS:
+        return
+
+    logger.warning("Rejected /v1/lora/init for disallowed base_model: %s", base_model)
+    allowed = ", ".join(sorted(ALLOWED_INIT_BASE_MODELS))
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"base_model '{base_model}' is not allowed for initialization. "
+            f"Allowed models: {allowed}"
+        ),
+    )
 
 
 
@@ -131,11 +140,188 @@ async def _get_feedback_lock(lora_id: str) -> asyncio.Lock:
         return _feedback_locks[key]
 
 
-async def _vllm_post(path: str, *, params: dict[str, Any] | None = None, timeout_s: float = 30.0) -> None:
+async def _vllm_post(
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    json_body: dict[str, Any] | None = None,
+    timeout_s: float = 30.0,
+) -> None:
     """Call a vLLM control endpoint and raise on non-success."""
+    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
     async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
-        resp = await client.post(path, params=params)
+        resp = await client.post(path, params=params, json=json_body, headers=headers)
     resp.raise_for_status()
+
+
+async def _wait_for_vllm_idle(
+    timeout_s: float = FEEDBACK_DRAIN_TIMEOUT_S,
+) -> None:
+    """Poll vLLM ``/metrics`` until no requests are running or waiting.
+
+    Raises :class:`TimeoutError` if vLLM is still busy after *timeout_s*.
+    """
+    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
+    deadline = time.perf_counter() + timeout_s
+
+    while True:
+        async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=10) as client:
+            resp = await client.get("/metrics", headers=headers)
+        resp.raise_for_status()
+
+        running = 0
+        waiting = 0
+        for line in resp.text.splitlines():
+            if line.startswith("vllm:num_requests_running"):
+                running += int(float(line.split()[-1]))
+            elif line.startswith("vllm:num_requests_waiting"):
+                waiting += int(float(line.split()[-1]))
+
+        if running == 0 and waiting == 0:
+            logger.info("vLLM idle (0 running, 0 waiting) — safe to sleep")
+            return
+
+        if time.perf_counter() >= deadline:
+            raise TimeoutError(
+                f"vLLM still busy after {timeout_s}s: "
+                f"{running} running, {waiting} waiting"
+            )
+
+        logger.info(
+            "vLLM busy (%d running, %d waiting) — polling again in 0.5s",
+            running,
+            waiting,
+        )
+        await asyncio.sleep(0.5)
+
+
+def _resolve_vllm_model_name(lora_id: str) -> str | None:
+    """Derive the vLLM model name for a LoRA, matching _vllm_reload_lora logic.
+
+    Returns ``None`` when rollout-logprob fetching is explicitly disabled
+    (``VLLM_ROLLOUT_MODEL=""``) or when *lora_id* is empty.
+    """
+    import re
+
+    if VLLM_ROLLOUT_MODEL == "":
+        return None
+    if VLLM_ROLLOUT_MODEL is not None:
+        return VLLM_ROLLOUT_MODEL
+    return re.sub(r"[^a-zA-Z0-9._-]+", "-", lora_id.strip("/")).strip("-") or None
+
+
+async def _fetch_rollout_logprobs(
+    prompt: str,
+    response: str,
+    model: str,
+    timeout_s: float = 60.0,
+) -> list[float]:
+    """Fetch per-token logprobs for *response* from the vLLM completions API.
+
+    1. Tokenize the prompt to learn its token count.
+    2. Submit ``prompt + response`` with ``max_tokens=0`` and ``prompt_logprobs=1``.
+    3. Strip the prompt portion and extract the log-probability for each
+       response token.
+    """
+    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
+    async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
+        tok_resp = await client.post(
+            "/tokenize",
+            json={"model": model, "prompt": prompt},
+            headers=headers,
+        )
+        tok_resp.raise_for_status()
+        prompt_token_count = tok_resp.json()["count"]
+
+        comp_resp = await client.post(
+            "/v1/completions",
+            json={
+                "model": model,
+                "prompt": prompt + response,
+                "max_tokens": 0,
+                "prompt_logprobs": 1,
+            },
+            headers=headers,
+        )
+        comp_resp.raise_for_status()
+
+    raw_logprobs = comp_resp.json()["choices"][0]["prompt_logprobs"]
+
+    # Skip prompt tokens and null entries; extract logprob values.
+    logprobs: list[float] = []
+    for entry in raw_logprobs[prompt_token_count:]:
+        if entry is None:
+            continue
+        top = next(iter(entry.values()))
+        logprobs.append(top["logprob"])
+    return logprobs
+
+
+async def _verify_gpu_ready(
+    min_free_gb: float = FEEDBACK_MIN_FREE_VRAM_GB,
+    timeout_s: float = FEEDBACK_SLEEP_VERIFY_TIMEOUT_S,
+) -> None:
+    """Poll GPU memory until *min_free_gb* is available or *timeout_s* expires.
+
+    Called after ``POST /sleep`` so training only starts once vLLM has
+    actually released its VRAM.  If torch is not installed (CPU-only API
+    image) the check is skipped silently.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return
+    except ImportError:
+        return
+
+    deadline = time.perf_counter() + timeout_s
+    while True:
+        free_bytes, _total = torch.cuda.mem_get_info()
+        free_gb = free_bytes / (1024**3)
+        if free_gb >= min_free_gb:
+            logger.info("GPU has %.1f GB free — ready for training", free_gb)
+            return
+        if time.perf_counter() >= deadline:
+            logger.warning(
+                "Only %.1f GB GPU memory free after waiting %.0fs for vLLM sleep. "
+                "Training may OOM.",
+                free_gb,
+                timeout_s,
+            )
+            return
+        logger.info(
+            "GPU has %.1f GB free (need %.1f GB) — waiting for vLLM to release memory…",
+            free_gb,
+            min_free_gb,
+        )
+        await asyncio.sleep(1.0)
+
+
+async def _vllm_reload_lora(lora_id: str) -> None:
+    """Unload and reload a LoRA adapter so vLLM picks up on-disk changes.
+
+    Requires VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 on the vLLM server.
+    """
+    import re
+
+    resolved = resolve_lora_id(lora_id)
+    vllm_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", resolved.strip("/")).strip("-") or "lora"
+    lora_path = os.path.join(LORA_MOUNT_PATH, resolved)
+
+    try:
+        await _vllm_post(
+            "/v1/unload_lora_adapter",
+            json_body={"lora_name": vllm_name},
+        )
+    except httpx.HTTPStatusError as e:
+        # 404 = adapter not found (first run or already unloaded) — safe to ignore
+        if e.response.status_code != 404:
+            raise
+    await _vllm_post(
+        "/v1/load_lora_adapter",
+        json_body={"lora_name": vllm_name, "lora_path": lora_path},
+    )
 
 
 def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
@@ -175,16 +361,15 @@ async def _run_distill(payload: dict[str, Any]) -> dict[str, Any]:
             result = await asyncio.to_thread(worker.distill.local, payload)
             return DistillResponse.model_validate(result).model_dump()
         finally:
-            # Release worker refs so vLLM can reclaim VRAM on wake.
+            # Offload the base model to CPU so vLLM can reclaim full VRAM.
+            # This must happen even on failure — otherwise the 16GB base model
+            # stays on GPU and vLLM's wake triggers CUDA memory conflicts.
+            try:
+                await asyncio.to_thread(worker._offload_base_model)
+            except Exception:
+                logger.warning("Failed to offload base model to CPU", exc_info=True)
             del worker
             gc.collect()
-            try:
-                import torch
-
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except ImportError:
-                pass
 
     distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
     result = await distill_fn.remote.aio(payload)
@@ -224,7 +409,7 @@ async def distill(request: DistillRequest) -> DistillResponse:
         # Remote teacher is optional; self-distillation is the default path.
         if request.training.teacher_mode == "remote":
             teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-            teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback)
+            teacher_prompt = format_teacher_prompt(request.prompt, request.feedback)
             teacher_scored = await teacher_score_fn.remote.aio(
                 prompts=[teacher_prompt],
                 completions=[request.response],
@@ -276,12 +461,33 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
         lock_acquired = True
 
         if request.orchestration.sleep_before:
+            phase = "drain"
+            try:
+                await _wait_for_vllm_idle()
+            except (TimeoutError, httpx.HTTPError) as e:
+                raise HTTPException(status_code=503, detail=f"vLLM not idle: {e}") from e
+
+            if request.rollout_logprobs is None:
+                phase = "logprobs"
+                logprobs_start = time.perf_counter()
+                vllm_model = _resolve_vllm_model_name(request.lora_id)
+                if vllm_model:
+                    try:
+                        fetched = await _fetch_rollout_logprobs(
+                            request.prompt, request.response, vllm_model,
+                        )
+                        request = request.model_copy(update={"rollout_logprobs": fetched})
+                    except (httpx.HTTPError, ValueError, KeyError) as e:
+                        logger.warning("Failed to fetch rollout logprobs: %s", e)
+                timing_ms.logprobs = int((time.perf_counter() - logprobs_start) * 1000)
+
             phase = "sleep"
             sleep_start = time.perf_counter()
             await _vllm_post(
                 "/sleep",
                 params={"level": request.orchestration.sleep_level},
             )
+            await _verify_gpu_ready()
             timing_ms.sleep = int((time.perf_counter() - sleep_start) * 1000)
             slept = True
 
@@ -292,7 +498,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
 
         if request.training.teacher_mode == "remote":
             teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-            teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback)
+            teacher_prompt = format_teacher_prompt(request.prompt, request.feedback)
             teacher_scored = await teacher_score_fn.remote.aio(
                 prompts=[teacher_prompt],
                 completions=[request.response],
@@ -312,6 +518,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             phase = "wake"
             wake_start = time.perf_counter()
             await _vllm_post("/wake_up")
+            await _vllm_reload_lora(request.lora_id)
             timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
             woke = True
 
@@ -322,6 +529,17 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
         raise HTTPException(status_code=409, detail=error_message) from None
     except HTTPException as e:
         error_message = str(e.detail)
+        logger.error("Feedback %s failed in phase '%s' (HTTP %d): %s", request_id, phase, e.status_code, error_message)
+        raise
+    except (ValueError, RuntimeError, ImportError, OSError, httpx.HTTPError) as e:
+        error_message = str(e)
+        logger.error("Feedback %s failed in phase '%s': %s", request_id, phase, error_message, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Feedback update failed in phase '{phase}': {error_message}",
+        ) from e
+    finally:
+        # Wake vLLM if we slept it and haven't woken it yet.
         if (
             slept
             and not woke
@@ -331,26 +549,10 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             try:
                 await _vllm_post("/wake_up")
                 woke = True
+                logger.info("Feedback %s: woke vLLM after failure in phase '%s'", request_id, phase)
             except httpx.HTTPError as wake_err:
-                logger.warning("Failed to wake vLLM after HTTP error: %s", wake_err)
-        raise
-    except (ValueError, RuntimeError, OSError, httpx.HTTPError) as e:
-        error_message = str(e)
-        if (
-            slept
-            and request.orchestration.wake_after
-            and (request.orchestration.wake_on_failure or FEEDBACK_WAKE_ON_FAILURE)
-        ):
-            try:
-                await _vllm_post("/wake_up")
-                woke = True
-            except httpx.HTTPError as wake_err:
-                logger.warning("Failed to wake vLLM after error: %s", wake_err)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Feedback update failed in phase '{phase}': {error_message}",
-        ) from e
-    finally:
+                logger.warning("Feedback %s: failed to wake vLLM after error: %s", request_id, wake_err)
+
         timing_ms.total = int((time.perf_counter() - started_total) * 1000)
         if lock_acquired:
             lock.release()
@@ -396,6 +598,8 @@ async def init_lora(request: LoraInitRequest) -> LoraInitResponse:
     The adapter will have zero weights initially and will be trained
     through distill calls.
     """
+    _validate_init_base_model(request.base_model)
+
     try:
         # Run sync function in thread pool to avoid blocking
         lora_id = await asyncio.to_thread(
@@ -469,21 +673,25 @@ async def health_check() -> HealthResponse:
     worker: ServiceHealth | None = None
     teacher: ServiceHealth | None = None
 
-    try:
-        worker_health_fn = modal.Function.from_name("claas-distill", "DistillWorker.health_check")
-        data = await asyncio.wait_for(worker_health_fn.remote.aio(), timeout=15)
-        worker = ServiceHealth.model_validate(data)
-    except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
-        worker = ServiceHealth(status="unhealthy", error=str(e))
-        status = "degraded"
+    if DISTILL_EXECUTION_MODE == "local":
+        worker = ServiceHealth(status="healthy", error=None)
+        teacher = ServiceHealth(status="healthy", error=None)
+    else:
+        try:
+            worker_health_fn = modal.Function.from_name("claas-distill", "DistillWorker.health_check")
+            data = await asyncio.wait_for(worker_health_fn.remote.aio(), timeout=15)
+            worker = ServiceHealth.model_validate(data)
+        except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
+            worker = ServiceHealth(status="unhealthy", error=str(e))
+            status = "degraded"
 
-    try:
-        teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
-        data = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
-        teacher = ServiceHealth.model_validate(data)
-    except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
-        teacher = ServiceHealth(status="unhealthy", error=str(e))
-        status = "degraded"
+        try:
+            teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
+            data = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
+            teacher = ServiceHealth.model_validate(data)
+        except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
+            teacher = ServiceHealth(status="unhealthy", error=str(e))
+            status = "degraded"
 
     return HealthResponse(status=status, worker=worker, teacher=teacher)
 

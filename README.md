@@ -20,10 +20,11 @@ This enables real-time model personalization where the model learns from each in
 ## Installation
 
 ```bash
-pip install -e .
+uv sync
 ```
 
-**Prerequisites:** Python 3.11+, a CUDA GPU, and `vllm` for local serving. For remote execution, also install `modal` and run `modal token new`.
+**Prerequisites:** Python 3.11+, `uv`, a CUDA GPU, and `vllm` for local serving.
+For remote execution, also run `uv run modal token new`.
 
 ## Quick Start
 
@@ -33,7 +34,7 @@ vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 \
   --enable-lora --lora-modules my-lora=/loras/user/my-lora-init
 
 # 2. Start the CLaaS API
-uvicorn claas.api:web_app --host 0.0.0.0 --port 8080
+uv run uvicorn claas.api:web_app --host 0.0.0.0 --port 8080
 
 # 3. Initialize a LoRA adapter
 curl -X POST http://localhost:8080/v1/lora/init \
@@ -105,6 +106,19 @@ Set `CLAAS_DISTILL_EXECUTION_MODE` to control where the distill worker runs:
 
 `/v1/feedback` updates adapters in-place (same `lora_id`). `/v1/distill` creates versioned checkpoints with timestamps.
 
+## Docker Compose (Recommended)
+
+The fastest way to get the full stack running — vLLM, CLaaS API, and OpenClaw with Telegram:
+
+```bash
+cd docker
+cp .env.example .env
+# Edit .env — set TELEGRAM_BOT_TOKEN (from @BotFather)
+docker compose up --build
+```
+
+This brings up four services: an init container (creates the LoRA + config), vLLM with Qwen3-8B and LoRA serving, the CLaaS feedback API, and OpenClaw's Telegram gateway. See [`docker/README.md`](docker/README.md) for details.
+
 ## Local vLLM + OpenClaw
 
 See [`scripts/openclaw-local/README.md`](scripts/openclaw-local/README.md) for the full supervised local stack (vLLM + gateway + auto-restart, multi-LoRA, Telegram integration).
@@ -118,10 +132,20 @@ To deploy the service on Modal instead of running locally:
 export HF_TOKEN=...
 export CLAAS_BASE_MODEL_ID=Qwen/Qwen3-8B
 
-modal deploy -m claas.deploy
+uv run modal deploy -m claas.deploy
 ```
 
 The deployed app exposes the same API at `https://your-app--claas-distill-fastapi-app.modal.run`. LoRAs are stored in the `claas-loras` Modal Volume.
+
+## Claude Code Setup
+
+If you use [Claude Code](https://claude.ai/claude-code), you can set up the full local stack automatically:
+
+```
+/setup-local <TELEGRAM_BOT_TOKEN>
+```
+
+This skill installs all dependencies (CLaaS, vLLM, OpenClaw), initializes the LoRA adapter, and starts the full stack (vLLM + CLaaS API + Telegram gateway). See [`.claude/skills/setup-local/SKILL.md`](.claude/skills/setup-local/SKILL.md) for what it does under the hood.
 
 ## Development
 

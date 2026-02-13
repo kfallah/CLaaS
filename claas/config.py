@@ -24,8 +24,8 @@ class ModelConfig:
     teacher_max_model_len: int = 8192
 
     # LoRA defaults
-    lora_r: int = 16
-    lora_alpha: int = 32
+    lora_r: int = 32
+    lora_alpha: int = 64
     lora_dropout: float = 0.0
     lora_target_modules: list[str] = field(
         default_factory=lambda: [
@@ -49,7 +49,7 @@ class TrainingDefaults:
     alpha: float = 0.5  # GJS interpolation (0.5 = symmetric JSD)
     is_clip: float = 5.0  # IS ratio clip
     max_grad_norm: float = 1.0
-    kl_reg_weight: float = 0.1  # KL regularization to base policy
+    kl_reg_weight: float = 0.001  # KL regularization to base policy
 
     # Teacher scoring
     teacher_top_k: int = 100  # Number of top logprobs from teacher

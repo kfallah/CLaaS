@@ -7,11 +7,13 @@
 Run lint and type checking after every code change:
 
 ```bash
+uv sync --extra dev
+
 # Lint and auto-fix
-uvx ruff check claas/ tests/ --fix
+uv run ruff check claas/ tests/ --fix
 
 # Type check (import errors for modal/torch/vllm are expected)
-uvx ty check
+uv run ty check
 ```
 
 Note: GPU dependencies (modal, torch, vllm, transformers, peft) are not installed locally. `ty check` will report `unresolved-import` errors for these - this is expected and can be ignored.
@@ -19,7 +21,7 @@ Note: GPU dependencies (modal, torch, vllm, transformers, peft) are not installe
 ### Run Tests
 
 ```bash
-pytest tests/ -v
+uv run pytest tests/ -v
 ```
 
 ## Project Structure
@@ -87,6 +89,12 @@ loss_dict = compute_sdpo_loss(
 ## Dependencies
 
 Heavy dependencies (torch, vllm, transformers) are only available inside Modal containers. Type checking will show "missing import" errors for these - this is expected.
+
+## Architecture Rules
+
+### DO NOT manage vLLM as a subprocess from the CLaaS API
+
+Never add code to kill, restart, or spawn vLLM from within the API process. vLLM is managed externally (by the user, systemd, Docker, etc.). The API communicates with vLLM only via its HTTP API (sleep/wake, load/unload LoRA). Adding process management (pkill, subprocess.Popen, etc.) to the API is fragile, creates tight coupling, and is not how this system is designed.
 
 ## Ruff Rules
 

@@ -24,8 +24,8 @@ OPENCLAW_AGENT_MODELS = Path(
 )
 BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:8000/v1")
 API_KEY = os.environ.get("API_KEY", "sk-local")
-MODEL_IDS = [m.strip() for m in os.environ.get("MODEL_IDS", "qwen3-8b").split(",") if m.strip()]
-PRIMARY_MODEL = os.environ.get("PRIMARY_MODEL", "qwen3-8b")
+MODEL_IDS = [m.strip() for m in os.environ.get("MODEL_IDS", "qwen3-8b,openclaw-assistant-latest").split(",") if m.strip()]
+PRIMARY_MODEL = os.environ.get("PRIMARY_MODEL", "openclaw-assistant-latest")
 
 
 def _model_entry(model_id: str) -> dict:

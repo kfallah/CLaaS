@@ -21,6 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import modal
+import torch
+from safetensors.torch import save_file
+from transformers import AutoConfig
 
 # Modal volume for LoRA storage
 lora_volume = modal.Volume.from_name("claas-loras", create_if_missing=True)
@@ -304,11 +307,15 @@ def save_lora_inplace(local_dir: str, lora_id: str) -> str:
 def create_initial_lora(
     lora_id: str,
     base_model_name: str,
-    lora_r: int = 16,
-    lora_alpha: int = 32,
+    lora_r: int = 32,
+    lora_alpha: int = 64,
     target_modules: list[str] | None = None,
 ) -> str:
-    """Create a new LoRA adapter with initial configuration.
+    """Create a new LoRA adapter with initial configuration and weights.
+
+    Downloads the base model config (not weights) to determine layer dimensions,
+    then creates properly-shaped zero-initialized LoRA weight tensors. The resulting
+    adapter can be loaded directly by vLLM without requiring a full model load.
 
     Args:
         lora_id: LoRA identifier
@@ -340,13 +347,60 @@ def create_initial_lora(
         "task_type": "CAUSAL_LM",
     }
 
-    # Create temp directory with config
+    # Resolve layer dimensions from the base model config (no weights downloaded).
+    model_config = AutoConfig.from_pretrained(base_model_name, trust_remote_code=True)
+    hidden_size = model_config.hidden_size
+    intermediate_size = getattr(model_config, "intermediate_size", hidden_size * 4)
+    num_heads = model_config.num_attention_heads
+    head_dim = hidden_size // num_heads
+    num_kv_heads = getattr(model_config, "num_key_value_heads", num_heads)
+    num_layers = model_config.num_hidden_layers
+
+    dim_map = {
+        "q_proj": (num_heads * head_dim, hidden_size),
+        "k_proj": (num_kv_heads * head_dim, hidden_size),
+        "v_proj": (num_kv_heads * head_dim, hidden_size),
+        "o_proj": (hidden_size, num_heads * head_dim),
+        "gate_proj": (intermediate_size, hidden_size),
+        "up_proj": (intermediate_size, hidden_size),
+        "down_proj": (hidden_size, intermediate_size),
+    }
+    unsupported_modules = sorted(set(target_modules) - set(dim_map))
+    if unsupported_modules:
+        raise ValueError(
+            "Unsupported target_modules: "
+            + ", ".join(unsupported_modules)
+            + ". Supported modules: "
+            + ", ".join(sorted(dim_map))
+        )
+
+    # Build LoRA A/B tensors for every target module in every layer.
+    # PEFT normally does this inside get_peft_model(), but that path requires
+    # loading the full base model in memory. Here we only need adapter artifacts
+    # for storage/vLLM bootstrap, so we reproduce PEFT's init directly.
+    # lora_A: Kaiming uniform (enables gradient flow), lora_B: zeros.
+    # This ensures the initial LoRA output is zero (B @ A @ x = 0 since B=0)
+    # while allowing gradients to propagate through A.
+    tensors: dict[str, torch.Tensor] = {}
+    for layer_idx in range(num_layers):
+        for mod_name in target_modules:
+            out_dim, in_dim = dim_map[mod_name]
+            prefix = f"base_model.model.model.layers.{layer_idx}.self_attn.{mod_name}"
+            if mod_name in ("gate_proj", "up_proj", "down_proj"):
+                prefix = f"base_model.model.model.layers.{layer_idx}.mlp.{mod_name}"
+            lora_a = torch.empty(lora_r, in_dim)
+            torch.nn.init.kaiming_uniform_(lora_a, a=5**0.5)
+            tensors[f"{prefix}.lora_A.weight"] = lora_a
+            tensors[f"{prefix}.lora_B.weight"] = torch.zeros(out_dim, lora_r)
+
     with tempfile.TemporaryDirectory(prefix="lora_init_") as temp_dir:
         config_path = os.path.join(temp_dir, "adapter_config.json")
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
-        # Save to storage
+        weights_path = os.path.join(temp_dir, "adapter_model.safetensors")
+        save_file(tensors, weights_path)
+
         full_lora_id = save_lora(temp_dir, lora_id, version_suffix="init")
 
     return full_lora_id

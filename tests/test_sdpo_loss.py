@@ -24,10 +24,9 @@ def sample_data(device):
     # Student logits (random, with gradient)
     student_logits = torch.randn(B, T, V, device=device, requires_grad=True)
 
-    # Teacher top-K (random)
-    teacher_logprobs = torch.randn(B, T, K, device=device)
-    teacher_logprobs = torch.log_softmax(teacher_logprobs, dim=-1)  # normalize to valid logprobs
-    teacher_indices = torch.randint(0, V, (B, T, K), device=device)
+    # Teacher top-K: realistic slices from full-vocabulary softmax
+    full_logprobs = torch.log_softmax(torch.randn(B, T, V, device=device), dim=-1)
+    teacher_logprobs, teacher_indices = full_logprobs.topk(K, dim=-1)
 
     # Response tokens (random)
     response_ids = torch.randint(0, V, (B, T), device=device)
@@ -248,6 +247,95 @@ class TestComputeSdpoLoss:
         # Should still produce valid loss
         assert not torch.isnan(result["loss"])
         assert result["distill_loss"] is not None
+
+    def test_kl_reg_non_negative(self, device):
+        """KL regularization should be >= 0 (Schulman k3 estimator property)."""
+        B, T, V, K = 2, 8, 100, 10
+
+        for _ in range(5):
+            student_logits = torch.randn(B, T, V, device=device, requires_grad=True)
+            full_logprobs = torch.log_softmax(torch.randn(B, T, V, device=device), dim=-1)
+            teacher_logprobs, teacher_indices = full_logprobs.topk(K, dim=-1)
+            response_ids = torch.randint(0, V, (B, T), device=device)
+            response_mask = torch.ones(B, T, device=device)
+
+            with torch.no_grad():
+                base_logprobs = torch.log_softmax(
+                    torch.randn(B, T, V, device=device), dim=-1
+                ).gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
+                old_student_logprobs = torch.log_softmax(
+                    student_logits.detach(), dim=-1
+                ).gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
+
+            result = compute_sdpo_loss(SDPOLossInput(
+                student_logits=student_logits,
+                teacher_logprobs=teacher_logprobs,
+                teacher_indices=teacher_indices,
+                base_logprobs=base_logprobs,
+                response_mask=response_mask,
+                old_student_logprobs=old_student_logprobs,
+                response_ids=response_ids,
+            ))
+
+            assert result["kl_reg"] >= -1e-6, (
+                f"kl_reg should be non-negative, got {result['kl_reg']}"
+            )
+
+    def test_gjs_invariant_to_prenormalization(self, device):
+        """GJS output should be the same whether teacher logprobs are pre-normalized or not."""
+        B, T, V, K = 1, 5, 100, 10
+
+        student_logits = torch.randn(B, T, V, device=device, requires_grad=True)
+        response_ids = torch.randint(0, V, (B, T), device=device)
+        response_mask = torch.ones(B, T, device=device)
+
+        # Create an un-normalized top-K variant (raw logits)
+        full_logits = torch.randn(B, T, V, device=device)
+        teacher_logprobs_raw, teacher_indices = full_logits.topk(K, dim=-1)
+
+        # Create normalized top-K variant from full-vocab log-softmax
+        full_logprobs = torch.log_softmax(full_logits, dim=-1)
+        teacher_logprobs_norm = full_logprobs.gather(-1, teacher_indices)
+
+        with torch.no_grad():
+            base_logprobs = torch.log_softmax(
+                torch.randn(B, T, V, device=device), dim=-1
+            ).gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
+            old_student_logprobs = torch.log_softmax(
+                student_logits.detach(), dim=-1
+            ).gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
+
+        result_norm = compute_sdpo_loss(
+            SDPOLossInput(
+                student_logits=student_logits,
+                teacher_logprobs=teacher_logprobs_norm,
+                teacher_indices=teacher_indices,
+                base_logprobs=base_logprobs,
+                response_mask=response_mask,
+                old_student_logprobs=old_student_logprobs,
+                response_ids=response_ids,
+            )
+        )
+        result_raw = compute_sdpo_loss(
+            SDPOLossInput(
+                student_logits=student_logits,
+                teacher_logprobs=teacher_logprobs_raw,
+                teacher_indices=teacher_indices,
+                base_logprobs=base_logprobs,
+                response_mask=response_mask,
+                old_student_logprobs=old_student_logprobs,
+                response_ids=response_ids,
+            )
+        )
+
+        assert torch.isclose(
+            torch.tensor(result_norm["distill_loss"]),
+            torch.tensor(result_raw["distill_loss"]),
+            atol=1e-5,
+        ), (
+            f"GJS should be invariant to pre-normalization: "
+            f"{result_norm['distill_loss']} vs {result_raw['distill_loss']}"
+        )
 
 
 if __name__ == "__main__":

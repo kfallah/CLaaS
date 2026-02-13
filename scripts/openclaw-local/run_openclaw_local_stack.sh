@@ -9,18 +9,27 @@ VLLM_LOG="${VLLM_LOG:-$HOME/.openclaw-vllm-8000-sleep.log}"
 VLLM_PID_FILE="${VLLM_PID_FILE:-$HOME/.openclaw-vllm-8000-sleep.pid}"
 GATEWAY_LOG="${GATEWAY_LOG:-$LOG_DIR/gateway.log}"
 GATEWAY_PID_FILE="${GATEWAY_PID_FILE:-$LOG_DIR/gateway.pid}"
+CLAAS_API_LOG="${CLAAS_API_LOG:-$LOG_DIR/claas-api.log}"
+CLAAS_API_PID_FILE="${CLAAS_API_PID_FILE:-$LOG_DIR/claas-api.pid}"
 
 VLLM_START_SCRIPT="${VLLM_START_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/start_vllm_qwen3_8b.sh}"
 GATEWAY_START_SCRIPT="${GATEWAY_START_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/start_openclaw_gateway_local.sh}"
 CONFIGURE_SCRIPT="${CONFIGURE_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/configure_openclaw_local_models.py}"
+
+# Shared lora root — used by init_lora.py, vLLM, and the CLaaS API
+export CLAAS_LORA_ROOT="${CLAAS_LORA_ROOT:-$ROOT_DIR/.local_loras}"
 
 STACK_NAME="openclaw-local"
 RESTART_BACKOFF_SECONDS="${RESTART_BACKOFF_SECONDS:-3}"
 VLLM_HEALTH_URL="${VLLM_HEALTH_URL:-http://127.0.0.1:8000/health}"
 VLLM_WAIT_SECONDS="${VLLM_WAIT_SECONDS:-180}"
 
-MODEL_IDS="${MODEL_IDS:-qwen3-8b}"
-PRIMARY_MODEL="${PRIMARY_MODEL:-qwen3-8b}"
+LORA_NAME="${LORA_NAME:-openclaw/assistant}"
+LORA_MODEL="${LORA_MODEL:-openclaw-assistant-latest}"
+MODEL_IDS="${MODEL_IDS:-qwen3-8b,$LORA_MODEL}"
+PRIMARY_MODEL="${PRIMARY_MODEL:-$LORA_MODEL}"
+
+INIT_SCRIPT="${INIT_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/init_lora.py}"
 
 cleanup_old_pid() {
   local pid_file="$1"
@@ -63,6 +72,12 @@ start_stack_once() {
   cleanup_old_pid "$VLLM_PID_FILE"
   cleanup_old_pid "$GATEWAY_PID_FILE"
 
+  # Ensure LoRA adapter exists before vLLM tries to load it
+  echo "[$STACK_NAME] initializing LoRA adapter..."
+  CLAAS_STORAGE_BACKEND=local_fs \
+  LORA_NAME="$LORA_NAME" \
+  python3 "$INIT_SCRIPT" 2>&1 | sed "s/^/[$STACK_NAME] /"
+
   BASE_URL="${BASE_URL:-http://127.0.0.1:8000/v1}" \
   API_KEY="${API_KEY:-sk-local}" \
   MODEL_IDS="$MODEL_IDS" \
@@ -80,12 +95,23 @@ start_stack_once() {
   fi
   echo "[$STACK_NAME] vLLM healthy at $VLLM_HEALTH_URL"
 
+  echo "[$STACK_NAME] starting CLaaS feedback API..."
+  cleanup_old_pid "$CLAAS_API_PID_FILE"
+  CLAAS_STORAGE_BACKEND=local_fs \
+  CLAAS_DISTILL_EXECUTION_MODE=local \
+  VLLM_BASE_URL="http://127.0.0.1:8000" \
+  VLLM_API_KEY="${API_KEY:-sk-local}" \
+  FEEDBACK_LOG_DIR="$LOG_DIR/feedback-logs" \
+  nohup uvicorn claas.api:web_app --host 0.0.0.0 --port "${CLAAS_API_PORT:-8080}" >>"$CLAAS_API_LOG" 2>&1 &
+  local api_pid=$!
+  echo "$api_pid" >"$CLAAS_API_PID_FILE"
+
   echo "[$STACK_NAME] starting OpenClaw gateway..."
   nohup "$GATEWAY_START_SCRIPT" >>"$GATEWAY_LOG" 2>&1 &
   local gw_pid=$!
   echo "$gw_pid" >"$GATEWAY_PID_FILE"
 
-  echo "[$STACK_NAME] started (vLLM pid=$vllm_pid, gateway pid=$gw_pid)"
+  echo "[$STACK_NAME] started (vLLM pid=$vllm_pid, CLaaS API pid=$api_pid, gateway pid=$gw_pid)"
   return 0
 }
 
@@ -93,15 +119,21 @@ monitor_loop() {
   while true; do
     local vpid=""
     local gpid=""
+    local apid=""
     vpid="$(cat "$VLLM_PID_FILE" 2>/dev/null || true)"
     gpid="$(cat "$GATEWAY_PID_FILE" 2>/dev/null || true)"
+    apid="$(cat "$CLAAS_API_PID_FILE" 2>/dev/null || true)"
 
-    if [[ -z "$vpid" || -z "$gpid" ]]; then
+    if [[ -z "$vpid" || -z "$gpid" || -z "$apid" ]]; then
       echo "[$STACK_NAME] missing pid file(s), restarting..."
       return 1
     fi
     if ! kill -0 "$vpid" 2>/dev/null; then
       echo "[$STACK_NAME] vLLM process exited (pid=$vpid), restarting..."
+      return 1
+    fi
+    if ! kill -0 "$apid" 2>/dev/null; then
+      echo "[$STACK_NAME] CLaaS API process exited (pid=$apid), restarting..."
       return 1
     fi
     if ! kill -0 "$gpid" 2>/dev/null; then
@@ -116,18 +148,22 @@ monitor_loop() {
   done
 }
 
-trap 'stop_pid_if_running "$GATEWAY_PID_FILE"; stop_pid_if_running "$VLLM_PID_FILE"; exit 0' INT TERM
+stop_all() {
+  stop_pid_if_running "$GATEWAY_PID_FILE"
+  stop_pid_if_running "$CLAAS_API_PID_FILE"
+  stop_pid_if_running "$VLLM_PID_FILE"
+}
+
+trap 'stop_all; exit 0' INT TERM
 
 while true; do
   if ! start_stack_once; then
-    stop_pid_if_running "$GATEWAY_PID_FILE"
-    stop_pid_if_running "$VLLM_PID_FILE"
+    stop_all
     sleep "$RESTART_BACKOFF_SECONDS"
     continue
   fi
   if ! monitor_loop; then
-    stop_pid_if_running "$GATEWAY_PID_FILE"
-    stop_pid_if_running "$VLLM_PID_FILE"
+    stop_all
     sleep "$RESTART_BACKOFF_SECONDS"
     continue
   fi
