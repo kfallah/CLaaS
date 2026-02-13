@@ -88,6 +88,12 @@ loss_dict = compute_sdpo_loss(
 
 Heavy dependencies (torch, vllm, transformers) are only available inside Modal containers. Type checking will show "missing import" errors for these - this is expected.
 
+## Architecture Rules
+
+### DO NOT manage vLLM as a subprocess from the CLaaS API
+
+Never add code to kill, restart, or spawn vLLM from within the API process. vLLM is managed externally (by the user, systemd, Docker, etc.). The API communicates with vLLM only via its HTTP API (sleep/wake, load/unload LoRA). Adding process management (pkill, subprocess.Popen, etc.) to the API is fragile, creates tight coupling, and is not how this system is designed.
+
 ## Ruff Rules
 
 Using default ruff rules plus:

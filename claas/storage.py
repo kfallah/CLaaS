@@ -304,8 +304,8 @@ def save_lora_inplace(local_dir: str, lora_id: str) -> str:
 def create_initial_lora(
     lora_id: str,
     base_model_name: str,
-    lora_r: int = 16,
-    lora_alpha: int = 32,
+    lora_r: int = 32,
+    lora_alpha: int = 64,
     target_modules: list[str] | None = None,
 ) -> str:
     """Create a new LoRA adapter with initial configuration and weights.

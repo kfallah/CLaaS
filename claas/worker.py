@@ -187,8 +187,8 @@ class DistillWorker:
                 config_dict = json.load(f)
 
             lora_config = LoraConfig(
-                r=config_dict.get("r", 16),
-                lora_alpha=config_dict.get("lora_alpha", 32),
+                r=config_dict.get("r", 32),
+                lora_alpha=config_dict.get("lora_alpha", 64),
                 target_modules=config_dict.get("target_modules"),
                 lora_dropout=config_dict.get("lora_dropout", 0.0),
                 bias=config_dict.get("bias", "none"),

@@ -41,7 +41,7 @@ class TrainingConfig(BaseModel):
         description="Maximum gradient norm for clipping",
     )
     kl_reg_weight: float = Field(
-        default=0.1,
+        default=0.001,
         ge=0.0,
         le=1.0,
         description="Weight for KL regularization to base policy",
@@ -73,7 +73,7 @@ class SDPOLossInput(BaseModel):
     response_ids: Any  # torch.Tensor (B, T)
     alpha: float = 0.5
     is_clip: float = 5.0
-    kl_reg_weight: float = 0.1
+    kl_reg_weight: float = 0.001
 
 
 class SDPOLossResult(TypedDict):
@@ -222,13 +222,13 @@ class LoraInitRequest(BaseModel):
         description="Base model the LoRA will be applied to",
     )
     lora_r: int = Field(
-        default=16,
+        default=32,
         ge=4,
         le=128,
         description="LoRA rank",
     )
     lora_alpha: int = Field(
-        default=32,
+        default=64,
         ge=8,
         le=256,
         description="LoRA alpha scaling factor",

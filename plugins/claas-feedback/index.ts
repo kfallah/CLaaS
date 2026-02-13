@@ -86,14 +86,21 @@ export default function register(api: OpenClawPluginApi) {
         return { text: "Usage: /feedback <your feedback here>" };
       }
 
-      // Look up cached conversation for this sender
+      // Look up cached conversation for this chat.
+      // message_received stores context keyed by "channel:from" where from is:
+      //   - "userId" for private chats  (e.g. "telegram:511643390")
+      //   - "group:chatId" for groups   (e.g. "telegram:group:-5242423293")
       const channel = ctx.channel ?? ctx.channelId;
       const senderId = ctx.senderId ?? ctx.from;
       if (!channel || !senderId) {
         return { text: "Could not identify sender. Please try again." };
       }
 
-      const senderKey = `${channel}:${senderId}`;
+      const target = ctx.to ?? senderId;
+      // In group chats target differs from senderId — build the group key format.
+      const senderKey = target && target !== senderId
+        ? `${channel}:group:${target}`
+        : `${channel}:${senderId}`;
       const cached = contextStore.get(senderKey);
       if (!cached) {
         return {
