@@ -106,7 +106,7 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
             )
         raise AssertionError(f"unexpected modal function: {fn_name}")
 
-    async def fake_vllm_post(path, *, params=None, _json_body=None, _timeout_s=30.0):
+    async def fake_vllm_post(path, *, params=None, json_body=None, timeout_s=30.0):
         calls.append((path, params))
 
     def fake_write_feedback_log(record):
@@ -162,7 +162,7 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
             return _FunctionFailureStub()
         raise AssertionError(f"unexpected modal function: {fn_name}")
 
-    async def fake_vllm_post(_path, *, _params=None, _json_body=None, _timeout_s=30.0):
+    async def fake_vllm_post(_path, *, params=None, json_body=None, timeout_s=30.0):
         return None
 
     def fake_write_feedback_log(record):
@@ -249,7 +249,7 @@ def test_feedback_calls_drain_before_sleep(monkeypatch, tmp_path):
     async def fake_wait_idle():
         order.append("drain")
 
-    async def fake_vllm_post(path, *, params=None, _json_body=None, _timeout_s=30.0):
+    async def fake_vllm_post(path, *, params=None, json_body=None, timeout_s=30.0):
         order.append(path)
 
     monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
@@ -286,7 +286,7 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
     async def fake_wait_idle():
         raise TimeoutError("still busy")
 
-    async def fake_vllm_post(_path, *, _params=None, _json_body=None, _timeout_s=30.0):
+    async def fake_vllm_post(_path, *, params=None, json_body=None, timeout_s=30.0):
         pass
 
     monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)

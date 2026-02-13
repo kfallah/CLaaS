@@ -226,12 +226,6 @@ class DistillWorker:
         would generate *given* the feedback, creating a meaningful
         distillation signal (non-zero log-ratio vs. the student).
 
-        Note: CLaaS uses a frozen base teacher (no EMA update). This differs
-        from veRL's ``_update_teacher()`` (dp_actor.py:132-151) which applies
-        an exponential moving average (``teacher_update_rate=0.05``) to the
-        teacher weights each training step. The frozen approach is simpler and
-        avoids maintaining a separate teacher copy in GPU memory.
-
         Reference: https://arxiv.org/pdf/2601.20802, Section 3.
         """
         import torch
@@ -259,7 +253,6 @@ class DistillWorker:
             k = min(max(1, top_k), vocab_size)
             top_logprobs, top_indices = torch.topk(log_probs[0, :T_resp], k=k, dim=-1)
 
-        # --- Layered cleanup: free teacher intermediates before student pass ---
         del teacher_output, teacher_logits, log_probs
         del teacher_full_ids, teacher_prompt_ids
         torch.cuda.empty_cache()
@@ -267,27 +260,12 @@ class DistillWorker:
         return top_logprobs, top_indices
 
     def _offload_base_model(self):
-        """Move base model to CPU and release all GPU memory.
-
-        Called after distill completes (success or failure) so that vLLM
-        can reclaim the full VRAM when it wakes up.
-        """
+        """Move base model to CPU and release all GPU memory."""
         import torch
 
-        try:
-            before_mb = torch.cuda.memory_allocated() / 1e6
-            torch.nn.Module.to(self.base_model, "cpu")
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-            after_mb = torch.cuda.memory_allocated() / 1e6
-            free_bytes, total_bytes = torch.cuda.mem_get_info()
-            print(
-                f"[offload] base model moved to CPU. "
-                f"VRAM: {before_mb:.0f}MB -> {after_mb:.0f}MB allocated, "
-                f"{free_bytes / 1e9:.1f}GB / {total_bytes / 1e9:.1f}GB free"
-            )
-        except Exception as e:
-            print(f"[offload] FAILED: {e}")  # Don't mask the original error
+        torch.nn.Module.to(self.base_model, "cpu")
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
     @modal.method()
     def distill(self, request: dict) -> dict:
@@ -379,10 +357,7 @@ class DistillWorker:
         response_mask = torch.zeros(1, full_ids.shape[-1], device=self.device)
         response_mask[:, response_start:] = 1.0
 
-        # ---------------------------------------------------------------
-        # Phase 1: Base model forward pass (KL regularization target)
-        # Extract base_logprobs then FREE all intermediates.
-        # ---------------------------------------------------------------
+        # 3. Base model forward pass (for KL regularization, no grad)
         with torch.no_grad():
             base_output = self.base_model(input_ids=full_ids)
             base_logits = base_output.logits[:, response_start - 1 : -1, :]  # (1, T_resp, V)
@@ -393,9 +368,7 @@ class DistillWorker:
         del base_output, base_logits
         torch.cuda.empty_cache()
 
-        # ---------------------------------------------------------------
-        # Phase 2: Student forward pass (WITH gradient)
-        # ---------------------------------------------------------------
+        # 4. Student forward pass (with gradient)
         student_output = model(input_ids=full_ids)
         # Logits at positions [response_start-1, ..., end-1] predict tokens at [response_start, ..., end]
         student_logits = student_output.logits[:, response_start - 1 : -1, :].contiguous()
@@ -503,10 +476,7 @@ class DistillWorker:
         finally:
             cleanup_local_lora(save_dir)
 
-        # ---------------------------------------------------------------
-        # Phase 5: Cleanup — extract scalars, then free everything so
-        # vLLM can reclaim the VRAM on wake.
-        # ---------------------------------------------------------------
+        # 9. Cleanup
         total_loss = loss_dict["loss"].item()
         distill_loss = loss_dict["distill_loss"]
         kl_reg = loss_dict["kl_reg"]
@@ -521,12 +491,6 @@ class DistillWorker:
         cleanup_local_lora(lora_local_path)
 
         self._offload_base_model()
-
-        print(
-            f"[distill] SUCCESS: loss={total_loss:.4f} "
-            f"grad_norm={grad_norm_val:.4f} tokens={T_resp} "
-            f"lora={new_lora_id} teacher={teacher_mode}"
-        )
 
         return {
             "lora_id": new_lora_id,

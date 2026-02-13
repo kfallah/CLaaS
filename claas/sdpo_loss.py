@@ -9,11 +9,6 @@ SDPO uses Generalized Jensen-Shannon Divergence (GJS) for distillation, with:
 1. Alpha-interpolated mixture distribution between student and teacher
 2. IS ratio clipping for off-policy correction
 3. KL regularization to base policy to prevent drift
-
-Note: This implementation uses direct GJS minimization with IS correction,
-rather than the two-component (PG + regularizer) loss described in
-docs/initial_plan.md. This matches the paper's formulation more closely
-(veRL: core_algos.py).
 """
 
 from __future__ import annotations

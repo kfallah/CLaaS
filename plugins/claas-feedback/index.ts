@@ -32,11 +32,17 @@ const redactIdentifier = (value: string): string => {
   return `${value.slice(0, firstColon + 1)}***`;
 };
 
+interface ClaasConfig {
+  claasApiUrl?: string;
+  loraId?: string;
+  debug?: boolean;
+}
+
 export default function register(api: OpenClawPluginApi) {
-  const config = api.config ?? ({} as Record<string, unknown>);
-  const claasApiUrl: string = (config as any).claasApiUrl ?? "http://localhost:8080";
-  const loraId: string = (config as any).loraId ?? "openclaw/assistant-latest";
-  const debugEnabled = (config as any).debug === true || process.env.CLAAS_FEEDBACK_DEBUG === "true";
+  const config = (api.config ?? {}) as ClaasConfig;
+  const claasApiUrl = config.claasApiUrl ?? "http://localhost:8080";
+  const loraId = config.loraId ?? "openclaw/assistant-latest";
+  const debugEnabled = config.debug === true || process.env.CLAAS_FEEDBACK_DEBUG === "true";
   const logDebug = (message: string): void => {
     if (debugEnabled) {
       console.debug(message);
@@ -179,8 +185,9 @@ export default function register(api: OpenClawPluginApi) {
         return {
           text: `\u2705 Feedback applied (${detail})`,
         };
-      } catch (err: any) {
-        return { text: `\u274C Feedback failed: ${err.message}` };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { text: `\u274C Feedback failed: ${msg}` };
       }
     },
   });

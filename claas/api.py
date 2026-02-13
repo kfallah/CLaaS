@@ -131,8 +131,6 @@ def _validate_init_base_model(base_model: str) -> None:
 
 
 
-
-
 async def _get_feedback_lock(lora_id: str) -> asyncio.Lock:
     """Return a per-LoRA lock used to serialize feedback updates."""
     key = lora_id.strip("/")
@@ -367,11 +365,9 @@ async def _run_distill(payload: dict[str, Any]) -> dict[str, Any]:
             # This must happen even on failure — otherwise the 16GB base model
             # stays on GPU and vLLM's wake triggers CUDA memory conflicts.
             try:
-                logger.info("_run_distill: calling _offload_base_model")
                 await asyncio.to_thread(worker._offload_base_model)
-                logger.info("_run_distill: offload complete")
-            except Exception as offload_err:
-                logger.error("_run_distill: offload FAILED: %s", offload_err)
+            except Exception:
+                logger.warning("Failed to offload base model to CPU", exc_info=True)
             del worker
             gc.collect()
 
@@ -543,8 +539,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             detail=f"Feedback update failed in phase '{phase}': {error_message}",
         ) from e
     finally:
-        # Always attempt to wake vLLM if we slept it and haven't woken it yet.
-        # This lives in `finally` so it runs regardless of exception type.
+        # Wake vLLM if we slept it and haven't woken it yet.
         if (
             slept
             and not woke

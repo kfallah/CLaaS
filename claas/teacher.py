@@ -266,14 +266,7 @@ def teacher_messages_to_chat_template(messages: list[ChatMessage]) -> list[dict[
 
 
 def messages_to_chatml(messages: list[ChatMessage]) -> str:
-    """Convert a list of chat messages to ChatML string format.
-
-    Args:
-        messages: List of message dicts with 'role' and 'content' keys
-
-    Returns:
-        ChatML-formatted string ending with assistant generation prompt
-    """
+    """Convert chat messages to a ChatML string ending with assistant prompt."""
     parts = []
     for msg in messages:
         parts.append(f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>")
@@ -286,19 +279,7 @@ def format_teacher_prompt(
     feedback: str | None = None,
     system_prompt: str | None = None,
 ) -> str:
-    """Format prompt for the teacher model as a ChatML string.
-
-    Thin wrapper around build_teacher_messages() for the remote teacher path
-    (api.py) which sends raw prompt strings to vLLM.
-
-    Args:
-        user_prompt: The original user prompt
-        feedback: Optional feedback about the response quality
-        system_prompt: Optional system prompt
-
-    Returns:
-        Formatted ChatML prompt string for the teacher
-    """
+    """Format prompt for the teacher model as a ChatML string."""
     messages = build_teacher_messages(user_prompt, feedback, system_prompt)
     return messages_to_chatml(messages)
 
