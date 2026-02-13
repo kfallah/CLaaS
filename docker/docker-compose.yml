@@ -24,7 +24,7 @@ services:
   # vllm: Qwen3-8B + LoRA serving (GPU)
   # ------------------------------------------------------------------
   vllm:
-    image: vllm/vllm-openai:latest
+    image: vllm/vllm-openai:v0.15.1
     entrypoint: ["/scripts/start_vllm_qwen3_8b.sh"]
     environment:
       - MODEL=${MODEL:-Qwen/Qwen3-8B}
@@ -78,6 +78,7 @@ services:
       - CLAAS_STORAGE_BACKEND=local_fs
       - CLAAS_LORA_ROOT=/loras
       - CLAAS_DISTILL_EXECUTION_MODE=local
+      - CLAAS_BASE_MODEL_ID=${MODEL:-Qwen/Qwen3-8B}
       - VLLM_BASE_URL=http://vllm:8000
       - VLLM_API_KEY=sk-local
       - FEEDBACK_LOG_DIR=/feedback-logs

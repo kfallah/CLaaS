@@ -2,7 +2,8 @@ FROM python:3.12-slim
 
 # claas pulls in torch/transformers/safetensors — needed to generate LoRA weight tensors.
 # CPU-only torch is sufficient (no GPU required for zero-init weights).
-RUN pip install --no-cache-dir claas modal torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir claas modal && \
+    pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
 
 COPY scripts/init-stack.py /app/init-stack.py
 

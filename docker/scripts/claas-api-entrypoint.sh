@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VLLM_HEALTH_URL="${VLLM_BASE_URL:-http://vllm:8000}/health"
-# Strip /v1 suffix if present for health check
-VLLM_HEALTH_URL="${VLLM_HEALTH_URL%/v1}/health"
+VLLM_BASE="${VLLM_BASE_URL:-http://vllm:8000}"
+# Build health URL from base endpoint; supports both ...:8000 and ...:8000/v1
+VLLM_BASE="${VLLM_BASE%/}"
+VLLM_BASE="${VLLM_BASE%/v1}"
+VLLM_HEALTH_URL="${VLLM_BASE}/health"
 
 echo "Waiting for vLLM at ${VLLM_HEALTH_URL} ..."
 until curl -sf "${VLLM_HEALTH_URL}" > /dev/null 2>&1; do
