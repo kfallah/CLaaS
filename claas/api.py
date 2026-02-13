@@ -49,6 +49,7 @@ from .storage import (
     lora_volume,
     resolve_lora_id,
 )
+from .teacher import format_teacher_prompt
 from .types import (
     DistillRequest,
     DistillResponse,
@@ -108,35 +109,6 @@ FEEDBACK_DRAIN_TIMEOUT_S = float(os.environ.get("FEEDBACK_DRAIN_TIMEOUT_S", "30"
 VLLM_ROLLOUT_MODEL = os.environ.get("VLLM_ROLLOUT_MODEL")
 
 
-
-def _format_teacher_prompt(
-    user_prompt: str,
-    feedback: str | None = None,
-    response: str | None = None,
-    system_prompt: str | None = None,
-) -> str:
-    """Format prompt for teacher scoring without importing training deps.
-
-    The template shows the teacher the original prompt, the student's
-    response, and any feedback — so the teacher conditions on the full
-    context of what was attempted and what needs improvement.
-    """
-    if system_prompt is None:
-        system_prompt = (
-            "You are an expert coding assistant. Provide high-quality, "
-            "correct, and well-explained code solutions."
-        )
-
-    parts = [f"<|im_start|>system\n{system_prompt}<|im_end|>"]
-    parts.append(f"<|im_start|>user\n{user_prompt}<|im_end|>")
-    if response:
-        parts.append(f"<|im_start|>assistant\n{response}<|im_end|>")
-    if feedback:
-        parts.append(
-            f"<|im_start|>user\n[Feedback on previous attempt: {feedback}]<|im_end|>"
-        )
-    parts.append("<|im_start|>assistant\n")
-    return "".join(parts)
 
 
 
@@ -420,7 +392,7 @@ async def distill(request: DistillRequest) -> DistillResponse:
         # Remote teacher is optional; self-distillation is the default path.
         if request.training.teacher_mode == "remote":
             teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-            teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback, request.response)
+            teacher_prompt = format_teacher_prompt(request.prompt, request.feedback)
             teacher_scored = await teacher_score_fn.remote.aio(
                 prompts=[teacher_prompt],
                 completions=[request.response],
@@ -509,7 +481,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
 
         if request.training.teacher_mode == "remote":
             teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-            teacher_prompt = _format_teacher_prompt(request.prompt, request.feedback, request.response)
+            teacher_prompt = format_teacher_prompt(request.prompt, request.feedback)
             teacher_scored = await teacher_score_fn.remote.aio(
                 prompts=[teacher_prompt],
                 completions=[request.response],

@@ -214,17 +214,21 @@ class DistillWorker:
         would generate *given* the feedback, creating a meaningful
         distillation signal (non-zero log-ratio vs. the student).
 
+        Note: CLaaS uses a frozen base teacher (no EMA update). This differs
+        from veRL's ``_update_teacher()`` (dp_actor.py:132-151) which applies
+        an exponential moving average (``teacher_update_rate=0.05``) to the
+        teacher weights each training step. The frozen approach is simpler and
+        avoids maintaining a separate teacher copy in GPU memory.
+
         Reference: https://arxiv.org/pdf/2601.20802, Section 3.
         """
         import torch
 
-        from .teacher import format_teacher_prompt
+        from .teacher import build_teacher_messages
 
-        teacher_prompt = format_teacher_prompt(prompt, feedback)
-        teacher_prompt_ids = self.tokenizer.encode(
-            teacher_prompt,
-            add_special_tokens=True,
-            return_tensors="pt",
+        messages = build_teacher_messages(prompt, feedback)
+        teacher_prompt_ids = self.tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, return_tensors="pt", tokenize=True,
         ).to(self.device)
         teacher_full_ids = torch.cat([teacher_prompt_ids, response_ids], dim=-1)
         teacher_resp_start = teacher_prompt_ids.shape[-1]

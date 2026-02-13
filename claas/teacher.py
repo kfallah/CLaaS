@@ -214,16 +214,70 @@ class TeacherService:
         )
 
 
+def build_teacher_messages(
+    prompt: str,
+    feedback: str | None = None,
+    system_prompt: str | None = None,
+) -> list[dict[str, str]]:
+    """Build chat messages for teacher prompt (veRL-compatible template).
+
+    Template matches veRL's reprompt_template structure:
+    {prompt}{feedback}\\n\\nCorrectly solve the original question.
+
+    Args:
+        prompt: The original user prompt
+        feedback: Optional feedback about the response quality
+        system_prompt: Optional system prompt
+
+    Returns:
+        List of message dicts with 'role' and 'content' keys
+    """
+    if system_prompt is None:
+        system_prompt = (
+            "You are an expert coding assistant. Provide high-quality, "
+            "correct, and well-explained code solutions."
+        )
+    messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+
+    # Build user content with veRL-style template
+    if feedback:
+        feedback_section = (
+            "\n\nThe following is feedback from your unsuccessful earlier attempt:"
+            f"\n\n{feedback}\n"
+        )
+        user_content = f"{prompt}{feedback_section}\n\nCorrectly solve the original question.\n"
+    else:
+        user_content = prompt
+
+    messages.append({"role": "user", "content": user_content})
+    return messages
+
+
+def messages_to_chatml(messages: list[dict[str, str]]) -> str:
+    """Convert a list of chat messages to ChatML string format.
+
+    Args:
+        messages: List of message dicts with 'role' and 'content' keys
+
+    Returns:
+        ChatML-formatted string ending with assistant generation prompt
+    """
+    parts = []
+    for msg in messages:
+        parts.append(f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>")
+    parts.append("<|im_start|>assistant\n")
+    return "".join(parts)
+
+
 def format_teacher_prompt(
     user_prompt: str,
     feedback: str | None = None,
     system_prompt: str | None = None,
 ) -> str:
-    """Format prompt for the teacher model.
+    """Format prompt for the teacher model as a ChatML string.
 
-    The teacher evaluates the student's response in context, providing
-    logprobs that indicate how likely the teacher would have generated
-    each token.
+    Thin wrapper around build_teacher_messages() for the remote teacher path
+    (api.py) which sends raw prompt strings to vLLM.
 
     Args:
         user_prompt: The original user prompt
@@ -231,30 +285,10 @@ def format_teacher_prompt(
         system_prompt: Optional system prompt
 
     Returns:
-        Formatted prompt string for the teacher
+        Formatted ChatML prompt string for the teacher
     """
-    if system_prompt is None:
-        system_prompt = (
-            "You are an expert coding assistant. Provide high-quality, "
-            "correct, and well-explained code solutions."
-        )
-
-    # For scoring, we want the teacher to see the same context the student saw
-    # The teacher's logprobs on the response tokens indicate agreement/disagreement
-    parts = [f"<|im_start|>system\n{system_prompt}<|im_end|>"]
-
-    # Include feedback in the prompt if provided
-    if feedback:
-        parts.append(
-            f"<|im_start|>user\n{user_prompt}\n\n"
-            f"[Feedback on previous attempt: {feedback}]<|im_end|>"
-        )
-    else:
-        parts.append(f"<|im_start|>user\n{user_prompt}<|im_end|>")
-
-    parts.append("<|im_start|>assistant\n")
-
-    return "".join(parts)
+    messages = build_teacher_messages(user_prompt, feedback, system_prompt)
+    return messages_to_chatml(messages)
 
 
 def parse_teacher_result(

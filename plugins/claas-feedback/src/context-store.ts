@@ -51,6 +51,10 @@ export function set(key: string, ctx: ConversationContext): void {
   evictOldest();
 }
 
+export function keys(): string[] {
+  return [...store.keys()];
+}
+
 export function get(key: string): ConversationContext | undefined {
   const entry = store.get(key);
   if (!entry) return undefined;

@@ -100,7 +100,7 @@ if [[ "$ENABLE_AUTO_TOOL_CHOICE" == "1" ]]; then
 fi
 
 if [[ "${#FINAL_MODULES[@]}" -gt 0 ]]; then
-  BASE_CMD+=(--enable-lora)
+  BASE_CMD+=(--enable-lora --max-lora-rank "${MAX_LORA_RANK:-32}")
   for module in "${FINAL_MODULES[@]}"; do
     BASE_CMD+=(--lora-modules "$module")
   done

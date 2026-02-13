@@ -47,6 +47,7 @@ export default function register(api: OpenClawPluginApi) {
     const prefix = `${channelId}:`;
     const rawFrom = from.startsWith(prefix) ? from.slice(prefix.length) : from;
     const senderKey = `${channelId}:${rawFrom}`;
+    console.log(`[claas-feedback] message_received: channelId=${channelId} from=${from} rawFrom=${rawFrom} senderKey=${senderKey}`);
     pendingSenders.push(senderKey);
 
     // Safety: cap queue at 50 to prevent unbounded growth
@@ -66,6 +67,7 @@ export default function register(api: OpenClawPluginApi) {
 
     if (!senderKey || !Array.isArray(messages) || messages.length === 0) return;
 
+    console.log(`[claas-feedback] agent_end: senderKey=${senderKey} messageCount=${messages.length}`);
     contextStore.set(senderKey, {
       messages,
       sessionKey: senderKey,
@@ -87,20 +89,24 @@ export default function register(api: OpenClawPluginApi) {
       }
 
       // Look up cached conversation for this chat.
-      // message_received stores context keyed by "channel:from" where from is:
-      //   - "userId" for private chats  (e.g. "telegram:511643390")
-      //   - "group:chatId" for groups   (e.g. "telegram:group:-5242423293")
+      // message_received builds its key by stripping a redundant channel prefix
+      // from event.from:
+      //   DM:    event.from="telegram:511643390"        → key "telegram:511643390"
+      //   Group: event.from="telegram:group:-5242423293" → key "telegram:group:-5242423293"
+      //
+      // In the command handler ctx.from carries the same value as event.from,
+      // so we replicate the exact same key-building logic here.
       const channel = ctx.channel ?? ctx.channelId;
-      const senderId = ctx.senderId ?? ctx.from;
-      if (!channel || !senderId) {
+      const from = ctx.from;
+      if (!channel || !from) {
         return { text: "Could not identify sender. Please try again." };
       }
 
-      const target = ctx.to ?? senderId;
-      // In group chats target differs from senderId — build the group key format.
-      const senderKey = target && target !== senderId
-        ? `${channel}:group:${target}`
-        : `${channel}:${senderId}`;
+      const prefix = `${channel}:`;
+      const rawFrom = from.startsWith(prefix) ? from.slice(prefix.length) : from;
+      const senderKey = `${channel}:${rawFrom}`;
+      console.log(`[claas-feedback] /feedback lookup: senderKey=${senderKey} from=${from}`);
+      console.log(`[claas-feedback] contextStore keys: ${JSON.stringify(contextStore.keys())}`);
       const cached = contextStore.get(senderKey);
       if (!cached) {
         return {
@@ -115,15 +121,15 @@ export default function register(api: OpenClawPluginApi) {
       }
 
       // Send a "processing" indicator before the long-running CLaaS call
-      const target = ctx.to ?? ctx.senderId;
+      const replyTo = ctx.to ?? ctx.senderId;
       const sendOpts: Record<string, unknown> = {};
       if (ctx.messageThreadId) sendOpts.messageThreadId = ctx.messageThreadId;
       if (ctx.accountId) sendOpts.accountId = ctx.accountId;
 
       const sendTelegram = api.runtime?.channel?.telegram?.sendMessageTelegram;
-      if (sendTelegram && target) {
+      if (sendTelegram && replyTo) {
         try {
-          await sendTelegram(target, "\u{1F9E0} Learning from your feedback\u2026", sendOpts);
+          await sendTelegram(replyTo, "\u{1F9E0} Learning from your feedback\u2026", sendOpts);
         } catch {
           // Best-effort; don't block on notification failure
         }

@@ -9,6 +9,11 @@ SDPO uses Generalized Jensen-Shannon Divergence (GJS) for distillation, with:
 1. Alpha-interpolated mixture distribution between student and teacher
 2. IS ratio clipping for off-policy correction
 3. KL regularization to base policy to prevent drift
+
+Note: This implementation uses direct GJS minimization with IS correction,
+rather than the two-component (PG + regularizer) loss described in
+docs/initial_plan.md. This matches the paper's formulation more closely
+(veRL: core_algos.py).
 """
 
 from __future__ import annotations
@@ -66,22 +71,25 @@ def compute_sdpo_loss(loss_input: SDPOLossInput) -> SDPOLossResult:
         log_alpha = torch.log(alpha_t)
         log_one_minus_alpha = torch.log(1 - alpha_t)
 
-        # Mixture: M = alpha * teacher + (1-alpha) * student
-        mixture_log_probs = torch.logsumexp(
-            torch.stack([
-                student_at_teacher_k + log_one_minus_alpha,
-                teacher_logprobs + log_alpha,
-            ]),
-            dim=0,
-        )  # (B, T, K)
-
-        # KL(teacher || M) and KL(student || M)
-        # Using F.kl_div with log_target=True: KL(P||Q) = sum(exp(log_P) * (log_P - log_Q))
+        # Renormalize over top-K support (veRL: core_algos.py:1120-1122)
         teacher_probs = teacher_logprobs.exp()
         student_probs_k = student_at_teacher_k.exp()
+        teacher_probs = teacher_probs / teacher_probs.sum(-1, keepdim=True).clamp(min=1e-8)
+        student_probs_k = student_probs_k / student_probs_k.sum(-1, keepdim=True).clamp(min=1e-8)
+        teacher_logprobs_norm = teacher_probs.log()
+        student_at_teacher_k_norm = student_probs_k.log()
 
-        kl_teacher_M = (teacher_probs * (teacher_logprobs - mixture_log_probs)).sum(-1)  # (B, T)
-        kl_student_M = (student_probs_k * (student_at_teacher_k - mixture_log_probs)).sum(-1)  # (B, T)
+        # Mixture: M = alpha * teacher_norm + (1-alpha) * student_norm
+        mixture_log_probs = torch.logsumexp(
+            torch.stack([
+                student_at_teacher_k_norm + log_one_minus_alpha,
+                teacher_logprobs_norm + log_alpha,
+            ]),
+            dim=0,
+        )
+
+        kl_teacher_M = (teacher_probs * (teacher_logprobs_norm - mixture_log_probs)).sum(-1)  # (B, T)
+        kl_student_M = (student_probs_k * (student_at_teacher_k_norm - mixture_log_probs)).sum(-1)  # (B, T)
 
         # GJS = alpha * KL(teacher||M) + (1-alpha) * KL(student||M)
         per_token_loss = torch.lerp(kl_student_M, kl_teacher_M, alpha_t)  # (B, T)
@@ -113,7 +121,11 @@ def compute_sdpo_loss(loss_input: SDPOLossInput) -> SDPOLossResult:
     per_token_loss = per_token_loss * ratio
 
     # Step 4: KL regularization to base policy
-    kl_to_base_per_token = student_logprob_chosen - base_logprobs  # (B, T)
+    # Schulman k3 estimator — always >= 0 (veRL: core_algos.py:1998-2004)
+    log_ratio = student_logprob_chosen - base_logprobs
+    log_ratio = torch.clamp(log_ratio, min=-20.0, max=20.0)
+    ratio_kl = log_ratio.exp()
+    kl_to_base_per_token = (ratio_kl - 1) - log_ratio  # always >= 0
 
     # Apply response mask and average
     mask_sum = response_mask.sum().clamp(min=1.0)
