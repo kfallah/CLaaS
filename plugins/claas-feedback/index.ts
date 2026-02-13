@@ -65,7 +65,11 @@ export default function register(api: OpenClawPluginApi) {
     const messages = event.messages;
     const senderKey = pendingSenders.shift();
 
-    if (!senderKey || !Array.isArray(messages) || messages.length === 0) return;
+    if (!senderKey) {
+      console.warn("[claas-feedback] agent_end: missing sender key; skipping context cache for this run");
+      return;
+    }
+    if (!Array.isArray(messages) || messages.length === 0) return;
 
     console.log(`[claas-feedback] agent_end: senderKey=${senderKey} messageCount=${messages.length}`);
     contextStore.set(senderKey, {

@@ -105,7 +105,7 @@ def test_feedback_success_inplace_flow(monkeypatch):
             )
         raise AssertionError(f"unexpected modal function: {fn_name}")
 
-    async def fake_vllm_post(path, *, params=None, json_body=None, timeout_s=30.0):
+    async def fake_vllm_post(path, *, params=None, _json_body=None, _timeout_s=30.0):
         calls.append((path, params))
 
     def fake_write_feedback_log(record):
@@ -160,7 +160,7 @@ def test_feedback_returns_500_and_logs_error(monkeypatch):
             return _FunctionFailureStub()
         raise AssertionError(f"unexpected modal function: {fn_name}")
 
-    async def fake_vllm_post(_path, *, params=None, json_body=None, timeout_s=30.0):
+    async def fake_vllm_post(_path, *, _params=None, _json_body=None, _timeout_s=30.0):
         return None
 
     def fake_write_feedback_log(record):
