@@ -179,7 +179,7 @@ async def chat_completions(req: ChatCompletionRequest) -> dict | StreamingRespon
 
 
 @app.post("/v1/completions")
-async def completions(req: CompletionRequest) -> dict:
+async def completions(req: CompletionRequest) -> dict | StreamingResponse:
     tokenizer = _holder.tokenizer
     sampler = _holder.sampler
 
@@ -207,6 +207,9 @@ async def completions(req: CompletionRequest) -> dict:
 
     completion_id = f"cmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
+
+    if req.stream:
+        return _stream_completion_response(completion_id, created, req.model, text)
 
     return {
         "id": completion_id,
@@ -290,6 +293,51 @@ def _stream_chat_response(
                 {
                     "index": 0,
                     "delta": {},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        yield f"data: {json.dumps(final)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+def _stream_completion_response(
+    completion_id: str,
+    created: int,
+    model: str,
+    text: str,
+) -> StreamingResponse:
+    """Wrap a complete text-completion response as an SSE stream."""
+
+    def _generate():
+        # Single chunk with the full text (Tinker returns all at once).
+        chunk = {
+            "id": completion_id,
+            "object": "text_completion",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "text": text,
+                    "finish_reason": None,
+                }
+            ],
+        }
+        yield f"data: {json.dumps(chunk)}\n\n"
+
+        # Final chunk signaling stop.
+        final = {
+            "id": completion_id,
+            "object": "text_completion",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "text": "",
                     "finish_reason": "stop",
                 }
             ],
