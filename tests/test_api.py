@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from claas.api import web_app
@@ -441,3 +443,81 @@ def test_feedback_skips_logprobs_when_provided(monkeypatch, tmp_path):
 
 async def _noop_coro():
     pass
+
+
+
+def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
+    from claas import api
+    from claas.types import DistillResponse, LoraExistsPayload
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+
+    class _Engine:
+        async def lora_exists(self, _lora_id):
+            return LoraExistsPayload(exists=True)
+
+    captured = {}
+
+    async def fake_lock_key(_lora_id):
+        return "user-model-v1"
+
+    async def fake_get_lock(key):
+        captured["key"] = key
+        return asyncio.Lock()
+
+    async def fake_run_distill(_payload):
+        return DistillResponse(lora_id="user/model", metadata={})
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
+    monkeypatch.setattr(api, "_get_feedback_lock_key", fake_lock_key)
+    monkeypatch.setattr(api, "_get_feedback_lock", fake_get_lock)
+    monkeypatch.setattr(api, "_run_distill", fake_run_distill)
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "lora_id": "user/model-latest",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "training": {"teacher_mode": "self"},
+            "orchestration": {"sleep_before": False, "wake_after": False},
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["key"] == "user-model-v1"
+
+
+def test_feedback_tinker_accepts_default_orchestration(monkeypatch, tmp_path):
+    from claas import api
+    from claas.types import DistillResponse, LoraExistsPayload
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+
+    class _Engine:
+        async def lora_exists(self, _lora_id):
+            return LoraExistsPayload(exists=True)
+
+    async def fake_run_distill(_payload):
+        return DistillResponse(lora_id="user/model", metadata={})
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
+    monkeypatch.setattr(api, "_run_distill", fake_run_distill)
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "lora_id": "user/model",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "training": {"teacher_mode": "self"},
+        },
+    )
+
+    assert response.status_code == 200

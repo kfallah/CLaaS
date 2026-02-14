@@ -151,6 +151,16 @@ async def _get_feedback_lock(lora_id: str) -> asyncio.Lock:
         return _feedback_locks[key]
 
 
+async def _get_feedback_lock_key(lora_id: str) -> str:
+    """Resolve the lock key to a canonical LoRA runtime identifier when possible."""
+    key = lora_id.strip("/")
+    if _get_engine_kind() not in {"local", "modal"}:
+        return key
+
+    runtime_ref = await _get_training_engine().lora_runtime_ref(lora_id)
+    return runtime_ref.vllm_name
+
+
 async def _vllm_post(
     path: str,
     *,
@@ -428,22 +438,16 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
     timing_ms = FeedbackTimingMs()
     started_total = time.perf_counter()
 
-    lock = await _get_feedback_lock(request.lora_id)
     try:
         exists_payload = await _get_training_engine().lora_exists(request.lora_id)
         if not exists_payload.exists:
             raise HTTPException(status_code=404, detail=f"LoRA not found: {request.lora_id}")
 
+        lock_key = await _get_feedback_lock_key(request.lora_id)
+        lock = await _get_feedback_lock(lock_key)
+
         await asyncio.wait_for(lock.acquire(), timeout=FEEDBACK_LOCK_TIMEOUT_S)
         lock_acquired = True
-
-        if _get_engine_kind() == "tinker" and (
-            request.orchestration.sleep_before or request.orchestration.wake_after
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="tinker mode requires orchestration.sleep_before=false and wake_after=false",
-            )
 
         if request.orchestration.sleep_before and _get_engine_kind() != "tinker":
             phase = "drain"

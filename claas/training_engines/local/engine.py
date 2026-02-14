@@ -46,7 +46,11 @@ class LocalTrainingEngine(TrainingEngine):
             result = await asyncio.to_thread(worker.distill.local, payload.model_dump())
             return DistillResponse.model_validate(result)
         finally:
-            await asyncio.to_thread(worker._offload_base_model)
+            try:
+                await asyncio.to_thread(worker._offload_base_model)
+            except (RuntimeError, OSError, ValueError):
+                # Training already completed; cleanup failures should not fail the request.
+                pass
             del worker
             gc.collect()
 
