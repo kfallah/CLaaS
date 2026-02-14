@@ -201,7 +201,18 @@ class TestCreateInitialLora:
             def commit(self):
                 pass
 
+        class _MockModelConfig:
+            hidden_size = 768
+            num_attention_heads = 12
+            intermediate_size = 3072
+            num_hidden_layers = 2
+            num_key_value_heads = 12
+
         monkeypatch.setattr(storage, "lora_volume", MockVolume())
+        monkeypatch.setattr(
+            "transformers.AutoConfig.from_pretrained",
+            lambda *_a, **_kw: _MockModelConfig(),
+        )
 
         volume_path = tmp_path / "volume"
         volume_path.mkdir()
@@ -217,8 +228,10 @@ class TestCreateInitialLora:
         assert "user/model-init" in result
 
         # Find the created config
-        config_path = volume_path / "user" / "model-init" / "adapter_config.json"
+        init_dir = volume_path / "user" / "model-init"
+        config_path = init_dir / "adapter_config.json"
         assert config_path.exists()
+        assert (init_dir / "adapter_model.safetensors").exists()
 
         config = json.loads(config_path.read_text())
         assert config["r"] == 32
