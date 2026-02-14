@@ -7,8 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
-import subprocess
-import textwrap
+import signal
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -92,25 +91,37 @@ def verify_coding(response: str, timeout_s: float = 5.0) -> CodingResult:
 
     has_docstring = '"""' in code or "'''" in code
 
-    # Run in subprocess for isolation and timeout
-    test_script = textwrap.dedent(f"""\
-        {code}
-
-        assert fibonacci(0) == 0, f"fibonacci(0) = {{fibonacci(0)}}"
-        assert fibonacci(1) == 1, f"fibonacci(1) = {{fibonacci(1)}}"
-        assert fibonacci(10) == 55, f"fibonacci(10) = {{fibonacci(10)}}"
-        print("PASS")
-    """)
-
     try:
-        result = subprocess.run(
-            ["python3", "-c", test_script],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-        )
-        correct = result.returncode == 0 and "PASS" in result.stdout
-    except (subprocess.TimeoutExpired, OSError):
+        def _timeout_handler(_signum: int, _frame: object) -> None:
+            raise TimeoutError("coding verification timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.setitimer(signal.ITIMER_REAL, timeout_s)
+        try:
+            safe_builtins = {
+                "abs": abs,
+                "int": int,
+                "len": len,
+                "max": max,
+                "min": min,
+                "range": range,
+                "sum": sum,
+            }
+            namespace: dict[str, object] = {"__builtins__": safe_builtins}
+            exec(code, namespace, namespace)
+            fn = namespace.get("fibonacci")
+            if callable(fn):
+                correct = (
+                    fn(0) == 0 and
+                    fn(1) == 1 and
+                    fn(10) == 55
+                )
+            else:
+                correct = False
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, old_handler)
+    except (TimeoutError, OSError, ValueError, TypeError, NameError, SyntaxError):
         correct = False
 
     return CodingResult(correct=correct, has_docstring=has_docstring)

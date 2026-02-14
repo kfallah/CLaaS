@@ -30,7 +30,7 @@ Each preference type is tested in **isolation** (fresh LoRA per type). This give
 
 For each preference, we define a **programmatic verifier** (no LLM judge needed — deterministic, fast):
 
-```
+```text
 no_emoji:     score = 1.0 if count(emoji_chars, response) == 0 else 0.0
 concise:      score = 1.0 if count_sentences(response) <= 3 else max(0, 1 - (n_sentences - 3) / 6)
 identity:     score = 1.0 if "kuro" in response.lower() else 0.0
@@ -119,19 +119,19 @@ def verify_coding(response: str) -> dict:
 ```
 
 Plus 3 quick IFEval-style verifiable instructions:
-```
+```text
 1. "Write exactly 3 sentences about Python." → verify sentence count == 3
 2. "List 5 benefits of exercise. Use numbered list." → verify 5 numbered items
 3. "Explain recursion without using the word 'function'." → verify 'function' not in response
 ```
 
-Score = (coding_correct * 0.5) + (ifeval_pass_rate * 0.5)
+`Score = (coding_correct * 0.5) + (ifeval_pass_rate * 0.5)`
 
 ---
 
 ## 3. Test Harness Architecture
 
-```
+```text
 ┌────────────────────────────────────────────────────────────┐
 │                    Benchmark Runner                         │
 │  (Python script, runs on same L40S)                        │
@@ -162,7 +162,7 @@ Score = (coding_correct * 0.5) + (ifeval_pass_rate * 0.5)
 Gemini plays two roles:
 
 **Role 1 — Simulated User** (generates the chat that triggers feedback):
-```
+```text
 System: You are testing an AI chatbot. Have a natural conversation about coding, 
 daily life, or general knowledge. Keep messages short (1-2 sentences). 
 Your hidden preference: {PREFERENCE_DESCRIPTION}. 
@@ -272,7 +272,7 @@ With batching: ~8s per eval → 20 × (16 + 8) = **~8 min per preference, ~24 mi
 
 ## 6. Implementation Priority
 
-1. **Phase 1 (MVP, ~1 day):** Logprob margin tracking only. No generation needed — just forward passes via vLLM `/v1/completions` with `max_tokens=0, prompt_logprobs=1`. This reuses `_fetch_rollout_logprobs()`. Wire it into a loop that does: init LoRA → 20× (POST /v1/feedback with hardcoded feedback string + measure margin). Skip Gemini entirely. Run all 3 preferences.
+1. **Phase 1 (MVP, ~1 day):** Logprob margin tracking only. No generation needed — just forward passes via vLLM `/v1/completions` with `max_tokens=1, prompt_logprobs=1`. This reuses `_fetch_rollout_logprobs()`. Wire it into a loop that does: init LoRA → 20× (POST /v1/feedback with hardcoded feedback string + measure margin). Skip Gemini entirely. Run all 3 preferences.
 
 2. **Phase 2 (~1 day):** Add generative eval (compliance probes + coding task). Add the Gemini simulated user for natural feedback variation.
 

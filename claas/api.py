@@ -241,7 +241,7 @@ async def _fetch_rollout_logprobs(
     """Fetch per-token logprobs for *response* from the vLLM completions API.
 
     1. Tokenize the prompt to learn its token count.
-    2. Submit ``prompt + response`` with ``max_tokens=0`` and ``prompt_logprobs=1``.
+    2. Submit ``prompt + response`` with ``max_tokens=1`` and ``prompt_logprobs=1``.
     3. Strip the prompt portion and extract the log-probability for each
        response token.
     """

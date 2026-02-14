@@ -18,6 +18,11 @@ from .types import GeminiEvalResult
 
 logger = logging.getLogger(__name__)
 
+_GEMINI_DEPENDENCY_MESSAGE = (
+    "google-genai is required for Gemini user. "
+    "Install with: pip install google-genai"
+)
+
 _SYSTEM_PROMPT = """\
 You are testing an AI chatbot. Have a natural conversation about coding, \
 daily life, or general knowledge. Keep messages short (1-2 sentences). \
@@ -26,6 +31,13 @@ After the chatbot responds, evaluate whether it followed your preference.
 Reply with ONLY a JSON object: {{"satisfied": true/false, "feedback": "string or null"}}
 If satisfied, set feedback to null.
 If not satisfied, feedback should be a natural rephrasing of your preference."""
+
+
+class GeminiDependencyError(ImportError):
+    """Raised when google-genai is not installed."""
+
+    def __init__(self) -> None:
+        super().__init__(_GEMINI_DEPENDENCY_MESSAGE)
 
 
 class GeminiUser:
@@ -43,11 +55,8 @@ class GeminiUser:
                 from google import genai
 
                 self._client = genai.Client(api_key=self._api_key)
-            except ImportError:
-                raise ImportError(
-                    "google-genai is required for Gemini user. "
-                    "Install with: pip install google-genai"
-                )
+            except ImportError as err:
+                raise GeminiDependencyError() from err
         return self._client
 
     async def evaluate_response(
@@ -100,4 +109,5 @@ def get_feedback(
     This is synchronous — the runner calls gemini_user.evaluate_response() directly
     for the async path.
     """
+    _ = (gemini_user, chatbot_response, user_prompt)
     return default_feedback

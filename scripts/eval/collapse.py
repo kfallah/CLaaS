@@ -115,6 +115,24 @@ async def measure_token_entropy(
     timeout_s: float = 60.0,
 ) -> float:
     """Generate response with top_logprobs=20 and compute mean token entropy."""
+    mean_entropy, _mean_logprob = await measure_entropy_and_mean_logprob(
+        vllm_url=vllm_url,
+        vllm_api_key=vllm_api_key,
+        model=model,
+        prompt=prompt,
+        timeout_s=timeout_s,
+    )
+    return mean_entropy
+
+
+async def measure_entropy_and_mean_logprob(
+    vllm_url: str,
+    vllm_api_key: str,
+    model: str,
+    prompt: str = COLLAPSE_PROBE,
+    timeout_s: float = 60.0,
+) -> tuple[float, float]:
+    """Generate one response and return (mean_entropy, mean_logprob)."""
     headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
 
     async with httpx.AsyncClient(base_url=vllm_url, timeout=timeout_s) as client:
@@ -136,10 +154,14 @@ async def measure_token_entropy(
     logprobs_content = choice.get("logprobs", {}).get("content", [])
 
     if not logprobs_content:
-        return 0.0
+        return (0.0, 0.0)
 
     entropies = []
+    selected_logprobs = []
     for token_info in logprobs_content:
+        token_logprob = token_info.get("logprob")
+        if token_logprob is not None:
+            selected_logprobs.append(token_logprob)
         top_lps = token_info.get("top_logprobs", [])
         if not top_lps:
             continue
@@ -154,7 +176,13 @@ async def measure_token_entropy(
         entropy = -sum(p * math.log(p) for p in probs if p > 0)
         entropies.append(entropy)
 
-    return sum(entropies) / len(entropies) if entropies else 0.0
+    mean_entropy = sum(entropies) / len(entropies) if entropies else 0.0
+    mean_logprob = (
+        sum(selected_logprobs) / len(selected_logprobs)
+        if selected_logprobs
+        else 0.0
+    )
+    return (mean_entropy, mean_logprob)
 
 
 async def measure_self_rouge_l(
@@ -205,7 +233,11 @@ async def measure_collapse(
     baseline_mean_logprob: float | None = None,
 ) -> CollapseMetrics:
     """Run all collapse detection checks and return metrics."""
-    mean_entropy = await measure_token_entropy(vllm_url, vllm_api_key, model)
+    mean_entropy, mean_logprob = await measure_entropy_and_mean_logprob(
+        vllm_url=vllm_url,
+        vllm_api_key=vllm_api_key,
+        model=model,
+    )
     self_rouge = await measure_self_rouge_l(vllm_url, vllm_api_key, model)
 
     # Entropy ratio
@@ -213,10 +245,10 @@ async def measure_collapse(
     if baseline_entropy and baseline_entropy > 0:
         entropy_ratio = mean_entropy / baseline_entropy
 
-    # Logprob drift (simplified: use entropy as proxy since we don't separately track mean logprob)
+    # Logprob drift from baseline mean token logprob.
     drift = 0.0
     if baseline_mean_logprob is not None:
-        drift = abs(mean_entropy - baseline_mean_logprob)
+        drift = abs(mean_logprob - baseline_mean_logprob)
 
     # Alert conditions
     alert = False
@@ -232,6 +264,7 @@ async def measure_collapse(
 
     return CollapseMetrics(
         mean_entropy=mean_entropy,
+        mean_logprob=mean_logprob,
         entropy_ratio_to_baseline=entropy_ratio,
         self_rouge_l=self_rouge,
         mean_logprob_drift=drift,

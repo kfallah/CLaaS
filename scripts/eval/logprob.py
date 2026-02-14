@@ -19,7 +19,7 @@ For each (prompt, response) pair the pipeline:
 1. Tokenizes the ChatML prompt prefix via ``POST /tokenize`` to learn
    where the prompt ends and the response begins.
 2. Sends the full sequence (prefix + response) to ``POST /v1/completions``
-   with ``max_tokens=0`` and ``prompt_logprobs=1``, which returns the
+   with ``max_tokens=1`` and ``prompt_logprobs=1``, which returns the
    per-token log probabilities assigned by the model to every token in
    the input without generating any new tokens.
 3. Discards the logprobs that correspond to the prompt tokens (using the
@@ -77,7 +77,7 @@ async def fetch_response_logprob_sum(
 
     Steps:
     1. POST /tokenize to get prompt token count
-    2. POST /v1/completions with prompt+response, max_tokens=0, prompt_logprobs=1
+    2. POST /v1/completions with prompt+response, max_tokens=1, prompt_logprobs=1
     3. Extract and sum logprobs for response tokens
     """
     headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}

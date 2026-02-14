@@ -14,7 +14,7 @@ import httpx
 from .capability import evaluate_general_capability
 from .collapse import measure_collapse
 from .logprob import measure_logprob_margin
-from .types import EvalMetrics, MetricContext
+from .types import EvalMetrics, LogprobMargin, MetricContext
 from .verifiers import run_verifier
 
 logger = logging.getLogger(__name__)
@@ -37,11 +37,20 @@ class LogprobMetric:
 
     async def measure(self, ctx: MetricContext, metrics: EvalMetrics) -> None:
         baseline_margin = ctx.baseline.logprob_margin.margin if ctx.baseline.logprob_margin else None
+        margins: list[LogprobMargin] = []
         for pair in ctx.pref.logprob_pairs:
             margin = await measure_logprob_margin(
                 ctx.vllm_url, ctx.vllm_api_key, ctx.vllm_model, pair, baseline_margin,
             )
-            metrics.logprob_margin = margin
+            margins.append(margin)
+        if margins:
+            n = len(margins)
+            metrics.logprob_margin = LogprobMargin(
+                positive_logprob=sum(m.positive_logprob for m in margins) / n,
+                negative_logprob=sum(m.negative_logprob for m in margins) / n,
+                margin=sum(m.margin for m in margins) / n,
+                margin_delta_from_baseline=sum(m.margin_delta_from_baseline for m in margins) / n,
+            )
 
 
 class ComplianceMetric:
@@ -87,10 +96,12 @@ class CollapseMetric:
         if ctx.step not in self.check_steps:
             return
         baseline_entropy = ctx.baseline.collapse.mean_entropy if ctx.baseline.collapse else None
+        baseline_mean_logprob = ctx.baseline.collapse.mean_logprob if ctx.baseline.collapse else None
         try:
             metrics.collapse = await measure_collapse(
                 ctx.vllm_url, ctx.vllm_api_key, ctx.vllm_model,
                 baseline_entropy=baseline_entropy,
+                baseline_mean_logprob=baseline_mean_logprob,
             )
         except (httpx.HTTPError, KeyError) as e:
             logger.warning("Collapse detection failed: %s", e)
