@@ -84,7 +84,7 @@ class TinkerTrainingEngine(TrainingEngine):
             base_model=base_model,
             rank=rank,
         )
-        save_resp = await tc.save_state_async("init")
+        save_resp = await _await_api_future(await tc.save_state_async("init"))
         set_tinker_path(
             lora_id=request.lora_id,
             tinker_path=save_resp.path,
@@ -185,10 +185,14 @@ class TinkerTrainingEngine(TrainingEngine):
         # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
         teacher_messages = build_teacher_messages(payload.prompt, payload.feedback)
         template_messages = teacher_messages_to_chat_template(teacher_messages)
-        teacher_prompt_tokens: list[int] = tokenizer.apply_chat_template(
+        teacher_prompt_text: str = tokenizer.apply_chat_template(
             template_messages,
             add_generation_prompt=True,
-            tokenize=True,
+            tokenize=False,
+        )
+        teacher_prompt_tokens: list[int] = tokenizer.encode(
+            teacher_prompt_text,
+            add_special_tokens=False,
         )
         teacher_full_tokens = teacher_prompt_tokens + response_tokens
         teacher_prompt_len = len(teacher_prompt_tokens)
@@ -257,7 +261,7 @@ class TinkerTrainingEngine(TrainingEngine):
         # ── Save checkpoint & update state ──
         new_step = entry.step + 1
         checkpoint_name = f"step-{new_step}"
-        save_result = await training_client.save_state_async(checkpoint_name)
+        save_result = await _await_api_future(await training_client.save_state_async(checkpoint_name))
 
         set_tinker_path(
             lora_id=payload.lora_id,
@@ -313,3 +317,14 @@ def _slice_completion_logprobs(
     """
     raw = logprobs_full[prompt_len : prompt_len + completion_len]
     return [lp if lp is not None else 0.0 for lp in raw]
+
+
+async def _await_api_future(obj):
+    """Resolve Tinker future-like wrappers into concrete results."""
+    result_async = getattr(obj, "result_async", None)
+    if callable(result_async):
+        return await result_async()
+    result = getattr(obj, "result", None)
+    if callable(result):
+        return result()
+    return obj

@@ -20,11 +20,17 @@ This enables real-time model personalization where the model learns from each in
 ## Installation
 
 ```bash
-uv sync
+# Local GPU workflow (vLLM + local distillation)
+uv sync --extra local
+
+# Tinker workflow (no GPU deps; install CPU torch wheel)
+uv sync --extra tinker
+uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu torch
 ```
 
-**Prerequisites:** Python 3.11+, `uv`, a CUDA GPU, and `vllm` for local serving.
-For remote execution, also run `uv run modal token new`.
+**Prerequisites:** Python 3.11+ and `uv`.
+- Local mode also requires a CUDA GPU and `vllm`.
+- For remote execution, also run `uv run modal token new`.
 
 ## Quick Start
 
@@ -159,7 +165,7 @@ This skill installs all dependencies (CLaaS, vLLM, OpenClaw), initializes the Lo
 ## Development
 
 ```bash
-uv sync --extra dev
+uv sync --extra dev --extra local
 uv run ruff check claas/ tests/
 uv run ty check
 uv run pytest -q

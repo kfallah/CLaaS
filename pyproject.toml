@@ -14,15 +14,10 @@ authors = [
 ]
 dependencies = [
     "modal>=1.0.0",
-    "torch>=2.1.0",
-    "transformers>=4.40.0",
-    "peft>=0.10.0",
     "fastapi>=0.110.0",
     "pydantic>=2.6.0",
     "httpx>=0.27.0",
     "uvicorn>=0.40.0",
-    "tinker>=0.13.0",
-    "tinker-cookbook",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +30,15 @@ dev = [
 ]
 teacher = [
     "vllm>=0.11.0",
+]
+local = [
+    "torch>=2.1.0",
+    "transformers>=4.40.0",
+    "peft>=0.10.0",
+]
+tinker = [
+    "tinker>=0.13.0",
+    "tinker-cookbook",
 ]
 
 [project.scripts]

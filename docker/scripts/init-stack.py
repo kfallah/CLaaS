@@ -103,7 +103,7 @@ def create_tinker_lora(alias_key: str) -> None:
     """Initialize LoRA in Tinker mode via the CLaaS API."""
     _wait_for_api()
     api_url = CLAAS_API_URL.rstrip("/")
-    with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
         listed = client.get(f"{api_url}/v1/lora", params={"prefix": LORA_NAME})
         listed.raise_for_status()
         loras = listed.json().get("loras", [])
@@ -114,6 +114,7 @@ def create_tinker_lora(alias_key: str) -> None:
         init_resp = client.post(
             f"{api_url}/v1/lora/init",
             json={"lora_id": alias_key, "base_model": BASE_MODEL},
+            timeout=httpx.Timeout(600.0, connect=10.0),
         )
         init_resp.raise_for_status()
         print(f"Created initial Tinker LoRA: {alias_key}")
@@ -284,13 +285,32 @@ def install_feedback_plugin() -> None:
 # Step 3: Fix permissions so OpenClaw's node user can read everything
 # ---------------------------------------------------------------------------
 def fix_permissions() -> None:
+    openclaw_uid = int(os.environ.get("OPENCLAW_UID", "1000"))
+    openclaw_gid = int(os.environ.get("OPENCLAW_GID", "1000"))
+
     for root, dirs, files in os.walk(str(OPENCLAW_HOME)):
+        os.chown(root, openclaw_uid, openclaw_gid)
         for d in dirs:
             p = os.path.join(root, d)
-            os.chmod(p, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+            os.chown(p, openclaw_uid, openclaw_gid)
+            os.chmod(
+                p,
+                stat.S_IRWXU
+                | stat.S_IRWXG
+                | stat.S_IROTH
+                | stat.S_IXOTH,
+            )
         for f in files:
             p = os.path.join(root, f)
-            os.chmod(p, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+            os.chown(p, openclaw_uid, openclaw_gid)
+            os.chmod(
+                p,
+                stat.S_IRUSR
+                | stat.S_IWUSR
+                | stat.S_IRGRP
+                | stat.S_IWGRP
+                | stat.S_IROTH,
+            )
 
 
 # ---------------------------------------------------------------------------
