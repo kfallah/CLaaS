@@ -29,6 +29,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -88,7 +89,7 @@ def _get_engine_kind() -> EngineKind:
 
 def _uses_modal_teacher() -> bool:
     """Return whether API should fetch teacher scores from Modal TeacherService."""
-    return _get_engine_kind() in {"local", "modal"}
+    return _get_engine_kind() == "modal"
 
 
 def _get_training_engine() -> TrainingEngine:
@@ -627,11 +628,12 @@ async def export_lora_adapter(lora_id: str) -> Response:
             )
 
         export_payload = await _get_training_engine().export_lora(lora_id)
+        safe_filename = re.sub(r'[^\w._-]', '_', export_payload.filename)
         return Response(
             content=export_payload.content,
             media_type="application/zip",
             headers={
-                "Content-Disposition": f'attachment; filename="{export_payload.filename}"',
+                "Content-Disposition": f'attachment; filename="{safe_filename}"',
             },
         )
     except HTTPException:
