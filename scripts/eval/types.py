@@ -4,6 +4,23 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Literal, TypedDict
+
+
+class ChatMessage(TypedDict):
+    """Normalized chat message used across eval rollout logs."""
+
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+
+@dataclass
+class EvalRollout:
+    """Logged prompt/response transcript with metric-specific metadata."""
+
+    metric: str
+    messages: list[ChatMessage]
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -23,6 +40,10 @@ class HarnessConfig:
     collapse_steps: set[int] | None = None
     lora_id_prefix: str = "eval"
     seed: int = 42
+    system_prompt: str | None = None
+    prompt_preamble: list[ChatMessage] = field(default_factory=list)
+    openclaw_url: str | None = None
+    openclaw_api_key: str = "openclaw-local-dev-token"
 
 
 @dataclass
@@ -75,6 +96,7 @@ class EvalMetrics:
     preference_compliance: float | None = None
     general: GeneralCapability | None = None
     collapse: CollapseMetrics | None = None
+    rollouts: list[EvalRollout] = field(default_factory=list)
 
 
 @dataclass
@@ -160,6 +182,10 @@ class MetricContext:
     baseline: EvalMetrics
     response_text: str | None = None
     generate: Callable[[str], Awaitable[str]] | None = None
+    system_prompt: str | None = None
+    prompt_preamble: list[ChatMessage] = field(default_factory=list)
+    openclaw_url: str | None = None
+    openclaw_api_key: str = "openclaw-local-dev-token"
 
 
 def step_result_from_dict(data: dict[str, object]) -> StepResult:
@@ -182,6 +208,18 @@ def step_result_from_dict(data: dict[str, object]) -> StepResult:
     col = eval_data.get("collapse")  # type: ignore[union-attr]
     if col:
         eval_metrics.collapse = CollapseMetrics(**col)
+
+    rollouts = eval_data.get("rollouts")  # type: ignore[union-attr]
+    if isinstance(rollouts, list):
+        eval_metrics.rollouts = [
+            EvalRollout(
+                metric=item.get("metric", ""),  # type: ignore[union-attr]
+                messages=item.get("messages", []),  # type: ignore[union-attr]
+                metadata=item.get("metadata", {}),  # type: ignore[union-attr]
+            )
+            for item in rollouts
+            if isinstance(item, dict)
+        ]
 
     sdpo = None
     sdpo_data = data.get("sdpo_metrics")

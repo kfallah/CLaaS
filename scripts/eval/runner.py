@@ -33,6 +33,21 @@ from .types import (
 logger = logging.getLogger(__name__)
 
 
+def _build_messages(
+    prompt: str,
+    system_prompt: str | None = None,
+    prompt_preamble: list[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
+    """Build chat messages with optional preamble and system prompt."""
+    messages: list[dict[str, str]] = list(prompt_preamble or [])
+    if system_prompt and not any(
+        m.get("role") == "system" and m.get("content") == system_prompt for m in messages
+    ):
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
+
 async def _init_lora(config: HarnessConfig, lora_id: str) -> str:
     """Initialize a fresh LoRA adapter via CLaaS API."""
     async with httpx.AsyncClient(base_url=config.claas_url, timeout=120.0) as client:
@@ -114,19 +129,48 @@ async def _generate_response(
     model: str,
     prompt: str,
     temperature: float = 0,
-    max_tokens: int = 256,
+    max_tokens: int = 2048,
 ) -> str:
-    """Generate a response via vLLM chat completions."""
-    headers = {"Authorization": f"Bearer {config.vllm_api_key}"} if config.vllm_api_key else {}
-    async with httpx.AsyncClient(base_url=config.vllm_url, timeout=60.0) as client:
+    """Generate a response via OpenClaw gateway (if configured) or direct vLLM.
+
+    When ``config.openclaw_url`` is set the request is routed through the
+    OpenClaw ``/v1/chat/completions`` endpoint which prepends the full agent
+    system prompt and context automatically.  Otherwise the request goes
+    directly to vLLM with manually-constructed messages.
+    """
+    if config.openclaw_url:
+        headers = {"Authorization": f"Bearer {config.openclaw_api_key}"}
+        base_url = config.openclaw_url
+        body: dict[str, object] = {
+            "model": "openclaw",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+    else:
+        headers = (
+            {"Authorization": f"Bearer {config.vllm_api_key}"}
+            if config.vllm_api_key
+            else {}
+        )
+        base_url = config.vllm_url
+        messages = _build_messages(
+            prompt=prompt,
+            system_prompt=config.system_prompt,
+            prompt_preamble=config.prompt_preamble,
+        )
+        body = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+    async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
         resp = await client.post(
             "/v1/chat/completions",
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
+            json=body,
             headers=headers,
         )
         resp.raise_for_status()
@@ -157,6 +201,10 @@ async def _measure_eval_metrics(
         baseline=baseline,
         response_text=response_text,
         generate=generate,
+        system_prompt=config.system_prompt,
+        prompt_preamble=config.prompt_preamble,
+        openclaw_url=config.openclaw_url,
+        openclaw_api_key=config.openclaw_api_key,
     )
 
     for metric in enabled_metrics:
@@ -420,7 +468,7 @@ async def run_preference_experiment(
         if needs_generation:
             try:
                 response_text = await _generate_response(
-                    config, vllm_model, prompt, temperature=0, max_tokens=256,
+                    config, vllm_model, prompt, temperature=0,
                 )
             except (httpx.HTTPError, KeyError, ValueError) as e:
                 logger.warning("[%s] Step %d generation failed, using canned: %s", pref.name, step, e)

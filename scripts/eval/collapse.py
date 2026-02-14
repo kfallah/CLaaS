@@ -66,7 +66,8 @@ import math
 
 import httpx
 
-from .types import CollapseMetrics
+from .types import CollapseMetrics, EvalRollout
+from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,9 @@ async def measure_entropy_and_mean_logprob(
     model: str,
     prompt: str = COLLAPSE_PROBE,
     timeout_s: float = 60.0,
+    system_prompt: str | None = None,
+    prompt_preamble: list[dict[str, str]] | None = None,
+    rollout_log: list[EvalRollout] | None = None,
 ) -> tuple[float, float]:
     """Generate one response and return (mean_entropy, mean_logprob)."""
     headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
@@ -140,9 +144,21 @@ async def measure_entropy_and_mean_logprob(
             "/v1/chat/completions",
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": (
+                    list(prompt_preamble or [])
+                    + (
+                        [{"role": "system", "content": system_prompt}]
+                        if system_prompt
+                        and not any(
+                            m.get("role") == "system" and m.get("content") == system_prompt
+                            for m in (prompt_preamble or [])
+                        )
+                        else []
+                    )
+                    + [{"role": "user", "content": prompt}]
+                ),
                 "temperature": 0,
-                "max_tokens": 128,
+                "max_tokens": 2048,
                 "logprobs": True,
                 "top_logprobs": 20,
             },
@@ -151,6 +167,8 @@ async def measure_entropy_and_mean_logprob(
         resp.raise_for_status()
 
     choice = resp.json()["choices"][0]
+    message = choice.get("message", {})
+    response_text = message.get("content", "")
     logprobs_content = choice.get("logprobs", {}).get("content", [])
 
     if not logprobs_content:
@@ -182,6 +200,31 @@ async def measure_entropy_and_mean_logprob(
         if selected_logprobs
         else 0.0
     )
+    if rollout_log is not None:
+        rollout_log.append(
+            EvalRollout(
+                metric="collapse",
+                messages=[
+                    *(list(prompt_preamble or [])),
+                    *(
+                        [{"role": "system", "content": system_prompt}]
+                        if system_prompt
+                        and not any(
+                            m.get("role") == "system" and m.get("content") == system_prompt
+                            for m in (prompt_preamble or [])
+                        )
+                        else []
+                    ),
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": response_text},
+                ],
+                metadata={
+                    "task": "entropy_probe",
+                    "mean_entropy": mean_entropy,
+                    "mean_logprob": mean_logprob,
+                },
+            )
+        )
     return (mean_entropy, mean_logprob)
 
 
@@ -192,20 +235,48 @@ async def measure_self_rouge_l(
     prompt: str = COLLAPSE_PROBE,
     n_samples: int = 3,
     timeout_s: float = 60.0,
+    system_prompt: str | None = None,
+    prompt_preamble: list[dict[str, str]] | None = None,
+    rollout_log: list[EvalRollout] | None = None,
+    openclaw_url: str | None = None,
+    openclaw_api_key: str = "openclaw-local-dev-token",
 ) -> float:
     """Generate n_samples responses at temperature=0.7 and compute mean pairwise ROUGE-L."""
-    headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
+    # Route through OpenClaw when configured (injects full agent context)
+    if openclaw_url:
+        base_url = openclaw_url
+        headers = {"Authorization": f"Bearer {openclaw_api_key}"}
+        messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
+        req_model = "openclaw"
+    else:
+        base_url = vllm_url
+        headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
+        messages = (
+            list(prompt_preamble or [])
+            + (
+                [{"role": "system", "content": system_prompt}]
+                if system_prompt
+                and not any(
+                    m.get("role") == "system" and m.get("content") == system_prompt
+                    for m in (prompt_preamble or [])
+                )
+                else []
+            )
+            + [{"role": "user", "content": prompt}]
+        )
+        req_model = model
+
     responses = []
 
-    async with httpx.AsyncClient(base_url=vllm_url, timeout=timeout_s) as client:
+    async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
         for _ in range(n_samples):
             resp = await client.post(
                 "/v1/chat/completions",
                 json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "model": req_model,
+                    "messages": messages,
                     "temperature": 0.7,
-                    "max_tokens": 256,
+                    "max_tokens": 2048,
                 },
                 headers=headers,
             )
@@ -216,12 +287,46 @@ async def measure_self_rouge_l(
     if len(responses) < 2:
         return 0.0
 
-    # Pairwise ROUGE-L
+    # Pairwise ROUGE-L (compare visible text only, strip thinking)
+    clean_responses = [strip_thinking(r) for r in responses]
     scores = []
-    for i in range(len(responses)):
-        for j in range(i + 1, len(responses)):
-            scores.append(rouge_l_score(responses[i], responses[j]))
+    for i in range(len(clean_responses)):
+        for j in range(i + 1, len(clean_responses)):
+            scores.append(rouge_l_score(clean_responses[i], clean_responses[j]))
 
+    if rollout_log is not None:
+        for idx, response in enumerate(responses):
+            rollout_log.append(
+                EvalRollout(
+                    metric="collapse",
+                    messages=[
+                        *(list(prompt_preamble or [])),
+                        *(
+                            [{"role": "system", "content": system_prompt}]
+                            if system_prompt
+                            and not any(
+                                m.get("role") == "system" and m.get("content") == system_prompt
+                                for m in (prompt_preamble or [])
+                            )
+                            else []
+                        ),
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": response},
+                    ],
+                    metadata={
+                        "task": "diversity_probe",
+                        "sample_index": idx,
+                        "temperature": 0.7,
+                    },
+                )
+            )
+        rollout_log.append(
+            EvalRollout(
+                metric="collapse",
+                messages=[{"role": "user", "content": prompt}],
+                metadata={"task": "diversity_scores", "pairwise_scores": scores},
+            )
+        )
     return sum(scores) / len(scores) if scores else 0.0
 
 
@@ -231,14 +336,35 @@ async def measure_collapse(
     model: str,
     baseline_entropy: float | None = None,
     baseline_mean_logprob: float | None = None,
+    system_prompt: str | None = None,
+    prompt_preamble: list[dict[str, str]] | None = None,
+    rollout_log: list[EvalRollout] | None = None,
+    openclaw_url: str | None = None,
+    openclaw_api_key: str = "openclaw-local-dev-token",
 ) -> CollapseMetrics:
-    """Run all collapse detection checks and return metrics."""
+    """Run all collapse detection checks and return metrics.
+
+    Entropy/logprob probes always go direct to vLLM (need logprobs).
+    Self-ROUGE-L samples route through OpenClaw when configured.
+    """
     mean_entropy, mean_logprob = await measure_entropy_and_mean_logprob(
         vllm_url=vllm_url,
         vllm_api_key=vllm_api_key,
         model=model,
+        system_prompt=system_prompt,
+        prompt_preamble=prompt_preamble,
+        rollout_log=rollout_log,
     )
-    self_rouge = await measure_self_rouge_l(vllm_url, vllm_api_key, model)
+    self_rouge = await measure_self_rouge_l(
+        vllm_url,
+        vllm_api_key,
+        model,
+        system_prompt=system_prompt,
+        prompt_preamble=prompt_preamble,
+        rollout_log=rollout_log,
+        openclaw_url=openclaw_url,
+        openclaw_api_key=openclaw_api_key,
+    )
 
     # Entropy ratio
     entropy_ratio = 1.0
@@ -261,6 +387,21 @@ async def measure_collapse(
     if drift > 2.0:
         logger.warning("COLLAPSE ALERT: logprob drift %.2f > 2.0", drift)
         alert = True
+
+    if rollout_log is not None:
+        rollout_log.append(
+            EvalRollout(
+                metric="collapse",
+                messages=[],
+                metadata={
+                    "task": "summary",
+                    "entropy_ratio_to_baseline": entropy_ratio,
+                    "self_rouge_l": self_rouge,
+                    "mean_logprob_drift": drift,
+                    "alert": alert,
+                },
+            )
+        )
 
     return CollapseMetrics(
         mean_entropy=mean_entropy,

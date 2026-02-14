@@ -14,12 +14,29 @@ import httpx
 from .capability import evaluate_general_capability
 from .collapse import measure_collapse
 from .logprob import measure_logprob_margin
-from .types import EvalMetrics, LogprobMargin, MetricContext
-from .verifiers import run_verifier
+from .types import EvalMetrics, EvalRollout, LogprobMargin, MetricContext
+from .verifiers import explain_verifier, run_verifier
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_COLLAPSE_STEPS = {0, 5, 10, 15, 19}
+
+
+def _prefixed_messages(
+    prompt: str,
+    response_text: str | None,
+    system_prompt: str | None,
+    prompt_preamble: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = list(prompt_preamble)
+    if system_prompt and not any(
+        m.get("role") == "system" and m.get("content") == system_prompt for m in messages
+    ):
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+    if response_text is not None:
+        messages.append({"role": "assistant", "content": response_text})
+    return messages
 
 
 class Metric(Protocol):
@@ -65,9 +82,38 @@ class ComplianceMetric:
             try:
                 response_text = await ctx.generate(probe_prompt)
                 score = run_verifier(ctx.pref.verifier_name, response_text)
+                details = explain_verifier(ctx.pref.verifier_name, response_text)
                 scores.append(score)
+                metrics.rollouts.append(
+                    EvalRollout(
+                        metric="compliance",
+                        messages=_prefixed_messages(
+                            prompt=probe_prompt,
+                            response_text=response_text,
+                            system_prompt=ctx.system_prompt,
+                            prompt_preamble=ctx.prompt_preamble,
+                        ),
+                        metadata={
+                            "verifier": ctx.pref.verifier_name,
+                            "score": score,
+                            "details": details,
+                        },
+                    )
+                )
             except (httpx.HTTPError, KeyError) as e:
                 logger.warning("Probe generation failed: %s", e)
+                metrics.rollouts.append(
+                    EvalRollout(
+                        metric="compliance",
+                        messages=_prefixed_messages(
+                            prompt=probe_prompt,
+                            response_text=None,
+                            system_prompt=ctx.system_prompt,
+                            prompt_preamble=ctx.prompt_preamble,
+                        ),
+                        metadata={"error": str(e), "verifier": ctx.pref.verifier_name},
+                    )
+                )
         if scores:
             metrics.preference_compliance = sum(scores) / len(scores)
 
@@ -78,9 +124,18 @@ class GeneralMetric:
 
     async def measure(self, ctx: MetricContext, metrics: EvalMetrics) -> None:
         try:
+            rollout_log: list[EvalRollout] = []
             metrics.general = await evaluate_general_capability(
-                ctx.vllm_url, ctx.vllm_api_key, ctx.vllm_model,
+                ctx.vllm_url,
+                ctx.vllm_api_key,
+                ctx.vllm_model,
+                system_prompt=ctx.system_prompt,
+                prompt_preamble=ctx.prompt_preamble,
+                rollout_log=rollout_log,
+                openclaw_url=ctx.openclaw_url,
+                openclaw_api_key=ctx.openclaw_api_key,
             )
+            metrics.rollouts.extend(rollout_log)
         except (httpx.HTTPError, KeyError) as e:
             logger.warning("General capability eval failed: %s", e)
 
@@ -98,11 +153,18 @@ class CollapseMetric:
         baseline_entropy = ctx.baseline.collapse.mean_entropy if ctx.baseline.collapse else None
         baseline_mean_logprob = ctx.baseline.collapse.mean_logprob if ctx.baseline.collapse else None
         try:
+            rollout_log: list[EvalRollout] = []
             metrics.collapse = await measure_collapse(
                 ctx.vllm_url, ctx.vllm_api_key, ctx.vllm_model,
                 baseline_entropy=baseline_entropy,
                 baseline_mean_logprob=baseline_mean_logprob,
+                system_prompt=ctx.system_prompt,
+                prompt_preamble=ctx.prompt_preamble,
+                rollout_log=rollout_log,
+                openclaw_url=ctx.openclaw_url,
+                openclaw_api_key=ctx.openclaw_api_key,
             )
+            metrics.rollouts.extend(rollout_log)
         except (httpx.HTTPError, KeyError) as e:
             logger.warning("Collapse detection failed: %s", e)
 

@@ -12,6 +12,14 @@ from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def strip_thinking(text: str) -> str:
+    """Remove Qwen3 ``<think>...</think>`` blocks from model output."""
+    return _THINK_RE.sub("", text).strip()
+
+
 def _is_emoji(char: str) -> bool:
     """Check if a character is an emoji using Unicode category and codepoint ranges."""
     # 'So' (Symbol, Other) covers most emoji in the BMP and supplementary planes
@@ -71,9 +79,33 @@ VERIFIERS: dict[str, Callable[[str], float]] = {
 
 
 def run_verifier(name: str, response: str) -> float:
-    """Run a named verifier on a response."""
+    """Run a named verifier on a response (thinking blocks stripped)."""
     fn = VERIFIERS.get(name)
     if fn is None:
         logger.warning("Unknown verifier: %s", name)
         return 0.0
-    return fn(response)
+    return fn(strip_thinking(response))
+
+
+def explain_verifier(name: str, response: str) -> dict[str, object]:
+    """Return score plus verifier-specific diagnostics for auditing."""
+    clean = strip_thinking(response)
+    score = run_verifier(name, response)
+
+    if name == "no_emoji":
+        emoji_count = _count_emoji(clean)
+        return {"score": score, "emoji_count": emoji_count, "pass": emoji_count == 0}
+
+    if name == "concise":
+        sentence_count = _count_sentences(clean)
+        return {
+            "score": score,
+            "sentence_count": sentence_count,
+            "pass": sentence_count <= 3,
+        }
+
+    if name == "identity":
+        contains_kuro = "kuro" in clean.lower()
+        return {"score": score, "contains_kuro": contains_kuro, "pass": contains_kuro}
+
+    return {"score": score}

@@ -13,9 +13,17 @@ from dataclasses import dataclass
 
 import httpx
 
-from .types import GeneralCapability
+from .types import EvalRollout, GeneralCapability
+from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
+
+# Max tokens for capability probes.  Qwen3 emits ``<think>`` reasoning
+# tokens before the visible answer so we need a generous budget.  The
+# fallback list is tried in order when the backend rejects a budget as
+# exceeding the context window.
+GENERAL_MAX_TOKENS = 2048
+GENERAL_MAX_TOKENS_FALLBACKS = (1024, 512, 256)
 
 CODING_PROMPT = (
     "Write a Python function called `fibonacci` that takes an integer n "
@@ -49,15 +57,18 @@ def _count_sentences(text: str) -> int:
 IFEVAL_PROBES: list[IFEvalProbe] = [
     IFEvalProbe(
         prompt="Write exactly 3 sentences about Python.",
-        verify=lambda resp: _count_sentences(resp) == 3,
+        verify=lambda resp: _count_sentences(strip_thinking(resp)) == 3,
     ),
     IFEvalProbe(
         prompt="List 5 benefits of exercise. Use numbered list.",
-        verify=lambda resp: len(re.findall(r"^\s*\d+[.)]\s+", resp, re.MULTILINE)) >= 5,
+        verify=lambda resp: len(
+            re.findall(r"^\s*\d+[.)]\s+", strip_thinking(resp), re.MULTILINE)
+        )
+        >= 5,
     ),
     IFEvalProbe(
         prompt="Explain recursion without using the word 'function'.",
-        verify=lambda resp: "function" not in resp.lower(),
+        verify=lambda resp: "function" not in strip_thinking(resp).lower(),
     ),
 ]
 
@@ -85,7 +96,7 @@ def _extract_code_block(response: str) -> str:
 
 def verify_coding(response: str, timeout_s: float = 5.0) -> CodingResult:
     """Extract code from response, exec it, verify fibonacci correctness."""
-    code = _extract_code_block(response)
+    code = _extract_code_block(strip_thinking(response))
     if not code:
         return CodingResult(correct=False, has_docstring=False)
 
@@ -132,50 +143,175 @@ async def evaluate_general_capability(
     vllm_api_key: str,
     model: str,
     timeout_s: float = 60.0,
+    system_prompt: str | None = None,
+    prompt_preamble: list[dict[str, str]] | None = None,
+    rollout_log: list[EvalRollout] | None = None,
+    openclaw_url: str | None = None,
+    openclaw_api_key: str = "openclaw-local-dev-token",
 ) -> GeneralCapability:
     """Run coding task + IFEval probes and return capability metrics."""
-    headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
+    # Route through OpenClaw when configured (injects full agent context)
+    if openclaw_url:
+        base_url = openclaw_url
+        headers = {"Authorization": f"Bearer {openclaw_api_key}"}
+    else:
+        base_url = vllm_url
+        headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
 
-    async with httpx.AsyncClient(base_url=vllm_url, timeout=timeout_s) as client:
+    async def _chat_completion_with_budget(
+        client: httpx.AsyncClient,
+        prompt: str,
+        max_tokens: int = GENERAL_MAX_TOKENS,
+    ) -> tuple[str, int]:
+        token_budgets = (max_tokens, *GENERAL_MAX_TOKENS_FALLBACKS)
+        last_exc: Exception | None = None
+
+        # When going through OpenClaw the gateway injects system prompt/context
+        if openclaw_url:
+            messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
+            req_model = "openclaw"
+        else:
+            messages = (
+                list(prompt_preamble or [])
+                + (
+                    [{"role": "system", "content": system_prompt}]
+                    if system_prompt
+                    and not any(
+                        m.get("role") == "system" and m.get("content") == system_prompt
+                        for m in (prompt_preamble or [])
+                    )
+                    else []
+                )
+                + [{"role": "user", "content": prompt}]
+            )
+            req_model = model
+
+        for budget in token_budgets:
+            try:
+                resp = await client.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": req_model,
+                        "messages": messages,
+                        "temperature": 0,
+                        "max_tokens": budget,
+                    },
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"], budget
+            except httpx.HTTPStatusError as e:
+                last_exc = e
+                # Retry only for context-window budget failures.
+                msg = e.response.text if e.response is not None else ""
+                if e.response.status_code != 400 or "maximum context length" not in msg:
+                    raise
+                logger.warning(
+                    "Capability request exceeded context budget (max_tokens=%d), retrying",
+                    budget,
+                )
+            except (KeyError, ValueError) as e:
+                last_exc = e
+                raise
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("capability request failed without a captured exception")
+
+    async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
         # Coding task
-        coding_resp = await client.post(
-            "/v1/chat/completions",
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": CODING_PROMPT}],
-                "temperature": 0,
-                "max_tokens": 512,
-            },
-            headers=headers,
-        )
-        coding_resp.raise_for_status()
-        coding_text = coding_resp.json()["choices"][0]["message"]["content"]
+        coding_text, coding_budget = await _chat_completion_with_budget(client, CODING_PROMPT)
 
     coding_result = verify_coding(coding_text)
+    if rollout_log is not None:
+        rollout_log.append(
+            EvalRollout(
+                metric="general",
+                messages=[
+                    *(list(prompt_preamble or [])),
+                    *(
+                        [{"role": "system", "content": system_prompt}]
+                        if system_prompt
+                        and not any(
+                            m.get("role") == "system" and m.get("content") == system_prompt
+                            for m in (prompt_preamble or [])
+                        )
+                        else []
+                    ),
+                    {"role": "user", "content": CODING_PROMPT},
+                    {"role": "assistant", "content": coding_text},
+                ],
+                metadata={
+                    "task": "coding",
+                    "max_tokens_used": coding_budget,
+                    "verdict": {
+                        "correct": coding_result.correct,
+                        "has_docstring": coding_result.has_docstring,
+                    },
+                },
+            )
+        )
 
     # IFEval probes
     passes = 0
     total = len(IFEVAL_PROBES)
 
-    async with httpx.AsyncClient(base_url=vllm_url, timeout=timeout_s) as client:
+    async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
         for probe in IFEVAL_PROBES:
             try:
-                resp = await client.post(
-                    "/v1/chat/completions",
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": probe.prompt}],
-                        "temperature": 0,
-                        "max_tokens": 512,
-                    },
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                text = resp.json()["choices"][0]["message"]["content"]
-                if probe.verify(text):
+                text, budget_used = await _chat_completion_with_budget(client, probe.prompt)
+                passed = probe.verify(text)
+                if passed:
                     passes += 1
+                if rollout_log is not None:
+                    rollout_log.append(
+                        EvalRollout(
+                            metric="general",
+                            messages=[
+                                *(list(prompt_preamble or [])),
+                                *(
+                                    [{"role": "system", "content": system_prompt}]
+                                    if system_prompt
+                                    and not any(
+                                        m.get("role") == "system"
+                                        and m.get("content") == system_prompt
+                                        for m in (prompt_preamble or [])
+                                    )
+                                    else []
+                                ),
+                                {"role": "user", "content": probe.prompt},
+                                {"role": "assistant", "content": text},
+                            ],
+                            metadata={
+                                "task": "ifeval",
+                                "max_tokens_used": budget_used,
+                                "passed": passed,
+                            },
+                        )
+                    )
             except (httpx.HTTPError, KeyError, ValueError) as e:
                 logger.warning("IFEval probe failed: %s", e)
+                if rollout_log is not None:
+                    rollout_log.append(
+                        EvalRollout(
+                            metric="general",
+                            messages=(
+                                list(prompt_preamble or [])
+                                + (
+                                    [{"role": "system", "content": system_prompt}]
+                                    if system_prompt
+                                    and not any(
+                                        m.get("role") == "system"
+                                        and m.get("content") == system_prompt
+                                        for m in (prompt_preamble or [])
+                                    )
+                                    else []
+                                )
+                                + [{"role": "user", "content": probe.prompt}]
+                            ),
+                            metadata={"task": "ifeval", "error": str(e), "passed": False},
+                        )
+                    )
 
     ifeval_pass_rate = passes / total if total > 0 else 0.0
     general_score = 0.5 * float(coding_result.correct) + 0.5 * ifeval_pass_rate
