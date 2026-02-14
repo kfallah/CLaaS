@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from claas.api import web_app
@@ -37,10 +39,36 @@ class _FunctionFailureStub:
         self.remote = _RemoteCallFailure()
 
 
+class _EngineStub:
+    """Minimal TrainingEngine mock for API tests."""
+
+    def __init__(self, exists=True):
+        self._exists = exists
+
+    async def lora_exists(self, _lora_id):
+        from claas.types import LoraExistsPayload
+
+        return LoraExistsPayload(exists=self._exists)
+
+    async def lora_runtime_ref(self, lora_id):
+        from claas.types import LoraRuntimeRef
+
+        return LoraRuntimeRef(vllm_name=lora_id, lora_path=f"/loras/{lora_id}")
+
+    async def distill(self, payload):
+        import modal
+
+        from claas.types import DistillResponse
+
+        distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
+        result = await distill_fn.remote.aio(payload.model_dump())
+        return DistillResponse.model_validate(result)
+
+
 def test_distill_404_when_lora_missing(monkeypatch):
     from claas import api
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: False)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=False))
     client = TestClient(web_app)
 
     response = client.post(
@@ -61,8 +89,8 @@ def test_distill_404_when_lora_missing(monkeypatch):
 def test_distill_success(monkeypatch):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(
         api.modal.Function,
         "from_name",
@@ -92,7 +120,7 @@ def test_distill_success(monkeypatch):
 def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     calls = []
     captured = {}
     log_records = []
@@ -116,7 +144,7 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     async def fake_wait_idle():
         calls.append(("_wait_for_vllm_idle",))
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
@@ -153,7 +181,7 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
 def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     log_records = []
     log_path = str(tmp_path / "feedback-log.json")
 
@@ -172,7 +200,7 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
     async def fake_wait_idle():
         pass
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
@@ -199,7 +227,7 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
 def test_export_404_when_missing(monkeypatch):
     from claas import api
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: False)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=False))
     client = TestClient(web_app)
 
     response = client.get("/v1/lora/export", params={"lora_id": "user/missing"})
@@ -209,8 +237,8 @@ def test_export_404_when_missing(monkeypatch):
 def test_distill_returns_500_on_worker_failure(monkeypatch):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(
         api.modal.Function,
         "from_name",
@@ -236,7 +264,7 @@ def test_feedback_calls_drain_before_sleep(monkeypatch, tmp_path):
     """_wait_for_vllm_idle is called before /sleep."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     order = []
 
     def fake_from_name(_app, fn_name):
@@ -252,7 +280,7 @@ def test_feedback_calls_drain_before_sleep(monkeypatch, tmp_path):
     async def fake_vllm_post(path, *, params=None, json_body=None, timeout_s=30.0):
         order.append(path)
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
@@ -281,7 +309,7 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
     """A drain timeout produces a 503 response."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
 
     async def fake_wait_idle():
         raise TimeoutError("still busy")
@@ -289,7 +317,7 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
     async def fake_vllm_post(_path, *, params=None, json_body=None, timeout_s=30.0):
         pass
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
     monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
@@ -314,7 +342,7 @@ def test_feedback_fetches_rollout_logprobs(monkeypatch, tmp_path):
     """Rollout logprobs are fetched and forwarded to the distill worker."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     captured = {}
 
     def fake_from_name(_app, fn_name):
@@ -328,7 +356,7 @@ def test_feedback_fetches_rollout_logprobs(monkeypatch, tmp_path):
     async def fake_fetch(_prompt, _response, _model, _timeout_s=60.0):
         return [-0.5, -1.2, -0.3]
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", lambda *_a, **_kw: _noop_coro())
     monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
@@ -357,7 +385,7 @@ def test_feedback_logprobs_fetch_failure_continues(monkeypatch, tmp_path):
 
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     captured = {}
 
     def fake_from_name(_app, fn_name):
@@ -371,7 +399,7 @@ def test_feedback_logprobs_fetch_failure_continues(monkeypatch, tmp_path):
     async def failing_fetch(_prompt, _response, _model, _timeout_s=60.0):
         raise _httpx.HTTPError("connection refused")
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", lambda *_a, **_kw: _noop_coro())
     monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
@@ -398,7 +426,7 @@ def test_feedback_skips_logprobs_when_provided(monkeypatch, tmp_path):
     """When rollout_logprobs is already provided, the fetch is skipped."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     captured = {}
     fetch_called = []
 
@@ -414,7 +442,7 @@ def test_feedback_skips_logprobs_when_provided(monkeypatch, tmp_path):
         fetch_called.append(True)
         return [-9.9]
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", lambda *_a, **_kw: _noop_coro())
     monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
@@ -441,3 +469,81 @@ def test_feedback_skips_logprobs_when_provided(monkeypatch, tmp_path):
 
 async def _noop_coro():
     pass
+
+
+
+def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
+    from claas import api
+    from claas.types import DistillResponse, LoraExistsPayload
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+
+    class _Engine:
+        async def lora_exists(self, _lora_id):
+            return LoraExistsPayload(exists=True)
+
+    captured = {}
+
+    async def fake_lock_key(_lora_id):
+        return "user-model-v1"
+
+    async def fake_get_lock(key):
+        captured["key"] = key
+        return asyncio.Lock()
+
+    async def fake_run_distill(_payload):
+        return DistillResponse(lora_id="user/model", metadata={})
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
+    monkeypatch.setattr(api, "_get_feedback_lock_key", fake_lock_key)
+    monkeypatch.setattr(api, "_get_feedback_lock", fake_get_lock)
+    monkeypatch.setattr(api, "_run_distill", fake_run_distill)
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "lora_id": "user/model-latest",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "training": {"teacher_mode": "self"},
+            "orchestration": {"sleep_before": False, "wake_after": False},
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["key"] == "user-model-v1"
+
+
+def test_feedback_tinker_accepts_default_orchestration(monkeypatch, tmp_path):
+    from claas import api
+    from claas.types import DistillResponse, LoraExistsPayload
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+
+    class _Engine:
+        async def lora_exists(self, _lora_id):
+            return LoraExistsPayload(exists=True)
+
+    async def fake_run_distill(_payload):
+        return DistillResponse(lora_id="user/model", metadata={})
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
+    monkeypatch.setattr(api, "_run_distill", fake_run_distill)
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "lora_id": "user/model",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "training": {"teacher_mode": "self"},
+        },
+    )
+
+    assert response.status_code == 200
