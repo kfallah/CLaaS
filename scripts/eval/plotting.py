@@ -1,0 +1,272 @@
+"""Summary plots for evaluation results.
+
+Phase 3. Generates 5 plots saved to {output_dir}/plots/.
+Gracefully skips plots for metrics not available in current phase.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+
+def _load_steps(output_dir: str, preference: str) -> list[dict]:
+    """Load step results from JSONL file."""
+    path = os.path.join(output_dir, preference, "steps.jsonl")
+    if not os.path.exists(path):
+        return []
+    steps = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                steps.append(json.loads(line))
+    return steps
+
+
+def generate_plots(output_dir: str, preferences: list[str]) -> None:
+    """Generate all summary plots. Requires matplotlib."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.warning("matplotlib not installed — skipping plots")
+        return
+
+    plots_dir = os.path.join(output_dir, "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+
+    all_steps: dict[str, list[dict]] = {}
+    for pref in preferences:
+        steps = _load_steps(output_dir, pref)
+        if steps:
+            all_steps[pref] = steps
+
+    if not all_steps:
+        logger.warning("No step data found — skipping plots")
+        return
+
+    _plot_logprob_margins(all_steps, plots_dir, plt)
+    _plot_learning_curves(all_steps, plots_dir, plt)
+    _plot_collapse_dashboard(all_steps, plots_dir, plt)
+    _plot_forgetting(all_steps, plots_dir, plt)
+    _plot_sdpo_diagnostics(all_steps, plots_dir, plt)
+
+    logger.info("Plots saved to %s", plots_dir)
+
+
+def _plot_logprob_margins(all_steps: dict, plots_dir: str, plt) -> None:
+    """Plot logprob margin vs step."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    has_data = False
+
+    for pref, steps in all_steps.items():
+        x, y = [], []
+        for s in steps:
+            margin_data = s.get("eval", {}).get("logprob_margin")
+            if margin_data:
+                x.append(s["step"])
+                y.append(margin_data["margin"])
+        if x:
+            ax.plot(x, y, marker="o", label=pref)
+            has_data = True
+
+    if not has_data:
+        plt.close(fig)
+        return
+
+    ax.set_xlabel("Step")
+    ax.set_ylabel("Logprob Margin (positive - negative)")
+    ax.set_title("Logprob Margin Over Training Steps")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(os.path.join(plots_dir, "logprob_margins.png"), dpi=150)
+    plt.close(fig)
+
+
+def _plot_learning_curves(all_steps: dict, plots_dir: str, plt) -> None:
+    """Plot preference compliance vs step."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    has_data = False
+
+    for pref, steps in all_steps.items():
+        x, y = [], []
+        for s in steps:
+            compliance = s.get("eval", {}).get("preference_compliance")
+            if compliance is not None:
+                x.append(s["step"])
+                y.append(compliance)
+        if x:
+            ax.plot(x, y, marker="o", label=pref)
+            has_data = True
+
+    if not has_data:
+        plt.close(fig)
+        return
+
+    ax.set_xlabel("Step")
+    ax.set_ylabel("Preference Compliance")
+    ax.set_title("Learning Curves: Preference Compliance Over Steps")
+    ax.set_ylim(-0.05, 1.05)
+    ax.axhline(y=0.8, color="green", linestyle="--", alpha=0.5, label="Pass threshold")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(os.path.join(plots_dir, "learning_curves.png"), dpi=150)
+    plt.close(fig)
+
+
+def _plot_collapse_dashboard(all_steps: dict, plots_dir: str, plt) -> None:
+    """Plot collapse metrics: entropy ratio, self-ROUGE-L, logprob drift."""
+    has_data = False
+    for steps in all_steps.values():
+        for s in steps:
+            if s.get("eval", {}).get("collapse"):
+                has_data = True
+                break
+        if has_data:
+            break
+
+    if not has_data:
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    for pref, steps in all_steps.items():
+        x_ent, y_ent = [], []
+        x_rouge, y_rouge = [], []
+        x_drift, y_drift = [], []
+
+        for s in steps:
+            collapse = s.get("eval", {}).get("collapse")
+            if not collapse:
+                continue
+            step = s["step"]
+            x_ent.append(step)
+            y_ent.append(collapse["entropy_ratio_to_baseline"])
+            x_rouge.append(step)
+            y_rouge.append(collapse["self_rouge_l"])
+            x_drift.append(step)
+            y_drift.append(collapse["mean_logprob_drift"])
+
+        if x_ent:
+            axes[0].plot(x_ent, y_ent, marker="o", label=pref)
+        if x_rouge:
+            axes[1].plot(x_rouge, y_rouge, marker="o", label=pref)
+        if x_drift:
+            axes[2].plot(x_drift, y_drift, marker="o", label=pref)
+
+    # Entropy ratio
+    axes[0].set_title("Entropy Ratio to Baseline")
+    axes[0].set_xlabel("Step")
+    axes[0].axhline(y=0.6, color="orange", linestyle="--", alpha=0.5)
+    axes[0].axhline(y=0.4, color="red", linestyle="--", alpha=0.5)
+    axes[0].axhspan(0.6, 1.5, alpha=0.1, color="green")
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    # Self-ROUGE-L
+    axes[1].set_title("Self-ROUGE-L")
+    axes[1].set_xlabel("Step")
+    axes[1].axhline(y=0.85, color="orange", linestyle="--", alpha=0.5)
+    axes[1].axhline(y=0.95, color="red", linestyle="--", alpha=0.5)
+    axes[1].axhspan(0.0, 0.85, alpha=0.1, color="green")
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+
+    # Logprob drift
+    axes[2].set_title("Logprob Drift from Baseline")
+    axes[2].set_xlabel("Step")
+    axes[2].axhline(y=2.0, color="red", linestyle="--", alpha=0.5)
+    axes[2].axhspan(0.0, 2.0, alpha=0.1, color="green")
+    axes[2].legend()
+    axes[2].grid(True, alpha=0.3)
+
+    fig.suptitle("Collapse Detection Dashboard")
+    fig.tight_layout()
+    fig.savefig(os.path.join(plots_dir, "collapse_dashboard.png"), dpi=150)
+    plt.close(fig)
+
+
+def _plot_forgetting(all_steps: dict, plots_dir: str, plt) -> None:
+    """Plot general capability score vs step."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    has_data = False
+
+    for pref, steps in all_steps.items():
+        x, y = [], []
+        for s in steps:
+            general = s.get("eval", {}).get("general")
+            if general:
+                x.append(s["step"])
+                y.append(general["general_score"])
+        if x:
+            ax.plot(x, y, marker="o", label=pref)
+            has_data = True
+
+    if not has_data:
+        plt.close(fig)
+        return
+
+    ax.set_xlabel("Step")
+    ax.set_ylabel("General Capability Score")
+    ax.set_title("Forgetting: General Capability Over Training Steps")
+    ax.set_ylim(-0.05, 1.05)
+    ax.axhline(y=0.9, color="green", linestyle="--", alpha=0.5, label="0.9x threshold")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(os.path.join(plots_dir, "forgetting.png"), dpi=150)
+    plt.close(fig)
+
+
+def _plot_sdpo_diagnostics(all_steps: dict, plots_dir: str, plt) -> None:
+    """Plot SDPO training metrics (distill_loss, kl_reg) over steps."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    has_data = False
+
+    for pref, steps in all_steps.items():
+        x_loss, y_loss = [], []
+        x_kl, y_kl = [], []
+
+        for s in steps:
+            sdpo = s.get("sdpo_metrics")
+            if not sdpo:
+                continue
+            step = s["step"]
+            x_loss.append(step)
+            y_loss.append(sdpo["distill_loss"])
+            x_kl.append(step)
+            y_kl.append(sdpo["kl_reg"])
+            has_data = True
+
+        if x_loss:
+            ax1.plot(x_loss, y_loss, marker="o", label=pref)
+        if x_kl:
+            ax2.plot(x_kl, y_kl, marker="o", label=pref)
+
+    if not has_data:
+        plt.close(fig)
+        return
+
+    ax1.set_xlabel("Step")
+    ax1.set_ylabel("Distillation Loss")
+    ax1.set_title("SDPO Distillation Loss")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    ax2.set_xlabel("Step")
+    ax2.set_ylabel("KL Regularization")
+    ax2.set_title("KL Regularization Term")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    fig.suptitle("SDPO Training Diagnostics")
+    fig.tight_layout()
+    fig.savefig(os.path.join(plots_dir, "sdpo_diagnostics.png"), dpi=150)
+    plt.close(fig)

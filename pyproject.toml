@@ -34,6 +34,10 @@ dev = [
 teacher = [
     "vllm>=0.11.0",
 ]
+eval = [
+    "matplotlib>=3.8.0",
+    "google-generativeai>=0.5.0",
+]
 
 [project.scripts]
 claas = "claas.cli:main"
