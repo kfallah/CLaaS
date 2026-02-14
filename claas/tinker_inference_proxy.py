@@ -299,7 +299,7 @@ def _stream_chat_response(
 ) -> StreamingResponse:
     """Wrap a complete response as an SSE stream for OpenAI-compatible clients."""
 
-    def _generate() -> Generator[str]:
+    def _generate() -> Generator[str, None, None]:
         chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -386,7 +386,7 @@ def _stream_completion_response(
 ) -> StreamingResponse:
     """Wrap a complete text-completion response as an SSE stream."""
 
-    def _generate() -> Generator[str]:
+    def _generate() -> Generator[str, None, None]:
         chunk = {
             "id": completion_id,
             "object": "text_completion",

@@ -132,7 +132,10 @@ def test_state_corrupt_json(state_file):
 
 def _make_engine_with_mocks(state_file):
     """Create a TinkerTrainingEngine with mocked Tinker SDK."""
-    with patch.dict(os.environ, {"CLAAS_TINKER_API_KEY": "fake-key"}):
+    with patch.dict(os.environ, {
+        "CLAAS_TINKER_API_KEY": "fake-key",
+        "CLAAS_TINKER_STATE_PATH": state_file,
+    }):
         from claas.training_engines.tinker.engine import TinkerTrainingEngine
 
         engine = TinkerTrainingEngine()

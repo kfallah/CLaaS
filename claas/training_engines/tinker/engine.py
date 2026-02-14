@@ -27,13 +27,9 @@ from claas.training_engines.base import TrainingEngine
 from claas.training_engines.tinker.state import (
     LoraEntry,
     get_entry,
-    set_tinker_path,
-)
-from claas.training_engines.tinker.state import (
     list_loras as state_list_loras,
-)
-from claas.training_engines.tinker.state import (
     lora_exists as state_lora_exists,
+    set_tinker_path,
 )
 from claas.types import (
     DistillRequestPayload,
@@ -120,7 +116,7 @@ class TinkerTrainingEngine(TrainingEngine):
 
     async def lora_runtime_ref(self, lora_id: str) -> LoraRuntimeRef:
         raise ValueError(
-            "tinker backend does not expose local runtime LoRA paths for vLLM reload"
+            f"tinker backend does not expose local runtime LoRA paths for vLLM reload (lora_id={lora_id})"
         )
 
     # ------------------------------------------------------------------
