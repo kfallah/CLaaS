@@ -17,6 +17,17 @@ CLaaS turns every user interaction into an online learning step via Self-Distill
 
 This enables real-time model personalization where the model learns from each interaction.
 
+## Hybrid engine
+
+The request path is driven by a hybrid engine that switches between:
+
+- **Serving mode**: route request traffic through vLLM (local or remote) for low-latency generation.
+- **Update mode**: run a single SDPO LoRA step using the provided feedback to adapt the adapter.
+
+In practice, the flow is: request is answered by vLLM, then the engine performs (or schedules) the training step, and subsequent requests can use the updated adapter. The engine can prefer local or remote teacher inference depending on `teacher_mode`.
+
+![Hybrid engine diagram](assets/image.png)
+
 ## Installation
 
 ```bash
