@@ -10,20 +10,24 @@ import json
 import os
 import stat
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+import httpx
 
 # ---------------------------------------------------------------------------
 # Environment
 # ---------------------------------------------------------------------------
 LORA_NAME = os.environ.get("LORA_NAME", "openclaw/assistant")
 BASE_MODEL = os.environ.get("MODEL", "Qwen/Qwen3-8B")
+DISTILL_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local").strip().lower()
 LORA_ROOT = os.environ.get("CLAAS_LORA_ROOT", "/loras")
 OPENCLAW_HOME = Path(os.environ.get("OPENCLAW_HOME", "/openclaw-config"))
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://vllm:8000/v1")
 API_KEY = os.environ.get("API_KEY", "sk-local")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-CLAAS_API_URL = os.environ.get("CLAAS_API_URL", "http://localhost:8080")
+CLAAS_API_URL = os.environ.get("CLAAS_API_URL", "http://claas-api:8080")
 
 # Ensure claas picks up local_fs mode and our lora root
 os.environ["CLAAS_STORAGE_BACKEND"] = "local_fs"
@@ -59,6 +63,10 @@ def _read_aliases() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 def create_lora() -> None:
     alias_key = f"{LORA_NAME}-latest"
+    if DISTILL_MODE == "tinker":
+        create_tinker_lora(alias_key)
+        return
+
     aliases = _read_aliases()
 
     if alias_key in aliases:
@@ -74,6 +82,42 @@ def create_lora() -> None:
 
     full_id = create_initial_lora(LORA_NAME, base_model_name=BASE_MODEL)
     print(f"Created initial LoRA: {full_id}")
+
+
+def _wait_for_api(timeout_s: float = 120.0) -> None:
+    deadline = time.time() + timeout_s
+    while True:
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.get(f"{CLAAS_API_URL.rstrip('/')}/")
+                if resp.status_code < 500:
+                    return
+        except httpx.HTTPError:
+            pass
+        if time.time() >= deadline:
+            raise RuntimeError(f"Timed out waiting for CLaaS API at {CLAAS_API_URL}")
+        time.sleep(2)
+
+
+def create_tinker_lora(alias_key: str) -> None:
+    """Initialize LoRA in Tinker mode via the CLaaS API."""
+    _wait_for_api()
+    api_url = CLAAS_API_URL.rstrip("/")
+    with httpx.Client(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
+        listed = client.get(f"{api_url}/v1/lora", params={"prefix": LORA_NAME})
+        listed.raise_for_status()
+        loras = listed.json().get("loras", [])
+        if alias_key in loras:
+            print(f"LoRA '{alias_key}' already exists in Tinker state, skipping creation.")
+            return
+
+        init_resp = client.post(
+            f"{api_url}/v1/lora/init",
+            json={"lora_id": alias_key, "base_model": BASE_MODEL},
+            timeout=httpx.Timeout(600.0, connect=10.0),
+        )
+        init_resp.raise_for_status()
+        print(f"Created initial Tinker LoRA: {alias_key}")
 
 
 # ---------------------------------------------------------------------------
@@ -241,13 +285,38 @@ def install_feedback_plugin() -> None:
 # Step 3: Fix permissions so OpenClaw's node user can read everything
 # ---------------------------------------------------------------------------
 def fix_permissions() -> None:
+    openclaw_uid = int(os.environ.get("OPENCLAW_UID", "1000"))
+    openclaw_gid = int(os.environ.get("OPENCLAW_GID", "1000"))
+    sensitive_config_names = {"openclaw.json"}
+
     for root, dirs, files in os.walk(str(OPENCLAW_HOME)):
+        os.chown(root, openclaw_uid, openclaw_gid)
         for d in dirs:
             p = os.path.join(root, d)
-            os.chmod(p, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+            os.chown(p, openclaw_uid, openclaw_gid)
+            os.chmod(
+                p,
+                stat.S_IRWXU
+                | stat.S_IRWXG
+            )
         for f in files:
             p = os.path.join(root, f)
-            os.chmod(p, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+            os.chown(p, openclaw_uid, openclaw_gid)
+            if f in sensitive_config_names:
+                os.chmod(
+                    p,
+                    stat.S_IRUSR
+                    | stat.S_IWUSR
+                    | stat.S_IRGRP,
+                )
+                continue
+            os.chmod(
+                p,
+                stat.S_IRUSR
+                | stat.S_IWUSR
+                | stat.S_IRGRP
+                | stat.S_IWGRP,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +328,7 @@ def main() -> None:
     print(f"  BASE_MODEL      = {BASE_MODEL}")
     print(f"  LORA_ROOT       = {LORA_ROOT}")
     print(f"  OPENCLAW_HOME   = {OPENCLAW_HOME}")
+    print(f"  DISTILL_MODE    = {DISTILL_MODE}")
     print(f"  VLLM_BASE_URL   = {VLLM_BASE_URL}")
     print()
 

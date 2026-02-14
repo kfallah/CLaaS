@@ -40,7 +40,10 @@ interface ClaasConfig {
 
 export default function register(api: OpenClawPluginApi) {
   const config = (api.config ?? {}) as ClaasConfig;
-  const claasApiUrl = config.claasApiUrl ?? "http://localhost:8080";
+  const claasApiUrl =
+    (typeof config.claasApiUrl === "string" && config.claasApiUrl.trim()) ||
+    (typeof process.env.CLAAS_API_URL === "string" && process.env.CLAAS_API_URL.trim()) ||
+    "http://claas-api:8080";
   const loraId = config.loraId ?? "openclaw/assistant-latest";
   const debugEnabled = config.debug === true || process.env.CLAAS_FEEDBACK_DEBUG === "true";
   const logDebug = (message: string): void => {
@@ -187,6 +190,9 @@ export default function register(api: OpenClawPluginApi) {
         };
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
+        console.error(
+          `[claas-feedback] /feedback failed: api=${claasApiUrl} lora=${loraId} error=${msg}`,
+        );
         return { text: `\u274C Feedback failed: ${msg}` };
       }
     },

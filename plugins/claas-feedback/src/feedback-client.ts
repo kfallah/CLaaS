@@ -48,12 +48,37 @@ export async function submitFeedback(
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(
+          `CLaaS API request timed out after ${Math.round(TIMEOUT_MS / 1000)}s`,
+        );
+      }
+
+      const cause = err && typeof err === "object" && "cause" in err
+        ? (err as { cause?: unknown }).cause
+        : undefined;
+      const code = cause && typeof cause === "object" && "code" in cause
+        ? String((cause as { code?: unknown }).code)
+        : undefined;
+      const address = cause && typeof cause === "object" && "address" in cause
+        ? String((cause as { address?: unknown }).address)
+        : undefined;
+      const port = cause && typeof cause === "object" && "port" in cause
+        ? String((cause as { port?: unknown }).port)
+        : undefined;
+      const reason = [code, address, port].filter(Boolean).join(" ");
+      const suffix = reason ? ` (${reason})` : "";
+      throw new Error(`Failed to reach CLaaS API at ${url}${suffix}`);
+    }
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
