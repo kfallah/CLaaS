@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import uuid
 
 import httpx
 import pytest
 
+from claas.teacher import build_teacher_messages
+
 pytestmark = pytest.mark.integration
+
+logger = logging.getLogger(__name__)
 
 
 def _require_env(name: str) -> str:
@@ -59,22 +65,27 @@ class TestTinkerStackRoundTrip:
 
         suffix = uuid.uuid4().hex[:8]
         lora_id = f"test/integration-{suffix}"
+        user_prompt = "Say hello in one sentence."
+        feedback_text = "Good, concise greeting."
 
         with httpx.Client(timeout=300.0) as client:
             try:
                 # 1. Init LoRA
+                init_payload = {
+                    "lora_id": lora_id,
+                    "base_model": "Qwen/Qwen3-4B-Instruct-2507",
+                    "lora_r": 8,
+                    "lora_alpha": 16,
+                }
+                logger.info("POST /v1/lora/init:\n%s", json.dumps(init_payload, indent=2))
                 init_resp = client.post(
                     f"{claas_url}/v1/lora/init",
-                    json={
-                        "lora_id": lora_id,
-                        "base_model": "Qwen/Qwen3-4B-Instruct-2507",
-                        "lora_r": 8,
-                        "lora_alpha": 16,
-                    },
+                    json=init_payload,
                     timeout=60.0,
                 )
                 assert init_resp.status_code == 200, init_resp.text
                 assert init_resp.json()["lora_id"] == lora_id
+                logger.info("Init response: %s", init_resp.text)
 
                 # 2. Verify it appears in list
                 list_resp = client.get(
@@ -86,38 +97,59 @@ class TestTinkerStackRoundTrip:
                 assert lora_id in list_resp.json()["loras"]
 
                 # 3. Inference through tinker-proxy
+                chat_messages = [{"role": "user", "content": user_prompt}]
+                chat_payload = {
+                    "model": "Qwen/Qwen3-4B-Instruct-2507",
+                    "messages": chat_messages,
+                    "max_tokens": 64,
+                }
+                logger.info(
+                    "POST /v1/chat/completions:\n%s", json.dumps(chat_payload, indent=2)
+                )
                 chat_resp = client.post(
                     f"{proxy_url}/v1/chat/completions",
-                    json={
-                        "model": "Qwen/Qwen3-4B-Instruct-2507",
-                        "messages": [{"role": "user", "content": "Say hello in one sentence."}],
-                        "max_tokens": 64,
-                    },
+                    json=chat_payload,
                     timeout=120.0,
                 )
                 assert chat_resp.status_code == 200, chat_resp.text
                 choices = chat_resp.json()["choices"]
                 assert len(choices) > 0
-                assert len(choices[0]["message"]["content"]) > 0
+                response_content = choices[0]["message"]["content"]
+                assert len(response_content) > 0
+                logger.info("Model response: %s", response_content)
 
                 # 4. Distill via feedback endpoint (teacher_mode=self)
+                #    Log the teacher messages that the engine will construct
+                teacher_messages = build_teacher_messages(user_prompt, feedback_text)
+                logger.info(
+                    "Teacher messages (built by engine for self-distillation):\n%s",
+                    json.dumps(teacher_messages, indent=2),
+                )
+
+                feedback_payload = {
+                    "lora_id": lora_id,
+                    "prompt": user_prompt,
+                    "response": response_content,
+                    "feedback": feedback_text,
+                    "training": {"teacher_mode": "self"},
+                    "orchestration": {
+                        "sleep_before": False,
+                        "wake_after": False,
+                    },
+                }
+                logger.info(
+                    "POST /v1/feedback:\n%s", json.dumps(feedback_payload, indent=2)
+                )
                 feedback_resp = client.post(
                     f"{claas_url}/v1/feedback",
-                    json={
-                        "lora_id": lora_id,
-                        "prompt": "Say hello in one sentence.",
-                        "response": choices[0]["message"]["content"],
-                        "feedback": "Good, concise greeting.",
-                        "training": {"teacher_mode": "self"},
-                        "orchestration": {
-                            "sleep_before": False,
-                            "wake_after": False,
-                        },
-                    },
+                    json=feedback_payload,
                     timeout=300.0,
                 )
                 assert feedback_resp.status_code == 200, feedback_resp.text
                 fb_data = feedback_resp.json()
+                logger.info(
+                    "Feedback response:\n%s", json.dumps(fb_data, indent=2)
+                )
                 assert fb_data["status"] == "ok"
                 assert fb_data["distill_result"] is not None
                 step = fb_data["distill_result"]["metadata"].get("step")
@@ -132,6 +164,7 @@ class TestTinkerStackRoundTrip:
                 )
                 assert delete_resp.status_code == 200, delete_resp.text
                 assert delete_resp.json()["deleted"] is True
+                logger.info("Deleted %s: %s", lora_id, delete_resp.text)
 
                 # Verify it's gone
                 verify_resp = client.get(
