@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Start docker stack
+        run: docker compose -f docker/docker-compose.yml up -d --build
+
+      - name: Wait for docker stack health
+        run: |
+          docker compose -f docker/docker-compose.yml ps
+          timeout 1800 bash -c 'until [ "$(docker inspect --format="{{.State.Health.Status}}" $(docker compose -f docker/docker-compose.yml ps -q vllm))" = "healthy" ]; do sleep 5; done'
+
+      - name: Run docker stack integration tests (real services)
+        env:
+          INTEGRATION_VLLM_BASE_URL: http://127.0.0.1:8000
+          INTEGRATION_CLAAS_BASE_URL: http://127.0.0.1:8080
+          INTEGRATION_OPENCLAW_BASE_URL: http://127.0.0.1:18789
+        run: uv run pytest tests/integration/test_docker_stack_integration.py -q
+
+      - name: Run full test suite
+        run: uv run pytest -q
+
+      - name: Ruff check
+        run: uv run ruff check claas/ tests/
+
+      - name: Ty check
+        run: uv run ty check
+
+      - name: Stop docker stack
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v
