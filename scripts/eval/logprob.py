@@ -1,6 +1,47 @@
 """Logprob margin computation via vLLM /v1/completions API.
 
-Mirrors the _fetch_rollout_logprobs() pattern from claas/api.py.
+**What is "logprob margin"?**
+
+The logprob margin is the difference between the sum of per-token log
+probabilities for a preferred (positive) response and a dispreferred
+(negative) response, given the same prompt.  Concretely:
+
+    margin = sum(logp(token) for token in positive_response)
+           - sum(logp(token) for token in negative_response)
+
+A positive margin indicates the model assigns higher probability to the
+preferred response than to the dispreferred one.
+
+**How it works**
+
+For each (prompt, response) pair the pipeline:
+
+1. Tokenizes the ChatML prompt prefix via ``POST /tokenize`` to learn
+   where the prompt ends and the response begins.
+2. Sends the full sequence (prefix + response) to ``POST /v1/completions``
+   with ``max_tokens=0`` and ``prompt_logprobs=1``, which returns the
+   per-token log probabilities assigned by the model to every token in
+   the input without generating any new tokens.
+3. Discards the logprobs that correspond to the prompt tokens (using the
+   count from step 1) and sums the logprobs for only the response tokens.
+
+The margin is then ``positive_logprob_sum - negative_logprob_sum``.
+
+**Why this metric?**
+
+Logprob margin directly measures whether SDPO training is shifting the
+model's distribution toward preferred behaviours *without* needing to
+generate text.  Because the model only scores existing tokens (no
+sampling), the measurement is fast and fully deterministic, making it
+ideal for automated regression checks across training checkpoints.
+
+**Connection to claas/api.py**
+
+This module mirrors the ``_fetch_rollout_logprobs()`` helper in
+``claas/api.py``, which uses the same tokenize-then-completions pattern
+during the distillation rollout to collect logprobs from the student
+model.  The eval version is factored out here so it can run stand-alone
+against any vLLM endpoint without importing the training code.
 """
 
 from __future__ import annotations
