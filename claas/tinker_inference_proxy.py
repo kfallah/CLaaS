@@ -27,7 +27,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from tinker import types as T
 from tinker_cookbook import model_info
-from tinker_cookbook.renderers import Renderer, get_renderer
+from tinker_cookbook.renderers import Message, Renderer, get_renderer
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
@@ -111,7 +111,7 @@ async def _sample_async(
     sampler: tinker.SamplingClient,
     prompt: T.ModelInput,
     sampling_params: T.SamplingParams,
-) -> T.SamplingResponse:
+) -> T.SampleResponse:
     """Run blocking sampling in a worker thread to avoid blocking the event loop."""
     return await asyncio.to_thread(
         lambda: sampler.sample(
@@ -164,7 +164,10 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
     renderer = _holder.renderer
     sampler = _holder.sampler
 
-    messages = [{"role": m.role, "content": _coerce_content(m.content)} for m in req.messages]
+    messages: list[Message] = [
+        Message(role=m.role, content=_coerce_content(m.content))
+        for m in req.messages
+    ]
     model_input = renderer.build_generation_prompt(messages)
 
     stop_seqs = req.stop or renderer.get_stop_sequences()

@@ -244,7 +244,10 @@ def test_engine_delete_lora(state_file):
     from claas.training_engines.tinker.state import LoraEntry
 
     engine, mock_service = _make_engine_with_mocks(state_file)
-    mock_service.delete_checkpoint_from_tinker_path_async = AsyncMock(return_value=None)
+
+    mock_rest = MagicMock()
+    mock_rest.delete_checkpoint_from_tinker_path_async = AsyncMock(return_value=None)
+    mock_service.create_rest_client = MagicMock(return_value=mock_rest)
 
     mock_entry = LoraEntry(tinker_path="tinker://ckpt-del", base_model="m", rank=8, step=0)
     with (
@@ -255,7 +258,7 @@ def test_engine_delete_lora(state_file):
 
     assert isinstance(result, LoraDeleteResponse)
     assert result.deleted is True
-    mock_service.delete_checkpoint_from_tinker_path_async.assert_called_once_with("tinker://ckpt-del")
+    mock_rest.delete_checkpoint_from_tinker_path_async.assert_called_once_with("tinker://ckpt-del")
     mock_delete.assert_called_once_with("test/del")
 
 

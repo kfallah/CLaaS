@@ -85,9 +85,13 @@ DISTILL_EXECUTION_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local")
 
 def _get_engine_kind() -> EngineKind:
     """Validate and return the configured engine kind."""
-    if DISTILL_EXECUTION_MODE not in {"local", "modal", "tinker"}:
-        raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {DISTILL_EXECUTION_MODE}")
-    return DISTILL_EXECUTION_MODE
+    if DISTILL_EXECUTION_MODE == "local":
+        return "local"
+    if DISTILL_EXECUTION_MODE == "modal":
+        return "modal"
+    if DISTILL_EXECUTION_MODE == "tinker":
+        return "tinker"
+    raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {DISTILL_EXECUTION_MODE}")
 
 def _uses_modal_teacher() -> bool:
     """Return whether API should fetch teacher scores from Modal TeacherService."""

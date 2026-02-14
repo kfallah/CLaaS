@@ -103,7 +103,8 @@ class TinkerTrainingEngine(TrainingEngine):
         entry = get_entry(lora_id)
         if entry is None:
             return LoraDeleteResponse(deleted=False)
-        await self.service.delete_checkpoint_from_tinker_path_async(entry.tinker_path)
+        rest = self.service.create_rest_client()
+        await rest.delete_checkpoint_from_tinker_path_async(entry.tinker_path)
         delete_entry(lora_id)
         return LoraDeleteResponse(deleted=True)
 
@@ -194,11 +195,11 @@ class TinkerTrainingEngine(TrainingEngine):
         # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
         teacher_messages = build_teacher_messages(payload.prompt, payload.feedback)
         template_messages = teacher_messages_to_chat_template(teacher_messages)
-        teacher_prompt_text: str = tokenizer.apply_chat_template(
+        teacher_prompt_text = str(tokenizer.apply_chat_template(
             template_messages,
             add_generation_prompt=True,
             tokenize=False,
-        )
+        ))
         teacher_prompt_tokens: list[int] = tokenizer.encode(
             teacher_prompt_text,
             add_special_tokens=False,
