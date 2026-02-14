@@ -1,7 +1,10 @@
 """Configuration for CLaaS.
 
-Centralizes all configuration settings including model IDs, training defaults,
-and infrastructure settings.
+Centralizes default model IDs, training hyperparameters, and infrastructure
+settings.  In practice these are overridden by environment variables
+(``CLAAS_BASE_MODEL_ID``, ``CLAAS_TINKER_BASE_MODEL``, etc.) and per-request
+``training`` payloads.  This module provides fallback defaults for Modal
+deployment.
 """
 
 from __future__ import annotations

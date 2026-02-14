@@ -2,8 +2,11 @@
 
 Usage:
     claas init-lora --lora-id user123/coder-v1
-    claas deploy
+    claas distill  --lora-id user123/coder-v1 --prompt "..." --response "..."
     claas health
+    claas deploy          # Modal deployment
+
+Set CLAAS_DISTILL_EXECUTION_MODE (local | modal | tinker) to select backend.
 """
 
 from __future__ import annotations
