@@ -22,7 +22,13 @@ export CLAAS_LORA_ROOT="${CLAAS_LORA_ROOT:-$ROOT_DIR/.local_loras}"
 STACK_NAME="openclaw-local"
 RESTART_BACKOFF_SECONDS="${RESTART_BACKOFF_SECONDS:-3}"
 VLLM_HEALTH_URL="${VLLM_HEALTH_URL:-http://127.0.0.1:8000/health}"
+VLLM_MODELS_URL="${VLLM_MODELS_URL:-http://127.0.0.1:8000/v1/models}"
+CLAAS_API_HEALTH_URL="${CLAAS_API_HEALTH_URL:-http://127.0.0.1:${CLAAS_API_PORT:-8080}/v1/health}"
 VLLM_WAIT_SECONDS="${VLLM_WAIT_SECONDS:-180}"
+MONITOR_INTERVAL_SECONDS="${MONITOR_INTERVAL_SECONDS:-30}"
+
+VLLM_OOM_STATE_FILE="${VLLM_OOM_STATE_FILE:-$LOG_DIR/vllm-log.offset}"
+CLAAS_API_OOM_STATE_FILE="${CLAAS_API_OOM_STATE_FILE:-$LOG_DIR/claas-api-log.offset}"
 
 LORA_NAME="${LORA_NAME:-openclaw/assistant}"
 LORA_MODEL="${LORA_MODEL:-openclaw-assistant-latest}"
@@ -51,6 +57,48 @@ wait_for_health() {
     fi
     sleep 1
   done
+  return 1
+}
+
+check_log_for_patterns() {
+  local log_file="$1"
+  local state_file="$2"
+  local label="$3"
+
+  if [[ ! -f "$log_file" ]]; then
+    return 1
+  fi
+
+  local size=0
+  local offset=0
+  local chunk_start=1
+  local chunk=""
+
+  size="$(wc -c < "$log_file")"
+  if [[ -f "$state_file" ]]; then
+    offset="$(cat "$state_file")"
+    if [[ ! "$offset" =~ ^[0-9]+$ ]]; then
+      offset=0
+    fi
+  fi
+
+  if (( offset > size )); then
+    offset=0
+  fi
+
+  chunk_start=$((offset + 1))
+  chunk="$(tail -c +"$chunk_start" "$log_file")"
+  printf '%s' "$size" > "$state_file"
+
+  if [[ -z "$chunk" ]]; then
+    return 1
+  fi
+
+  if printf '%s' "$chunk" | rg -qi "out of memory|cuda out of memory|engine process failed|killed"; then
+    echo "[$STACK_NAME] detected $label failure signature in $log_file, restarting..."
+    return 0
+  fi
+
   return 1
 }
 
@@ -88,6 +136,7 @@ start_stack_once() {
   nohup "$VLLM_START_SCRIPT" >>"$VLLM_LOG" 2>&1 &
   local vllm_pid=$!
   echo "$vllm_pid" >"$VLLM_PID_FILE"
+  : > "$VLLM_OOM_STATE_FILE"
 
   if ! wait_for_health "$VLLM_HEALTH_URL" "$VLLM_WAIT_SECONDS"; then
     echo "[$STACK_NAME] vLLM failed health check; see $VLLM_LOG"
@@ -105,6 +154,7 @@ start_stack_once() {
   nohup uvicorn claas.api:web_app --host 0.0.0.0 --port "${CLAAS_API_PORT:-8080}" >>"$CLAAS_API_LOG" 2>&1 &
   local api_pid=$!
   echo "$api_pid" >"$CLAAS_API_PID_FILE"
+  : > "$CLAAS_API_OOM_STATE_FILE"
 
   echo "[$STACK_NAME] starting OpenClaw gateway..."
   nohup "$GATEWAY_START_SCRIPT" >>"$GATEWAY_LOG" 2>&1 &
@@ -144,7 +194,22 @@ monitor_loop() {
       echo "[$STACK_NAME] vLLM health check failed, restarting..."
       return 1
     fi
-    sleep 5
+    if ! curl -fsS -H "Authorization: Bearer ${API_KEY:-sk-local}" "$VLLM_MODELS_URL" >/dev/null 2>&1; then
+      echo "[$STACK_NAME] vLLM models endpoint failed, restarting..."
+      return 1
+    fi
+    if ! curl -fsS "$CLAAS_API_HEALTH_URL" >/dev/null 2>&1; then
+      echo "[$STACK_NAME] CLaaS API health check failed, restarting..."
+      return 1
+    fi
+    if check_log_for_patterns "$VLLM_LOG" "$VLLM_OOM_STATE_FILE" "vLLM OOM"; then
+      return 1
+    fi
+    if check_log_for_patterns "$CLAAS_API_LOG" "$CLAAS_API_OOM_STATE_FILE" "CLaaS API OOM"; then
+      return 1
+    fi
+
+    sleep "$MONITOR_INTERVAL_SECONDS"
   done
 }
 
