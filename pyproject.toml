@@ -63,8 +63,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "gpu: requires a physical GPU",
-    "integration: requires running docker stack",
-    "tinker: requires running tinker docker stack",
+    "integration: requires running tinker docker stack",
 ]
 
 [[tool.uv.index]]

@@ -8,7 +8,7 @@ import uuid
 import httpx
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.tinker]
+pytestmark = pytest.mark.integration
 
 
 def _require_env(name: str) -> str:
