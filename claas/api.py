@@ -26,7 +26,6 @@ Example usage:
 from __future__ import annotations
 
 import asyncio
-import gc
 import json
 import logging
 import os
@@ -40,18 +39,13 @@ import modal
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 
-from .storage import (
-    LORA_MOUNT_PATH,
-    create_initial_lora,
-    export_lora_zip_bytes,
-    list_loras,
-    lora_exists,
-    lora_volume,
-    resolve_lora_id,
-)
+from .storage import LORA_MOUNT_PATH, lora_volume
 from .teacher import format_teacher_prompt
+from .training_engines import get_training_engine
+from .training_engines.base import EngineKind, TrainingEngine
 from .types import (
     DistillRequest,
+    DistillRequestPayload,
     DistillResponse,
     FeedbackLogRecord,
     FeedbackLogVllmState,
@@ -82,8 +76,25 @@ VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "sk-local")
 FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
 FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
 # Default "local" assumes GPU deps (torch, etc.) are available on this machine.
-# Set to "modal_rpc" for Modal deployments where the API image is CPU-only.
+# Set to "modal" for Modal deployments where the API image is CPU-only.
 DISTILL_EXECUTION_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local").strip().lower()
+
+
+def _get_engine_kind() -> EngineKind:
+    """Validate and return the configured engine kind."""
+    if DISTILL_EXECUTION_MODE not in {"local", "modal", "tinker"}:
+        raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {DISTILL_EXECUTION_MODE}")
+    return DISTILL_EXECUTION_MODE
+
+def _uses_modal_teacher() -> bool:
+    """Return whether API should fetch teacher scores from Modal TeacherService."""
+    return _get_engine_kind() in {"local", "modal"}
+
+
+def _get_training_engine() -> TrainingEngine:
+    """Build the configured training engine instance."""
+    return get_training_engine(_get_engine_kind())
+
 
 _feedback_locks: dict[str, asyncio.Lock] = {}
 _feedback_locks_guard = asyncio.Lock()
@@ -303,24 +314,19 @@ async def _vllm_reload_lora(lora_id: str) -> None:
 
     Requires VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 on the vLLM server.
     """
-    import re
-
-    resolved = resolve_lora_id(lora_id)
-    vllm_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", resolved.strip("/")).strip("-") or "lora"
-    lora_path = os.path.join(LORA_MOUNT_PATH, resolved)
+    runtime_ref = await _get_training_engine().lora_runtime_ref(lora_id)
 
     try:
         await _vllm_post(
             "/v1/unload_lora_adapter",
-            json_body={"lora_name": vllm_name},
+            json_body={"lora_name": runtime_ref.vllm_name},
         )
     except httpx.HTTPStatusError as e:
-        # 404 = adapter not found (first run or already unloaded) — safe to ignore
         if e.response.status_code != 404:
             raise
     await _vllm_post(
         "/v1/load_lora_adapter",
-        json_body={"lora_name": vllm_name, "lora_path": lora_path},
+        json_body={"lora_name": runtime_ref.vllm_name, "lora_path": runtime_ref.lora_path},
     )
 
 
@@ -344,36 +350,10 @@ def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
 
 
 
-def _safe_export_name(lora_id: str) -> str:
-    """Sanitize LoRA identifier for Content-Disposition filename."""
-    base = lora_id.strip("/").replace("/", "__")
-    safe = "".join(c for c in base if c.isalnum() or c in "-_.")
-    return safe or "lora_export"
-
-
-async def _run_distill(payload: dict[str, Any]) -> dict[str, Any]:
+async def _run_distill(payload: DistillRequestPayload) -> DistillResponse:
     """Execute a distill request via configured execution backend."""
-    if DISTILL_EXECUTION_MODE == "local":
-        from .worker import DistillWorker
-
-        worker = DistillWorker()
-        try:
-            result = await asyncio.to_thread(worker.distill.local, payload)
-            return DistillResponse.model_validate(result).model_dump()
-        finally:
-            # Offload the base model to CPU so vLLM can reclaim full VRAM.
-            # This must happen even on failure — otherwise the 16GB base model
-            # stays on GPU and vLLM's wake triggers CUDA memory conflicts.
-            try:
-                await asyncio.to_thread(worker._offload_base_model)
-            except Exception:
-                logger.warning("Failed to offload base model to CPU", exc_info=True)
-            del worker
-            gc.collect()
-
-    distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
-    result = await distill_fn.remote.aio(payload)
-    return DistillResponse.model_validate(result).model_dump()
+    engine = _get_training_engine()
+    return await engine.distill(payload)
 
 
 # API Endpoints
@@ -384,30 +364,29 @@ async def distill(request: DistillRequest) -> DistillResponse:
     """Run a single SDPO distillation step.
 
     This endpoint:
-    1. Loads the user's LoRA from local storage (or Modal Volume in remote mode)
+    1. Loads the user's LoRA from local storage (or Modal Volume in modal mode)
     2. Runs the student model forward pass
     3. Gets teacher logprobs from configured source
        - self (default): base model conditioned on feedback
        - remote: vLLM TeacherService
     4. Computes SDPO loss (JSD-based policy gradient)
     5. Updates LoRA parameters
-    6. Saves the updated LoRA back to local storage (or Modal Volume in remote mode)
+    6. Saves the updated LoRA back to local storage (or Modal Volume in modal mode)
 
     Returns the new LoRA ID and training metrics.
     """
     try:
-        # Validate LoRA exists (run sync function in thread pool to avoid blocking)
-        exists = await asyncio.to_thread(lora_exists, request.lora_id)
-        if not exists:
+        exists_payload = await _get_training_engine().lora_exists(request.lora_id)
+        if not exists_payload.exists:
             raise HTTPException(
                 status_code=404,
                 detail=f"LoRA not found: {request.lora_id}",
             )
 
-        payload = request.model_dump()
+        payload = DistillRequestPayload.model_validate(request.model_dump())
 
         # Remote teacher is optional; self-distillation is the default path.
-        if request.training.teacher_mode == "remote":
+        if request.training.teacher_mode == "remote" and _uses_modal_teacher():
             teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
             teacher_prompt = format_teacher_prompt(request.prompt, request.feedback)
             teacher_scored = await teacher_score_fn.remote.aio(
@@ -420,11 +399,11 @@ async def distill(request: DistillRequest) -> DistillResponse:
                     status_code=502,
                     detail="Remote teacher returned empty scores",
                 )
-            payload["teacher_result"] = teacher_scored[0]
+            payload = DistillRequestPayload.model_validate({**payload.model_dump(), "teacher_result": teacher_scored[0]})
 
         result = await _run_distill(payload)
 
-        return DistillResponse(**result)
+        return result
 
     except HTTPException:
         raise
@@ -449,18 +428,24 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
     timing_ms = FeedbackTimingMs()
     started_total = time.perf_counter()
 
-    resolved_id = await asyncio.to_thread(resolve_lora_id, request.lora_id)
-    lock = await _get_feedback_lock(resolved_id)
+    lock = await _get_feedback_lock(request.lora_id)
     try:
-        # Validate LoRA exists before attempting orchestration.
-        exists = await asyncio.to_thread(lora_exists, request.lora_id)
-        if not exists:
+        exists_payload = await _get_training_engine().lora_exists(request.lora_id)
+        if not exists_payload.exists:
             raise HTTPException(status_code=404, detail=f"LoRA not found: {request.lora_id}")
 
         await asyncio.wait_for(lock.acquire(), timeout=FEEDBACK_LOCK_TIMEOUT_S)
         lock_acquired = True
 
-        if request.orchestration.sleep_before:
+        if _get_engine_kind() == "tinker" and (
+            request.orchestration.sleep_before or request.orchestration.wake_after
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="tinker mode requires orchestration.sleep_before=false and wake_after=false",
+            )
+
+        if request.orchestration.sleep_before and _get_engine_kind() != "tinker":
             phase = "drain"
             try:
                 await _wait_for_vllm_idle()
@@ -493,10 +478,10 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
 
         phase = "distill"
         distill_start = time.perf_counter()
-        payload = request.model_dump()
-        payload["save_in_place"] = True
+        payload = DistillRequestPayload.model_validate(request.model_dump())
+        payload = DistillRequestPayload.model_validate({**payload.model_dump(), "save_in_place": True})
 
-        if request.training.teacher_mode == "remote":
+        if request.training.teacher_mode == "remote" and _uses_modal_teacher():
             teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
             teacher_prompt = format_teacher_prompt(request.prompt, request.feedback)
             teacher_scored = await teacher_score_fn.remote.aio(
@@ -509,12 +494,12 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
                     status_code=502,
                     detail="Remote teacher returned empty scores",
                 )
-            payload["teacher_result"] = teacher_scored[0]
+            payload = DistillRequestPayload.model_validate({**payload.model_dump(), "teacher_result": teacher_scored[0]})
 
-        distill_result = DistillResponse.model_validate(await _run_distill(payload))
+        distill_result = await _run_distill(payload)
         timing_ms.distill = int((time.perf_counter() - distill_start) * 1000)
 
-        if request.orchestration.wake_after:
+        if request.orchestration.wake_after and _get_engine_kind() != "tinker":
             phase = "wake"
             wake_start = time.perf_counter()
             await _vllm_post("/wake_up")
@@ -598,21 +583,12 @@ async def init_lora(request: LoraInitRequest) -> LoraInitResponse:
     The adapter will have zero weights initially and will be trained
     through distill calls.
     """
-    _validate_init_base_model(request.base_model)
+    if _get_engine_kind() in {"local", "modal"}:
+        _validate_init_base_model(request.base_model)
 
     try:
-        # Run sync function in thread pool to avoid blocking
-        lora_id = await asyncio.to_thread(
-            create_initial_lora,
-            lora_id=request.lora_id,
-            base_model_name=request.base_model,
-            lora_r=request.lora_r,
-            lora_alpha=request.lora_alpha,
-            target_modules=request.target_modules,
-        )
-        return LoraInitResponse(lora_id=lora_id)
-
-    except (ValueError, RuntimeError, OSError) as e:
+        return await _get_training_engine().init_lora(request)
+    except (ValueError, RuntimeError, OSError, httpx.HTTPError) as e:
         raise HTTPException(
             status_code=500,
             detail=f"LoRA initialization failed: {str(e)}",
@@ -627,10 +603,8 @@ async def list_lora_adapters(prefix: str = "") -> LoraListResponse:
         prefix: Optional prefix to filter by (e.g., 'user123/')
     """
     try:
-        # Run sync function in thread pool to avoid blocking
-        loras = await asyncio.to_thread(list_loras, prefix)
-        return LoraListResponse(loras=loras)
-    except (ValueError, OSError) as e:
+        return await _get_training_engine().list_loras(prefix)
+    except (ValueError, OSError, httpx.HTTPError) as e:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to list LoRAs: {str(e)}",
@@ -641,25 +615,24 @@ async def list_lora_adapters(prefix: str = "") -> LoraListResponse:
 async def export_lora_adapter(lora_id: str) -> Response:
     """Export a LoRA adapter as a zip archive for local inference servers."""
     try:
-        exists = await asyncio.to_thread(lora_exists, lora_id)
-        if not exists:
+        exists_payload = await _get_training_engine().lora_exists(lora_id)
+        if not exists_payload.exists:
             raise HTTPException(
                 status_code=404,
                 detail=f"LoRA not found: {lora_id}",
             )
 
-        zip_bytes = await asyncio.to_thread(export_lora_zip_bytes, lora_id)
-        safe_name = _safe_export_name(lora_id)
+        export_payload = await _get_training_engine().export_lora(lora_id)
         return Response(
-            content=zip_bytes,
+            content=export_payload.content,
             media_type="application/zip",
             headers={
-                "Content-Disposition": f'attachment; filename="{safe_name}.zip"',
+                "Content-Disposition": f'attachment; filename="{export_payload.filename}"',
             },
         )
     except HTTPException:
         raise
-    except (ValueError, OSError) as e:
+    except (ValueError, OSError, httpx.HTTPError) as e:
         raise HTTPException(
             status_code=500,
             detail=f"LoRA export failed: {str(e)}",
@@ -670,21 +643,14 @@ async def export_lora_adapter(lora_id: str) -> Response:
 async def health_check() -> HealthResponse:
     """Check health of the API and backing services."""
     status = "healthy"
-    worker: ServiceHealth | None = None
-    teacher: ServiceHealth | None = None
 
-    if DISTILL_EXECUTION_MODE == "local":
-        worker = ServiceHealth(status="healthy", error=None)
-        teacher = ServiceHealth(status="healthy", error=None)
-    else:
-        try:
-            worker_health_fn = modal.Function.from_name("claas-distill", "DistillWorker.health_check")
-            data = await asyncio.wait_for(worker_health_fn.remote.aio(), timeout=15)
-            worker = ServiceHealth.model_validate(data)
-        except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
-            worker = ServiceHealth(status="unhealthy", error=str(e))
-            status = "degraded"
+    try:
+        worker = await get_training_engine(_get_engine_kind()).health()
+    except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError, httpx.HTTPError) as e:
+        worker = ServiceHealth(status="unhealthy", error=str(e))
+        status = "degraded"
 
+    if _uses_modal_teacher():
         try:
             teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
             data = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
@@ -692,6 +658,8 @@ async def health_check() -> HealthResponse:
         except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
             teacher = ServiceHealth(status="unhealthy", error=str(e))
             status = "degraded"
+    else:
+        teacher = ServiceHealth(status="healthy", error=None)
 
     return HealthResponse(status=status, worker=worker, teacher=teacher)
 

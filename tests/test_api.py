@@ -61,7 +61,7 @@ def test_distill_404_when_lora_missing(monkeypatch):
 def test_distill_success(monkeypatch):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
     monkeypatch.setattr(
         api.modal.Function,
@@ -92,7 +92,7 @@ def test_distill_success(monkeypatch):
 def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     calls = []
     captured = {}
     log_records = []
@@ -153,7 +153,7 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
 def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     log_records = []
     log_path = str(tmp_path / "feedback-log.json")
 
@@ -209,7 +209,7 @@ def test_export_404_when_missing(monkeypatch):
 def test_distill_returns_500_on_worker_failure(monkeypatch):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
     monkeypatch.setattr(
         api.modal.Function,
@@ -236,7 +236,7 @@ def test_feedback_calls_drain_before_sleep(monkeypatch, tmp_path):
     """_wait_for_vllm_idle is called before /sleep."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     order = []
 
     def fake_from_name(_app, fn_name):
@@ -281,7 +281,7 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
     """A drain timeout produces a 503 response."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
 
     async def fake_wait_idle():
         raise TimeoutError("still busy")
@@ -314,7 +314,7 @@ def test_feedback_fetches_rollout_logprobs(monkeypatch, tmp_path):
     """Rollout logprobs are fetched and forwarded to the distill worker."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     captured = {}
 
     def fake_from_name(_app, fn_name):
@@ -357,7 +357,7 @@ def test_feedback_logprobs_fetch_failure_continues(monkeypatch, tmp_path):
 
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     captured = {}
 
     def fake_from_name(_app, fn_name):
@@ -398,7 +398,7 @@ def test_feedback_skips_logprobs_when_provided(monkeypatch, tmp_path):
     """When rollout_logprobs is already provided, the fetch is skipped."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal_rpc")
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
     captured = {}
     fetch_called = []
 
