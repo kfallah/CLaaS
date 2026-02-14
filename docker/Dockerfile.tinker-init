@@ -6,7 +6,8 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY . /app
 
-RUN pip install --no-cache-dir . && \
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch && \
+    pip install --no-cache-dir ".[tinker]" && \
     pip install --no-cache-dir modal
 
 ENTRYPOINT ["python", "/app/docker/scripts/init-stack.py"]

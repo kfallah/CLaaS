@@ -19,15 +19,20 @@ import threading
 import time
 import uuid
 from collections.abc import Generator
+from typing import TYPE_CHECKING, Any
 
 import tinker
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from tinker import types as T
 from tinker_cookbook import model_info
 from tinker_cookbook.renderers import Renderer, get_renderer
-from transformers import PreTrainedTokenizerBase
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
+else:
+    PreTrainedTokenizerBase = Any
 
 app = FastAPI(title="CLaaS Tinker Inference Proxy")
 
@@ -123,15 +128,15 @@ async def _sample_async(
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: Any = ""
 
 
 class ChatCompletionRequest(BaseModel):
     model: str = _BASE_MODEL
     messages: list[ChatMessage]
-    max_tokens: int = Field(default=2048, ge=1, le=32768)
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
+    max_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
     stream: bool = False
     stop: list[str] | None = None
 
@@ -139,9 +144,9 @@ class ChatCompletionRequest(BaseModel):
 class CompletionRequest(BaseModel):
     model: str = _BASE_MODEL
     prompt: str
-    max_tokens: int = Field(default=2048, ge=1, le=32768)
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
+    max_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
     stream: bool = False
     stop: list[str] | None = None
 
@@ -159,14 +164,17 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
     renderer = _holder.renderer
     sampler = _holder.sampler
 
-    messages = [{"role": m.role, "content": m.content} for m in req.messages]
+    messages = [{"role": m.role, "content": _coerce_content(m.content)} for m in req.messages]
     model_input = renderer.build_generation_prompt(messages)
 
     stop_seqs = req.stop or renderer.get_stop_sequences()
+    max_tokens = _bounded_int(req.max_tokens, default=2048, minimum=1, maximum=32768)
+    temperature = _bounded_float(req.temperature, default=0.7, minimum=0.0, maximum=2.0)
+    top_p = _bounded_float(req.top_p, default=1.0, minimum=0.0, maximum=1.0)
     sampling_params = T.SamplingParams(
-        max_tokens=req.max_tokens,
-        temperature=req.temperature,
-        top_p=req.top_p,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
         top_k=0,
         seed=0,
         stop=stop_seqs,
@@ -180,7 +188,7 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
-    prompt_tokens = model_input.length()
+    prompt_tokens = model_input.length
     completion_tokens = len(seq.tokens)
 
     if req.stream:
@@ -215,10 +223,13 @@ async def completions(req: CompletionRequest) -> dict[str, object] | StreamingRe
     model_input = T.ModelInput.from_ints(tokens)
 
     stop_seqs = req.stop or []
+    max_tokens = _bounded_int(req.max_tokens, default=2048, minimum=1, maximum=32768)
+    temperature = _bounded_float(req.temperature, default=0.7, minimum=0.0, maximum=2.0)
+    top_p = _bounded_float(req.top_p, default=1.0, minimum=0.0, maximum=1.0)
     sampling_params = T.SamplingParams(
-        max_tokens=req.max_tokens,
-        temperature=req.temperature,
-        top_p=req.top_p,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
         top_k=0,
         seed=0,
         stop=stop_seqs,
@@ -321,6 +332,50 @@ def _stream_chat_response(
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+def _coerce_content(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            if isinstance(part, dict):
+                if isinstance(part.get("text"), str):
+                    parts.append(part["text"])
+                    continue
+                if isinstance(part.get("content"), str):
+                    parts.append(part["content"])
+                    continue
+        return "\n".join(parts)
+    if isinstance(content, dict):
+        text = content.get("text")
+        if isinstance(text, str):
+            return text
+    return str(content)
+
+
+def _bounded_int(value: int | None, *, default: int, minimum: int, maximum: int) -> int:
+    if value is None:
+        return default
+    return max(minimum, min(maximum, int(value)))
+
+
+def _bounded_float(
+    value: float | None,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    if value is None:
+        return default
+    return max(minimum, min(maximum, float(value)))
 
 
 def _stream_completion_response(

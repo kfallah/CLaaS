@@ -11,7 +11,8 @@ RUN apt-get update && \
 WORKDIR /app
 COPY . /app
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch && \
+    pip install --no-cache-dir ".[tinker]"
 
 EXPOSE 8080
 

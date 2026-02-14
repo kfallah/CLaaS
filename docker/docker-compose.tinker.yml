@@ -12,7 +12,13 @@ services:
     ports:
       - "${TINKER_PROXY_PORT:-8000}:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/models"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=5)",
+        ]
       interval: 15s
       timeout: 10s
       start_period: 20s
