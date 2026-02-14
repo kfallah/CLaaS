@@ -27,7 +27,7 @@ OPENCLAW_HOME = Path(os.environ.get("OPENCLAW_HOME", "/openclaw-config"))
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://vllm:8000/v1")
 API_KEY = os.environ.get("API_KEY", "sk-local")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-CLAAS_API_URL = os.environ.get("CLAAS_API_URL", "http://localhost:8080")
+CLAAS_API_URL = os.environ.get("CLAAS_API_URL", "http://claas-api:8080")
 
 # Ensure claas picks up local_fs mode and our lora root
 os.environ["CLAAS_STORAGE_BACKEND"] = "local_fs"

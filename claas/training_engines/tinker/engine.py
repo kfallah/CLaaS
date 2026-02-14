@@ -50,7 +50,10 @@ from claas.types import (
 logger = logging.getLogger(__name__)
 
 # Default model for the Tinker engine.
-_DEFAULT_BASE_MODEL = os.environ.get("CLAAS_TINKER_BASE_MODEL", "Qwen/Qwen3-235B-A22B")
+_DEFAULT_BASE_MODEL = os.environ.get(
+    "CLAAS_TINKER_BASE_MODEL",
+    "Qwen/Qwen3-30B-A3B-Instruct-2507",
+)
 
 # Adaptive KL scaling defaults (from continualcode reference).
 _TARGET_ADV_ABS_MEAN = 0.03
