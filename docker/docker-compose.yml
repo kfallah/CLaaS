@@ -149,6 +149,7 @@ services:
       - CLAAS_TINKER_BASE_MODEL=${MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
       - CLAAS_TINKER_STATE_PATH=/data/tinker_state.json
       - FEEDBACK_LOG_DIR=/feedback-logs
+      - VLLM_BASE_URL=http://tinker-proxy:8000
       - WAIT_FOR_BACKEND=0
     volumes:
       - claas-feedback-logs:/feedback-logs

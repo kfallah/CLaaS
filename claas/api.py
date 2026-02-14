@@ -182,6 +182,14 @@ async def _vllm_post(
     resp.raise_for_status()
 
 
+async def _tinker_proxy_refresh(model_path: str) -> None:
+    """Tell the Tinker inference proxy to reload with the latest checkpoint."""
+    async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=30) as client:
+        resp = await client.post("/v1/sampler/refresh", json={"model_path": model_path})
+    resp.raise_for_status()
+    logger.info("Tinker proxy refreshed to checkpoint: %s", model_path)
+
+
 async def _wait_for_vllm_idle(
     timeout_s: float = FEEDBACK_DRAIN_TIMEOUT_S,
 ) -> None:
@@ -517,6 +525,15 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             await _vllm_reload_lora(request.lora_id)
             timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
             woke = True
+
+        if _get_engine_kind() == "tinker" and distill_result is not None:
+            tinker_path = (distill_result.metadata or {}).get("tinker_path")
+            if tinker_path:
+                phase = "wake"
+                wake_start = time.perf_counter()
+                await _tinker_proxy_refresh(str(tinker_path))
+                timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
+                woke = True
 
         timing_ms.total = int((time.perf_counter() - started_total) * 1000)
     except asyncio.TimeoutError:
