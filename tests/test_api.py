@@ -39,10 +39,36 @@ class _FunctionFailureStub:
         self.remote = _RemoteCallFailure()
 
 
+class _EngineStub:
+    """Minimal TrainingEngine mock for API tests."""
+
+    def __init__(self, exists=True):
+        self._exists = exists
+
+    async def lora_exists(self, _lora_id):
+        from claas.types import LoraExistsPayload
+
+        return LoraExistsPayload(exists=self._exists)
+
+    async def lora_runtime_ref(self, lora_id):
+        from claas.types import LoraRuntimeRef
+
+        return LoraRuntimeRef(vllm_name=lora_id, lora_path=f"/loras/{lora_id}")
+
+    async def distill(self, payload):
+        import modal
+
+        from claas.types import DistillResponse
+
+        distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
+        result = await distill_fn.remote.aio(payload.model_dump())
+        return DistillResponse.model_validate(result)
+
+
 def test_distill_404_when_lora_missing(monkeypatch):
     from claas import api
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: False)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=False))
     client = TestClient(web_app)
 
     response = client.post(
@@ -64,7 +90,7 @@ def test_distill_success(monkeypatch):
     from claas import api
 
     monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(
         api.modal.Function,
         "from_name",
@@ -118,7 +144,7 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     async def fake_wait_idle():
         calls.append(("_wait_for_vllm_idle",))
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
@@ -174,7 +200,7 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
     async def fake_wait_idle():
         pass
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
@@ -201,7 +227,7 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
 def test_export_404_when_missing(monkeypatch):
     from claas import api
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: False)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=False))
     client = TestClient(web_app)
 
     response = client.get("/v1/lora/export", params={"lora_id": "user/missing"})
@@ -212,7 +238,7 @@ def test_distill_returns_500_on_worker_failure(monkeypatch):
     from claas import api
 
     monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(
         api.modal.Function,
         "from_name",
@@ -254,7 +280,7 @@ def test_feedback_calls_drain_before_sleep(monkeypatch, tmp_path):
     async def fake_vllm_post(path, *, params=None, json_body=None, timeout_s=30.0):
         order.append(path)
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
@@ -291,7 +317,7 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
     async def fake_vllm_post(_path, *, params=None, json_body=None, timeout_s=30.0):
         pass
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
     monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
@@ -330,7 +356,7 @@ def test_feedback_fetches_rollout_logprobs(monkeypatch, tmp_path):
     async def fake_fetch(_prompt, _response, _model, _timeout_s=60.0):
         return [-0.5, -1.2, -0.3]
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", lambda *_a, **_kw: _noop_coro())
     monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
@@ -373,7 +399,7 @@ def test_feedback_logprobs_fetch_failure_continues(monkeypatch, tmp_path):
     async def failing_fetch(_prompt, _response, _model, _timeout_s=60.0):
         raise _httpx.HTTPError("connection refused")
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", lambda *_a, **_kw: _noop_coro())
     monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
@@ -416,7 +442,7 @@ def test_feedback_skips_logprobs_when_provided(monkeypatch, tmp_path):
         fetch_called.append(True)
         return [-9.9]
 
-    monkeypatch.setattr(api, "lora_exists", lambda _lora_id: True)
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", lambda *_a, **_kw: _noop_coro())
     monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
