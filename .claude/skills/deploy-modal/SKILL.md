@@ -26,8 +26,8 @@ When this skill is invoked, perform the following steps:
 ## Deployed Services
 
 The deployment includes:
-- **DistillWorker**: L40S GPU worker with Qwen2.5-Coder-3B student model
-- **TeacherService**: A100 GPU worker with Qwen2.5-32B teacher model (vLLM)
+- **DistillWorker**: L40S GPU worker with Qwen3-8B student model
+- **TeacherService**: H100 GPU worker with Qwen3-Coder-30B-A3B teacher model (vLLM)
 - **FastAPI endpoint**: REST API for distillation requests
 
 ## Health Check

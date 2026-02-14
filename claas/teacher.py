@@ -15,10 +15,13 @@ from __future__ import annotations
 import importlib
 import os
 import warnings
+from typing import TYPE_CHECKING
 from typing import Literal, TypedDict
 
 import modal
-import torch
+
+if TYPE_CHECKING:
+    import torch
 
 
 class TokenLogprobs(TypedDict):
@@ -287,7 +290,7 @@ def format_teacher_prompt(
 def parse_teacher_result(
     result: list[TokenLogprobs],
     device: str = "cuda",
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple["torch.Tensor", "torch.Tensor"]:
     """Parse teacher scoring result into tensors.
 
     Args:
@@ -301,6 +304,8 @@ def parse_teacher_result(
     """
     if not result:
         raise ValueError("Empty teacher result")
+
+    import torch
 
     # Find max K across positions
     max_k = max(len(pos["indices"]) for pos in result)

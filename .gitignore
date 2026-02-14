@@ -54,6 +54,8 @@ feedback_logs/
 
 # Docker
 docker/.env
+docker/.env.*
+!docker/.env.*.example
 
 # OS
 .DS_Store
