@@ -9,7 +9,7 @@ if [[ "${WAIT_FOR_BACKEND}" == "1" ]]; then
     BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-${BACKEND_BASE}/health}"
 
     echo "Waiting for backend at ${BACKEND_HEALTH_URL} ..."
-    until curl -sf "${BACKEND_HEALTH_URL}" > /dev/null 2>&1; do
+    until curl -sf --connect-timeout 5 --max-time 10 "${BACKEND_HEALTH_URL}" > /dev/null 2>&1; do
         sleep 5
     done
     echo "Backend is ready."

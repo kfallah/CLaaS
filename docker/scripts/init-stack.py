@@ -287,6 +287,7 @@ def install_feedback_plugin() -> None:
 def fix_permissions() -> None:
     openclaw_uid = int(os.environ.get("OPENCLAW_UID", "1000"))
     openclaw_gid = int(os.environ.get("OPENCLAW_GID", "1000"))
+    sensitive_config_names = {"openclaw.json"}
 
     for root, dirs, files in os.walk(str(OPENCLAW_HOME)):
         os.chown(root, openclaw_uid, openclaw_gid)
@@ -297,19 +298,24 @@ def fix_permissions() -> None:
                 p,
                 stat.S_IRWXU
                 | stat.S_IRWXG
-                | stat.S_IROTH
-                | stat.S_IXOTH,
             )
         for f in files:
             p = os.path.join(root, f)
             os.chown(p, openclaw_uid, openclaw_gid)
+            if f in sensitive_config_names:
+                os.chmod(
+                    p,
+                    stat.S_IRUSR
+                    | stat.S_IWUSR
+                    | stat.S_IRGRP,
+                )
+                continue
             os.chmod(
                 p,
                 stat.S_IRUSR
                 | stat.S_IWUSR
                 | stat.S_IRGRP
-                | stat.S_IWGRP
-                | stat.S_IROTH,
+                | stat.S_IWGRP,
             )
 
 
