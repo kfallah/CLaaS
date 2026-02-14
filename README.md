@@ -120,6 +120,14 @@ docker compose up --build
 
 This brings up four services: an init container (creates the LoRA + config), vLLM with Qwen3-8B and LoRA serving, the CLaaS feedback API, and OpenClaw's Telegram gateway. See [`docker/README.md`](docker/README.md) for details.
 
+For hosted Tinker instead of local vLLM, use the dedicated compose file:
+
+```bash
+cd docker
+cp .env.tinker.example .env.tinker
+docker compose -f docker-compose.tinker.yml --env-file .env.tinker up --build
+```
+
 ## Local vLLM + OpenClaw
 
 See [`scripts/openclaw-local/README.md`](scripts/openclaw-local/README.md) for the full supervised local stack (vLLM + gateway + auto-restart, multi-LoRA, Telegram integration).

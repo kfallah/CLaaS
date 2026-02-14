@@ -19,6 +19,23 @@ docker compose up --build
 
 The first run downloads Qwen3-8B (~16 GB) — expect the vLLM health check to take 10-20 minutes. Subsequent runs use the cached model.
 
+## Tinker Compose Stack
+
+Use this when you want CLaaS distillation + inference to run against hosted Tinker instead of local vLLM:
+
+```bash
+cd docker
+cp .env.tinker.example .env.tinker
+# Edit .env.tinker (set TELEGRAM_BOT_TOKEN + TINKER_API_KEY)
+docker compose -f docker-compose.tinker.yml --env-file .env.tinker up --build
+```
+
+This stack brings up:
+- `tinker-proxy` (OpenAI-compatible `/v1/chat/completions` + `/v1/completions`)
+- `claas-api` in `CLAAS_DISTILL_EXECUTION_MODE=tinker`
+- `init` (creates `{LORA_NAME}-latest` through the API + writes OpenClaw config)
+- `openclaw` (Telegram gateway pointed at `tinker-proxy`)
+
 ## Services
 
 | Service | Port | Description |

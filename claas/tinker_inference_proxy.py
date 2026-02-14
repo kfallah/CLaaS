@@ -154,7 +154,7 @@ class RefreshRequest(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@app.post("/v1/chat/completions")
+@app.post("/v1/chat/completions", response_model=None)
 async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | StreamingResponse:
     renderer = _holder.renderer
     sampler = _holder.sampler
@@ -206,7 +206,7 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
     }
 
 
-@app.post("/v1/completions")
+@app.post("/v1/completions", response_model=None)
 async def completions(req: CompletionRequest) -> dict[str, object] | StreamingResponse:
     tokenizer = _holder.tokenizer
     sampler = _holder.sampler
