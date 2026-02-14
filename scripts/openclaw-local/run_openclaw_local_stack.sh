@@ -60,6 +60,33 @@ wait_for_health() {
   return 1
 }
 
+initialize_log_offset_state() {
+  local log_file="$1"
+  local state_file="$2"
+
+  local size=0
+  local offset=0
+
+  if [[ -f "$log_file" ]]; then
+    size="$(wc -c < "$log_file")"
+  fi
+
+  if [[ -f "$state_file" ]]; then
+    offset="$(cat "$state_file")"
+    if [[ ! "$offset" =~ ^[0-9]+$ ]]; then
+      offset="$size"
+    fi
+  else
+    offset="$size"
+  fi
+
+  if (( offset > size )); then
+    offset="$size"
+  fi
+
+  printf '%s' "$offset" > "$state_file"
+}
+
 check_log_for_patterns() {
   local log_file="$1"
   local state_file="$2"
@@ -136,7 +163,7 @@ start_stack_once() {
   nohup "$VLLM_START_SCRIPT" >>"$VLLM_LOG" 2>&1 &
   local vllm_pid=$!
   echo "$vllm_pid" >"$VLLM_PID_FILE"
-  : > "$VLLM_OOM_STATE_FILE"
+  initialize_log_offset_state "$VLLM_LOG" "$VLLM_OOM_STATE_FILE"
 
   if ! wait_for_health "$VLLM_HEALTH_URL" "$VLLM_WAIT_SECONDS"; then
     echo "[$STACK_NAME] vLLM failed health check; see $VLLM_LOG"
@@ -154,7 +181,7 @@ start_stack_once() {
   nohup uvicorn claas.api:web_app --host 0.0.0.0 --port "${CLAAS_API_PORT:-8080}" >>"$CLAAS_API_LOG" 2>&1 &
   local api_pid=$!
   echo "$api_pid" >"$CLAAS_API_PID_FILE"
-  : > "$CLAAS_API_OOM_STATE_FILE"
+  initialize_log_offset_state "$CLAAS_API_LOG" "$CLAAS_API_OOM_STATE_FILE"
 
   echo "[$STACK_NAME] starting OpenClaw gateway..."
   nohup "$GATEWAY_START_SCRIPT" >>"$GATEWAY_LOG" 2>&1 &
