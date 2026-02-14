@@ -13,6 +13,11 @@ COPY . /app
 
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch && \
     pip install --no-cache-dir ".[tinker]"
+RUN groupadd --gid 10001 claas && \
+    useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin claas && \
+    chown -R claas:claas /app
+
+USER claas
 
 EXPOSE 8080
 
