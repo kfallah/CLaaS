@@ -32,7 +32,7 @@ from .verifiers import run_verifier
 logger = logging.getLogger(__name__)
 
 # Steps at which to run collapse checks (Phase 3).
-COLLAPSE_CHECK_STEPS = {0, 5, 10, 15, 20}
+COLLAPSE_CHECK_STEPS = {0, 5, 10, 15, 19}
 
 
 async def _api_post(
