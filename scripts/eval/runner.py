@@ -14,10 +14,9 @@ import time
 
 import httpx
 
-from .capability import evaluate_general_capability
-from .collapse import measure_collapse
 from .gemini import GeminiUser
-from .logprob import derive_vllm_model_name, measure_logprob_margin
+from .logprob import derive_vllm_model_name
+from .metrics import Metric, build_metrics
 from .plotting import generate_plots
 from .preferences import PreferenceConfig, get_preference_configs
 from .types import (
@@ -25,16 +24,13 @@ from .types import (
     EvalMetrics,
     ExperimentResult,
     HarnessConfig,
+    MetricContext,
     PreferenceSummary,
     SDPOMetrics,
     StepResult,
 )
-from .verifiers import run_verifier
 
 logger = logging.getLogger(__name__)
-
-# Steps at which to run collapse checks (Phase 3).
-COLLAPSE_CHECK_STEPS = {0, 5, 10, 15, 19}
 
 
 async def _init_lora(config: HarnessConfig, lora_id: str) -> str:
@@ -137,58 +133,34 @@ async def _generate_response(
         return resp.json()["choices"][0]["message"]["content"]
 
 
-async def _measure_eval(
+async def _measure_eval_metrics(
     config: HarnessConfig,
     pref: PreferenceConfig,
     vllm_model: str,
     step: int,
     baseline: EvalMetrics,
-    gemini_user: GeminiUser | None = None,
+    enabled_metrics: list[Metric],
+    response_text: str | None = None,
 ) -> EvalMetrics:
-    """Run the appropriate evaluation metrics for the current phase."""
+    """Run all enabled metrics and return aggregated results."""
     metrics = EvalMetrics()
 
-    # Phase 1+: logprob margins
-    baseline_margin = baseline.logprob_margin.margin if baseline.logprob_margin else None
-    for pair in pref.logprob_pairs:
-        margin = await measure_logprob_margin(
-            config.vllm_url, config.vllm_api_key, vllm_model, pair, baseline_margin,
-        )
-        metrics.logprob_margin = margin
+    async def generate(prompt: str) -> str:
+        return await _generate_response(config, vllm_model, prompt)
 
-    if config.phase >= 2:
-        # Phase 2+: generative preference compliance
-        scores = []
-        for probe_prompt in pref.probe_prompts[:3]:
-            try:
-                response_text = await _generate_response(config, vllm_model, probe_prompt)
-                score = run_verifier(pref.verifier_name, response_text)
-                scores.append(score)
-            except (httpx.HTTPError, KeyError) as e:
-                logger.warning("Probe generation failed: %s", e)
-        if scores:
-            metrics.preference_compliance = sum(scores) / len(scores)
+    ctx = MetricContext(
+        vllm_url=config.vllm_url,
+        vllm_api_key=config.vllm_api_key,
+        vllm_model=vllm_model,
+        step=step,
+        pref=pref,
+        baseline=baseline,
+        response_text=response_text,
+        generate=generate,
+    )
 
-        # Phase 2+: general capability
-        try:
-            metrics.general = await evaluate_general_capability(
-                config.vllm_url, config.vllm_api_key, vllm_model,
-            )
-        except (httpx.HTTPError, KeyError) as e:
-            logger.warning("General capability eval failed: %s", e)
-
-    if config.phase >= 3 and step in COLLAPSE_CHECK_STEPS:
-        # Phase 3: collapse detection
-        baseline_entropy = (
-            baseline.collapse.mean_entropy if baseline.collapse else None
-        )
-        try:
-            metrics.collapse = await measure_collapse(
-                config.vllm_url, config.vllm_api_key, vllm_model,
-                baseline_entropy=baseline_entropy,
-            )
-        except (httpx.HTTPError, KeyError) as e:
-            logger.warning("Collapse detection failed: %s", e)
+    for metric in enabled_metrics:
+        await metric.measure(ctx, metrics)
 
     return metrics
 
@@ -247,8 +219,13 @@ def _write_metadata(output_dir: str, preference: str, config: HarnessConfig, lor
     os.makedirs(pref_dir, exist_ok=True)
     path = os.path.join(pref_dir, "metadata.json")
 
+    config_dict = dataclasses.asdict(config)
+    # Convert set to sorted list for JSON serialization
+    if config_dict.get("collapse_steps") is not None:
+        config_dict["collapse_steps"] = sorted(config_dict["collapse_steps"])
+
     data = {
-        "config": dataclasses.asdict(config),
+        "config": config_dict,
         "lora_id": lora_id,
         "preference": preference,
     }
@@ -351,6 +328,8 @@ async def run_preference_experiment(
     config: HarnessConfig,
     pref: PreferenceConfig,
     gemini_user: GeminiUser | None = None,
+    enabled_metrics: list[Metric] | None = None,
+    needs_generation: bool = False,
 ) -> ExperimentResult:
     """Run the full experiment loop for a single preference."""
     lora_id = f"{config.lora_id_prefix}/{pref.name}"
@@ -390,15 +369,18 @@ async def run_preference_experiment(
     _write_metadata(config.output_dir, pref.name, config, actual_lora_id)
 
     # Measure baseline
+    if enabled_metrics is None:
+        enabled_metrics = []
     if resume_from == 0:
         logger.info("[%s] Measuring baseline...", pref.name)
-        baseline = await _measure_eval(
+        baseline = await _measure_eval_metrics(
             config, pref, vllm_model, step=0,
             baseline=EvalMetrics(),  # No baseline for the baseline itself
+            enabled_metrics=enabled_metrics,
         )
         _write_baseline(config.output_dir, pref.name, baseline)
     else:
-        # Load baseline from disk (restore all metric fields for Phase 2/3)
+        # Load baseline from disk (restore all metric fields)
         baseline_path = os.path.join(config.output_dir, pref.name, "baseline.json")
         if os.path.exists(baseline_path):
             with open(baseline_path) as f:
@@ -434,8 +416,8 @@ async def run_preference_experiment(
         step_start = time.perf_counter()
 
         prompt = pref.probe_prompts[step % len(pref.probe_prompts)]
-        # Phase 1: fixed response; Phase 2+: generate from model
-        if config.phase >= 2:
+        # Generate response from model when any enabled metric needs it
+        if needs_generation:
             try:
                 response_text = await _generate_response(
                     config, vllm_model, prompt, temperature=0, max_tokens=256,
@@ -448,7 +430,7 @@ async def run_preference_experiment(
 
         # Determine feedback string
         feedback_str = pref.feedback_string
-        if config.phase >= 2 and gemini_user:
+        if needs_generation and gemini_user:
             try:
                 gemini_result = await gemini_user.evaluate_response(response_text, prompt)
                 if gemini_result.feedback:
@@ -481,8 +463,10 @@ async def run_preference_experiment(
 
         # Measure eval
         try:
-            eval_metrics = await _measure_eval(
-                config, pref, vllm_model, step, baseline, gemini_user,
+            eval_metrics = await _measure_eval_metrics(
+                config, pref, vllm_model, step, baseline,
+                enabled_metrics=enabled_metrics,
+                response_text=response_text if needs_generation else None,
             )
         except (httpx.HTTPError, KeyError) as e:
             logger.warning("[%s] Step %d eval failed: %s", pref.name, step, e)
@@ -498,7 +482,7 @@ async def run_preference_experiment(
             sdpo_metrics=sdpo_metrics,
             eval=eval_metrics,
             prompt_used=prompt,
-            response_text=response_text if config.phase >= 2 else None,
+            response_text=response_text if needs_generation else None,
             timing_s=timing_s,
         )
 
@@ -540,25 +524,33 @@ async def run_harness(config: HarnessConfig) -> None:
         logger.error("No valid preferences selected: %s", config.preferences)
         return
 
+    # Build metric objects from config
+    enabled_metrics = build_metrics(config.metrics, config.collapse_steps)
+    needs_generation = any(m.needs_generation for m in enabled_metrics)
+
     logger.info(
-        "Starting eval harness: phase=%d, preferences=%s, steps=%d",
-        config.phase, [p.name for p in selected], config.num_steps,
+        "Starting eval harness: metrics=%s, preferences=%s, steps=%d",
+        [m.name for m in enabled_metrics], [p.name for p in selected], config.num_steps,
     )
 
     results: list[ExperimentResult] = []
     for pref in selected:
         gemini = None
-        if config.phase >= 2 and config.gemini_api_key:
+        if needs_generation and config.gemini_api_key:
             gemini = GeminiUser(config.gemini_api_key, pref.feedback_string)
 
-        result = await run_preference_experiment(config, pref, gemini)
+        result = await run_preference_experiment(
+            config, pref, gemini,
+            enabled_metrics=enabled_metrics,
+            needs_generation=needs_generation,
+        )
         results.append(result)
 
     # Write summary
     _write_summary(config.output_dir, results)
 
-    # Generate plots (Phase 3+)
-    if config.phase >= 3:
+    # Generate plots
+    if config.plots:
         generate_plots(config.output_dir, config.preferences)
 
     logger.info("Evaluation complete. Results in %s", config.output_dir)

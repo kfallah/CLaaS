@@ -1,7 +1,7 @@
 """Summary plots for evaluation results.
 
-Phase 3. Generates 5 plots saved to {output_dir}/plots/.
-Gracefully skips plots for metrics not available in current phase.
+Generates 5 plots saved to {output_dir}/plots/.
+Gracefully skips plots for metrics not collected in the current run.
 """
 
 from __future__ import annotations

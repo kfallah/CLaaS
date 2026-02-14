@@ -1,6 +1,6 @@
 """General capability evaluation: coding task + IFEval-style probes.
 
-Phase 2+ only. Measures whether SDPO training preserves general ability.
+Measures whether SDPO training preserves general ability.
 """
 
 from __future__ import annotations

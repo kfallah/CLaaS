@@ -1,6 +1,6 @@
 """Collapse detection: token entropy, self-ROUGE-L, logprob drift.
 
-Phase 3. Run at steps 0, 5, 10, 15, 20 for speed.
+Run at configurable steps (default: 0, 5, 10, 15, 19) for speed.
 
 This module implements three complementary algorithms to detect model collapse
 during continual distillation. Model collapse occurs when a student model

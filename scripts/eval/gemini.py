@@ -1,6 +1,6 @@
 """Gemini simulated user for natural feedback variation.
 
-Phase 2+ only. Optional — requires --gemini-api-key.
+Optional — requires --gemini-api-key.
 Falls back to hardcoded feedback_string when unavailable.
 
 Uses the google-genai SDK (>=1.0), which communicates via REST/httpx
@@ -97,8 +97,7 @@ def get_feedback(
 ) -> str:
     """Get feedback from Gemini user or fall back to hardcoded string.
 
-    This is synchronous — for Phase 2+ we'd use the async version in the runner.
+    This is synchronous — the runner calls gemini_user.evaluate_response() directly
+    for the async path.
     """
-    # Gemini integration is async; this sync wrapper is for Phase 1 compatibility.
-    # In Phase 2+, the runner calls gemini_user.evaluate_response() directly.
     return default_feedback

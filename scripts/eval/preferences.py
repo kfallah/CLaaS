@@ -1,9 +1,9 @@
 """Preference configurations for the evaluation harness.
 
 Each preference defines:
-- feedback_string: hardcoded feedback for Phase 1
+- feedback_string: default hardcoded feedback
 - logprob_pairs: (positive, negative) examples in Qwen3 ChatML format
-- probe_prompts: chat prompts for generative eval (Phase 2+)
+- probe_prompts: chat prompts for generative eval
 - verifier_name: maps to function in verifiers.py
 """
 

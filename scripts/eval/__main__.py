@@ -7,7 +7,7 @@ Usage:
         --preferences no_emoji concise identity \
         --num-steps 20 \
         --output-dir ./eval_results \
-        --phase 1
+        --metrics logprob
 """
 
 from __future__ import annotations
@@ -64,14 +64,26 @@ def parse_args() -> HarnessConfig:
     parser.add_argument(
         "--gemini-api-key",
         default=None,
-        help="Google Gemini API key for simulated user (Phase 2+, optional)",
+        help="Google Gemini API key for simulated user (optional, used with generative metrics)",
     )
     parser.add_argument(
-        "--phase",
-        type=int,
-        default=1,
-        choices=[1, 2, 3],
-        help="Evaluation phase: 1=logprob only, 2=+generative, 3=+collapse+plots (default: 1)",
+        "--metrics",
+        default="logprob",
+        help=(
+            "Comma-separated metric names or preset "
+            "(default: logprob). Presets: all=logprob,compliance,general,collapse; quick=logprob"
+        ),
+    )
+    parser.add_argument(
+        "--plots",
+        action="store_true",
+        default=False,
+        help="Generate summary plots after evaluation (default: off)",
+    )
+    parser.add_argument(
+        "--collapse-steps",
+        default=None,
+        help="Comma-separated step numbers for collapse checks (default: 0,5,10,15,19)",
     )
     parser.add_argument(
         "--lora-id-prefix",
@@ -87,6 +99,14 @@ def parse_args() -> HarnessConfig:
 
     args = parser.parse_args()
 
+    # Parse --metrics comma string
+    metrics_list = [m.strip() for m in args.metrics.split(",") if m.strip()]
+
+    # Parse --collapse-steps
+    collapse_steps: set[int] | None = None
+    if args.collapse_steps is not None:
+        collapse_steps = {int(s.strip()) for s in args.collapse_steps.split(",") if s.strip()}
+
     return HarnessConfig(
         claas_url=args.claas_url,
         vllm_url=args.vllm_url,
@@ -96,7 +116,9 @@ def parse_args() -> HarnessConfig:
         num_steps=args.num_steps,
         output_dir=args.output_dir,
         gemini_api_key=args.gemini_api_key,
-        phase=args.phase,
+        metrics=metrics_list,
+        plots=args.plots,
+        collapse_steps=collapse_steps,
         lora_id_prefix=args.lora_id_prefix,
         seed=args.seed,
     )
