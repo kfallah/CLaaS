@@ -175,6 +175,7 @@ uv run pytest -q
 3. Modal GPU Memory Snapshots: https://modal.com/blog/gpu-mem-snapshots
 4. vLLM: https://github.com/vllm-project/vllm
 5. PEFT/LoRA: https://github.com/huggingface/peft
+6. Tinker SDPO training reference (continualcode): https://github.com/sdan/continualcode
 
 ## License
 
