@@ -137,6 +137,7 @@ All variables have sensible defaults. Edit `.env.openclaw-local` to override.
 | `VLLM_HEALTH_URL` | `http://127.0.0.1:8000/health` | vLLM health endpoint monitored by supervisor |
 | `VLLM_MODELS_URL` | `http://127.0.0.1:8000/v1/models` | vLLM models endpoint used for readiness checks |
 | `CLAAS_API_HEALTH_URL` | `http://127.0.0.1:8080/v1/health` | CLaaS API health endpoint monitored by supervisor |
+| `CLAAS_API_WAIT_SECONDS` | `60` | Startup grace window for CLaaS API before monitor checks begin |
 
 ## LoRA Adapters
 

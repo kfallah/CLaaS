@@ -25,6 +25,7 @@ VLLM_HEALTH_URL="${VLLM_HEALTH_URL:-http://127.0.0.1:8000/health}"
 VLLM_MODELS_URL="${VLLM_MODELS_URL:-http://127.0.0.1:8000/v1/models}"
 CLAAS_API_HEALTH_URL="${CLAAS_API_HEALTH_URL:-http://127.0.0.1:${CLAAS_API_PORT:-8080}/v1/health}"
 VLLM_WAIT_SECONDS="${VLLM_WAIT_SECONDS:-180}"
+CLAAS_API_WAIT_SECONDS="${CLAAS_API_WAIT_SECONDS:-60}"
 MONITOR_INTERVAL_SECONDS="${MONITOR_INTERVAL_SECONDS:-30}"
 
 VLLM_OOM_STATE_FILE="${VLLM_OOM_STATE_FILE:-$LOG_DIR/vllm-log.offset}"
@@ -53,6 +54,18 @@ wait_for_health() {
   local timeout="$2"
   for ((i=1; i<=timeout; i++)); do
     if curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+wait_for_models() {
+  local url="$1"
+  local timeout="$2"
+  for ((i=1; i<=timeout; i++)); do
+    if curl -fsS -H "Authorization: Bearer ${API_KEY:-sk-local}" "$url" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -171,6 +184,12 @@ start_stack_once() {
   fi
   echo "[$STACK_NAME] vLLM healthy at $VLLM_HEALTH_URL"
 
+  if ! wait_for_models "$VLLM_MODELS_URL" "$VLLM_WAIT_SECONDS"; then
+    echo "[$STACK_NAME] vLLM models endpoint failed readiness check; see $VLLM_LOG"
+    return 1
+  fi
+  echo "[$STACK_NAME] vLLM models endpoint ready at $VLLM_MODELS_URL"
+
   echo "[$STACK_NAME] starting CLaaS feedback API..."
   cleanup_old_pid "$CLAAS_API_PID_FILE"
   CLAAS_STORAGE_BACKEND=local_fs \
@@ -182,6 +201,12 @@ start_stack_once() {
   local api_pid=$!
   echo "$api_pid" >"$CLAAS_API_PID_FILE"
   initialize_log_offset_state "$CLAAS_API_LOG" "$CLAAS_API_OOM_STATE_FILE"
+
+  if ! wait_for_health "$CLAAS_API_HEALTH_URL" "$CLAAS_API_WAIT_SECONDS"; then
+    echo "[$STACK_NAME] CLaaS API failed health check; see $CLAAS_API_LOG"
+    return 1
+  fi
+  echo "[$STACK_NAME] CLaaS API healthy at $CLAAS_API_HEALTH_URL"
 
   echo "[$STACK_NAME] starting OpenClaw gateway..."
   nohup "$GATEWAY_START_SCRIPT" >>"$GATEWAY_LOG" 2>&1 &
