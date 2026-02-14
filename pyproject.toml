@@ -36,8 +36,7 @@ teacher = [
 ]
 eval = [
     "matplotlib>=3.8.0",
-    # google-generativeai is optional — install separately if needed for Gemini user.
-    # Conflicts with vllm's protobuf requirement when resolved together.
+    "google-genai>=1.0.0",
 ]
 
 [project.scripts]

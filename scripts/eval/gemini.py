@@ -2,6 +2,9 @@
 
 Phase 2+ only. Optional — requires --gemini-api-key.
 Falls back to hardcoded feedback_string when unavailable.
+
+Uses the google-genai SDK (>=1.0), which communicates via REST/httpx
+and has no protobuf dependency conflict with vLLM.
 """
 
 from __future__ import annotations
@@ -27,22 +30,21 @@ class GeminiUser:
     def __init__(self, api_key: str, preference_description: str):
         self._api_key = api_key
         self._preference_description = preference_description
-        self._model = None
+        self._client = None
 
-    def _get_model(self):
-        """Lazily initialize the Gemini model."""
-        if self._model is None:
+    def _get_client(self):
+        """Lazily initialize the Gemini client."""
+        if self._client is None:
             try:
-                import google.generativeai as genai
+                from google import genai
 
-                genai.configure(api_key=self._api_key)
-                self._model = genai.GenerativeModel("gemini-1.5-flash")
+                self._client = genai.Client(api_key=self._api_key)
             except ImportError:
                 raise ImportError(
-                    "google-generativeai is required for Gemini user. "
-                    "Install with: pip install google-generativeai"
+                    "google-genai is required for Gemini user. "
+                    "Install with: pip install google-genai"
                 )
-        return self._model
+        return self._client
 
     async def evaluate_response(
         self,
@@ -54,21 +56,23 @@ class GeminiUser:
         Returns:
             {"satisfied": bool, "feedback": str | None}
         """
-        model = self._get_model()
+        client = self._get_client()
         system = _SYSTEM_PROMPT.format(
             preference_description=self._preference_description,
         )
         prompt = (
-            f"{system}\n\n"
             f"User message: {user_prompt}\n"
             f"Chatbot response: {chatbot_response}\n\n"
             f"Evaluate:"
         )
 
         try:
-            response = model.generate_content(prompt)
+            response = await client.aio.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=prompt,
+                config={"system_instruction": system},
+            )
             text = response.text.strip()
-            # Try to parse JSON from the response
             # Handle cases where Gemini wraps JSON in markdown code blocks
             if text.startswith("```"):
                 text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
