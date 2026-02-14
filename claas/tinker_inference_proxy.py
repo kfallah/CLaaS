@@ -12,8 +12,10 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import threading
 import time
 import uuid
 from collections.abc import Generator
@@ -45,19 +47,21 @@ class _SamplerHolder:
         self._tokenizer: PreTrainedTokenizerBase | None = None
         self._renderer: Renderer | None = None
         self._model_path: str | None = None
+        self._lock = threading.Lock()
 
     def _ensure(self) -> None:
-        if self._sampler is not None:
-            return
-        api_key = os.environ.get("CLAAS_TINKER_API_KEY", "")
-        if api_key:
-            os.environ["TINKER_API_KEY"] = api_key
-        self._service = tinker.ServiceClient()
-        self._sampler = self._service.create_sampling_client(base_model=_BASE_MODEL)
-        self._tokenizer = self._sampler.get_tokenizer()
+        with self._lock:
+            if self._sampler is not None:
+                return
+            api_key = os.environ.get("CLAAS_TINKER_API_KEY", "")
+            if api_key:
+                os.environ["TINKER_API_KEY"] = api_key
+            self._service = tinker.ServiceClient()
+            self._sampler = self._service.create_sampling_client(base_model=_BASE_MODEL)
+            self._tokenizer = self._sampler.get_tokenizer()
 
-        renderer_name = model_info.get_recommended_renderer_name(_BASE_MODEL)
-        self._renderer = get_renderer(renderer_name, tokenizer=self._tokenizer)
+            renderer_name = model_info.get_recommended_renderer_name(_BASE_MODEL)
+            self._renderer = get_renderer(renderer_name, tokenizer=self._tokenizer)
 
     @property
     def sampler(self) -> tinker.SamplingClient:
@@ -79,17 +83,38 @@ class _SamplerHolder:
 
     def refresh(self, model_path: str | None = None) -> None:
         """Refresh the sampling client (e.g. after a distillation step)."""
-        if self._service is None:
-            self._ensure()
-            return
-        if model_path:
-            self._sampler = self._service.create_sampling_client(model_path=model_path)
-        else:
-            self._sampler = self._service.create_sampling_client(base_model=_BASE_MODEL)
-        self._model_path = model_path
+        with self._lock:
+            if self._service is None:
+                api_key = os.environ.get("CLAAS_TINKER_API_KEY", "")
+                if api_key:
+                    os.environ["TINKER_API_KEY"] = api_key
+                self._service = tinker.ServiceClient()
+            if model_path:
+                self._sampler = self._service.create_sampling_client(model_path=model_path)
+            else:
+                self._sampler = self._service.create_sampling_client(base_model=_BASE_MODEL)
+            self._tokenizer = self._sampler.get_tokenizer()
+            renderer_name = model_info.get_recommended_renderer_name(_BASE_MODEL)
+            self._renderer = get_renderer(renderer_name, tokenizer=self._tokenizer)
+            self._model_path = model_path
 
 
 _holder = _SamplerHolder()
+
+
+async def _sample_async(
+    sampler: tinker.SamplingClient,
+    prompt: T.ModelInput,
+    sampling_params: T.SamplingParams,
+) -> T.SamplingResponse:
+    """Run blocking sampling in a worker thread to avoid blocking the event loop."""
+    return await asyncio.to_thread(
+        lambda: sampler.sample(
+            prompt=prompt,
+            num_samples=1,
+            sampling_params=sampling_params,
+        ).result()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -147,11 +172,7 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
         stop=stop_seqs,
     )
 
-    resp = sampler.sample(
-        prompt=model_input,
-        num_samples=1,
-        sampling_params=sampling_params,
-    ).result()
+    resp = await _sample_async(sampler, model_input, sampling_params)
 
     seq = resp.sequences[0]
     text_msg, _ = renderer.parse_response(seq.tokens)
@@ -203,11 +224,7 @@ async def completions(req: CompletionRequest) -> dict[str, object] | StreamingRe
         stop=stop_seqs,
     )
 
-    resp = sampler.sample(
-        prompt=model_input,
-        num_samples=1,
-        sampling_params=sampling_params,
-    ).result()
+    resp = await _sample_async(sampler, model_input, sampling_params)
 
     seq = resp.sequences[0]
     text: str = tokenizer.decode(seq.tokens, skip_special_tokens=True)
