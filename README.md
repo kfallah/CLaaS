@@ -94,15 +94,16 @@ The primary endpoint. Runs one online update transaction for a served adapter.
 
 ## Execution Modes
 
-Set `CLAAS_DISTILL_EXECUTION_MODE` to control where the distill worker runs:
+Set `CLAAS_DISTILL_EXECUTION_MODE` to control which training engine implementation handles distillation:
 
 - **`local`** (default) — Runs on the same machine. Requires a GPU with enough VRAM for Qwen3-8B + LoRA training.
-- **`modal_rpc`** — Runs the distill step remotely on Modal (L40S). The API process itself can be CPU-only.
+- **`modal`** — Runs the distill step remotely on Modal (L40S) and keeps teacher scoring on Modal.
+- **`tinker`** — Uses a Tinker-hosted CLaaS backend for distillation **and** LoRA lifecycle operations (`/v1/lora/init`, `/v1/lora`, `/v1/lora/export`). This mode is designed for large hosted teachers/models such as Qwen3 235B MoE and requires `CLAAS_TINKER_BASE_URL` and `CLAAS_TINKER_API_KEY`.
 
 ## Storage
 
 - **Local** (default): adapters are stored under `CLAAS_LORA_ROOT` (default `/loras`). Path format: `/loras/{user}/{model}`.
-- **Remote**: Modal Volume `claas-loras`, same path layout. Used automatically when `CLAAS_DISTILL_EXECUTION_MODE=modal_rpc`.
+- **Remote**: Modal Volume `claas-loras`, same path layout. Used automatically when `CLAAS_DISTILL_EXECUTION_MODE=modal`.
 
 `/v1/feedback` updates adapters in-place (same `lora_id`). `/v1/distill` creates versioned checkpoints with timestamps.
 

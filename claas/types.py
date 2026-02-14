@@ -127,6 +127,27 @@ class DistillRequest(BaseModel):
     )
 
 
+class TeacherTokenLogprobs(BaseModel):
+    """Top-k teacher token log-probabilities at one response position."""
+
+    indices: list[int]
+    logprobs: list[float]
+
+
+class DistillRequestPayload(BaseModel):
+    """Typed payload forwarded to the configured training engine."""
+
+    lora_id: str
+    prompt: str
+    response: str
+    feedback: str
+    rollout_logprobs: list[float] | None = None
+    training: TrainingConfig
+    teacher_result: list[TeacherTokenLogprobs] | None = None
+    save_in_place: bool = False
+
+
+
 class DistillResponse(BaseModel):
     """Response from a distillation step."""
 
@@ -138,6 +159,28 @@ class DistillResponse(BaseModel):
         ...,
         description="Training metrics and diagnostics",
     )
+
+
+class LoraExportPayload(BaseModel):
+    """Typed LoRA export payload used by training engines."""
+
+    filename: str
+    content: bytes
+
+
+class LoraExistsPayload(BaseModel):
+    """Typed LoRA existence payload used by training engines."""
+
+    exists: bool
+
+
+
+class LoraRuntimeRef(BaseModel):
+    """Runtime LoRA reference for vLLM adapter reload operations."""
+
+    vllm_name: str
+    lora_path: str
+
 
 
 class FeedbackOrchestration(BaseModel):
