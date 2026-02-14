@@ -18,7 +18,7 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Generator
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 import tinker
@@ -299,7 +299,7 @@ def _stream_chat_response(
 ) -> StreamingResponse:
     """Wrap a complete response as an SSE stream for OpenAI-compatible clients."""
 
-    def _generate() -> Generator[str, None, None]:
+    def _generate() -> Iterator[str]:
         chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -386,7 +386,7 @@ def _stream_completion_response(
 ) -> StreamingResponse:
     """Wrap a complete text-completion response as an SSE stream."""
 
-    def _generate() -> Generator[str, None, None]:
+    def _generate() -> Iterator[str]:
         chunk = {
             "id": completion_id,
             "object": "text_completion",
