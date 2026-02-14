@@ -12,39 +12,26 @@ from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
-# Unicode categories that cover emoji characters.
-_EMOJI_CATEGORIES = {"So"}  # Symbol, Other
-
-# Regex pattern for common emoji sequences (supplementary plane + variation selectors).
-_EMOJI_RE = re.compile(
-    "["
-    "\U0001f600-\U0001f64f"  # emoticons
-    "\U0001f300-\U0001f5ff"  # symbols & pictographs
-    "\U0001f680-\U0001f6ff"  # transport & map
-    "\U0001f1e0-\U0001f1ff"  # flags
-    "\U00002702-\U000027b0"  # dingbats
-    "\U0000fe00-\U0000fe0f"  # variation selectors
-    "\U0001f900-\U0001f9ff"  # supplemental symbols
-    "\U0001fa00-\U0001fa6f"  # chess symbols
-    "\U0001fa70-\U0001faff"  # symbols extended-A
-    "\U00002600-\U000026ff"  # misc symbols
-    "\U0000200d"             # zero width joiner
-    "\U00002b50"             # star
-    "\U00002728"             # sparkles
-    "\U00002764"             # heart
-    "]+",
-)
+def _is_emoji(char: str) -> bool:
+    """Check if a character is an emoji using Unicode category and codepoint ranges."""
+    # 'So' (Symbol, Other) covers most emoji in the BMP and supplementary planes
+    if unicodedata.category(char) == "So":
+        return True
+    # Supplementary plane emoji blocks not always categorized as 'So'
+    cp = ord(char)
+    return (
+        0x1F600 <= cp <= 0x1F64F   # emoticons
+        or 0x1F300 <= cp <= 0x1F5FF  # misc symbols & pictographs
+        or 0x1F680 <= cp <= 0x1F6FF  # transport & map
+        or 0x1F900 <= cp <= 0x1F9FF  # supplemental symbols
+        or 0x1FA00 <= cp <= 0x1FAFF  # symbols extended-A
+        or 0x1F1E0 <= cp <= 0x1F1FF  # flags
+    )
 
 
 def _count_emoji(text: str) -> int:
     """Count emoji characters in text."""
-    count = 0
-    for char in text:
-        if unicodedata.category(char) in _EMOJI_CATEGORIES:
-            count += 1
-        elif _EMOJI_RE.match(char):
-            count += 1
-    return count
+    return sum(1 for char in text if _is_emoji(char))
 
 
 def verify_no_emoji(response: str) -> float:

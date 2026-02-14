@@ -409,15 +409,21 @@ async def run_preference_experiment(
         )
         _write_baseline(config.output_dir, pref.name, baseline)
     else:
-        # Load baseline from disk
+        # Load baseline from disk (restore all metric fields for Phase 2/3)
         baseline_path = os.path.join(config.output_dir, pref.name, "baseline.json")
         if os.path.exists(baseline_path):
             with open(baseline_path) as f:
                 baseline_data = json.loads(f.read())
-            from .types import LogprobMargin
+            from .types import CollapseMetrics, GeneralCapability, LogprobMargin
             baseline = EvalMetrics()
             if baseline_data.get("logprob_margin"):
                 baseline.logprob_margin = LogprobMargin(**baseline_data["logprob_margin"])
+            if baseline_data.get("general"):
+                baseline.general = GeneralCapability(**baseline_data["general"])
+            if baseline_data.get("collapse"):
+                baseline.collapse = CollapseMetrics(**baseline_data["collapse"])
+            if baseline_data.get("preference_compliance") is not None:
+                baseline.preference_compliance = baseline_data["preference_compliance"]
         else:
             baseline = EvalMetrics()
 
@@ -440,7 +446,16 @@ async def run_preference_experiment(
 
         prompt = pref.probe_prompts[step % len(pref.probe_prompts)]
         # Phase 1: fixed response; Phase 2+: generate from model
-        response_text = "I'd be happy to help you with that."
+        if config.phase >= 2:
+            try:
+                response_text = await _generate_response(
+                    config, vllm_model, prompt, temperature=0, max_tokens=256,
+                )
+            except Exception as e:
+                logger.warning("[%s] Step %d generation failed, using canned: %s", pref.name, step, e)
+                response_text = "I'd be happy to help you with that."
+        else:
+            response_text = "I'd be happy to help you with that."
 
         # Determine feedback string
         feedback_str = pref.feedback_string

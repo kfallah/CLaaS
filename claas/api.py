@@ -146,23 +146,11 @@ async def _vllm_post(
     params: dict[str, Any] | None = None,
     json_body: dict[str, Any] | None = None,
     timeout_s: float = 30.0,
-    fallback_path: str | None = None,
 ) -> None:
-    """Call a vLLM control endpoint and raise on non-success.
-
-    When *fallback_path* is provided and the primary *path* returns 404,
-    the fallback is tried instead.  This lets the API work with both older
-    vLLM (``/sleep`` / ``/wake_up``) and newer versions (``/pause`` /
-    ``/resume``).
-    """
+    """Call a vLLM control endpoint and raise on non-success."""
     headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
     async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
         resp = await client.post(path, params=params, json=json_body, headers=headers)
-        if resp.status_code == 404 and fallback_path is not None:
-            logger.info("vLLM %s returned 404, trying %s", path, fallback_path)
-            resp = await client.post(
-                fallback_path, params=params, json=json_body, headers=headers,
-            )
     resp.raise_for_status()
 
 
@@ -449,7 +437,7 @@ async def distill(request: DistillRequest) -> DistillResponse:
 
 @web_app.post("/v1/feedback", response_model=FeedbackResponse)
 async def feedback(request: FeedbackRequest) -> FeedbackResponse:
-    """Run feedback orchestration: sleep vLLM, distill in-place, wake vLLM."""
+    """Run feedback orchestration: pause vLLM, distill in-place, resume vLLM."""
     request_id = uuid.uuid4().hex
     lock_acquired = False
     slept = False
@@ -496,9 +484,8 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             phase = "sleep"
             sleep_start = time.perf_counter()
             await _vllm_post(
-                "/sleep",
+                "/pause",
                 params={"level": request.orchestration.sleep_level},
-                fallback_path="/pause",
             )
             await _verify_gpu_ready()
             timing_ms.sleep = int((time.perf_counter() - sleep_start) * 1000)
@@ -530,7 +517,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
         if request.orchestration.wake_after:
             phase = "wake"
             wake_start = time.perf_counter()
-            await _vllm_post("/wake_up", fallback_path="/resume")
+            await _vllm_post("/resume")
             await _vllm_reload_lora(request.lora_id)
             timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
             woke = True
@@ -560,7 +547,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             and (request.orchestration.wake_on_failure or FEEDBACK_WAKE_ON_FAILURE)
         ):
             try:
-                await _vllm_post("/wake_up", fallback_path="/resume")
+                await _vllm_post("/resume")
                 woke = True
                 logger.info("Feedback %s: woke vLLM after failure in phase '%s'", request_id, phase)
             except httpx.HTTPError as wake_err:
