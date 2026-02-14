@@ -96,3 +96,88 @@ class ExperimentResult:
     lora_id: str
     baseline: EvalMetrics
     steps: list[StepResult] = field(default_factory=list)
+
+
+@dataclass
+class GeminiEvalResult:
+    """Result from Gemini's evaluation of a chatbot response."""
+
+    satisfied: bool
+    feedback: str | None = None
+
+
+@dataclass
+class CriteriaResult:
+    """Pass/marginal/fail verdicts for each success criterion."""
+
+    logprob_margin_increase: str | None = None
+    preference_compliance: str | None = None
+    capability_retention: str | None = None
+    entropy_ratio: str | None = None
+    self_rouge_l: str | None = None
+
+    def verdicts(self) -> list[str]:
+        """Return all non-None verdict values."""
+        return [
+            v
+            for v in [
+                self.logprob_margin_increase,
+                self.preference_compliance,
+                self.capability_retention,
+                self.entropy_ratio,
+                self.self_rouge_l,
+            ]
+            if v is not None
+        ]
+
+
+@dataclass
+class PreferenceSummary:
+    """Summary result for a single preference experiment."""
+
+    preference: str
+    lora_id: str
+    criteria: CriteriaResult = field(default_factory=CriteriaResult)
+    logprob_margin_delta: float | None = None
+    final_compliance: float | None = None
+    capability_ratio: float | None = None
+    overall: str = "pending"
+
+
+def step_result_from_dict(data: dict[str, object]) -> StepResult:
+    """Deserialize a StepResult from a parsed JSON dict (e.g. JSONL line)."""
+    eval_data = data.get("eval") or {}
+    eval_metrics = EvalMetrics()
+
+    lm = eval_data.get("logprob_margin")  # type: ignore[union-attr]
+    if lm:
+        eval_metrics.logprob_margin = LogprobMargin(**lm)
+
+    pc = eval_data.get("preference_compliance")  # type: ignore[union-attr]
+    if pc is not None:
+        eval_metrics.preference_compliance = pc
+
+    gen = eval_data.get("general")  # type: ignore[union-attr]
+    if gen:
+        eval_metrics.general = GeneralCapability(**gen)
+
+    col = eval_data.get("collapse")  # type: ignore[union-attr]
+    if col:
+        eval_metrics.collapse = CollapseMetrics(**col)
+
+    sdpo = None
+    sdpo_data = data.get("sdpo_metrics")
+    if sdpo_data:
+        sdpo = SDPOMetrics(**sdpo_data)  # type: ignore[arg-type]
+
+    return StepResult(
+        preference=data["preference"],  # type: ignore[arg-type]
+        step=data["step"],  # type: ignore[arg-type]
+        timestamp=data["timestamp"],  # type: ignore[arg-type]
+        feedback_given=data["feedback_given"],  # type: ignore[arg-type]
+        sdpo_metrics=sdpo,
+        eval=eval_metrics,
+        prompt_used=data["prompt_used"],  # type: ignore[arg-type]
+        response_text=data.get("response_text"),  # type: ignore[arg-type]
+        timing_s=data.get("timing_s", 0.0),  # type: ignore[arg-type]
+    )

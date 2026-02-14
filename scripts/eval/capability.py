@@ -26,6 +26,14 @@ CODING_PROMPT = (
 
 
 @dataclass
+class CodingResult:
+    """Result from coding task verification."""
+
+    correct: bool
+    has_docstring: bool
+
+
+@dataclass
 class IFEvalProbe:
     """A single IFEval-style instruction-following probe."""
 
@@ -76,11 +84,11 @@ def _extract_code_block(response: str) -> str:
     return "\n".join(code_lines).strip()
 
 
-def verify_coding(response: str, timeout_s: float = 5.0) -> dict[str, bool]:
+def verify_coding(response: str, timeout_s: float = 5.0) -> CodingResult:
     """Extract code from response, exec it, verify fibonacci correctness."""
     code = _extract_code_block(response)
     if not code:
-        return {"correct": False, "has_docstring": False}
+        return CodingResult(correct=False, has_docstring=False)
 
     has_docstring = '"""' in code or "'''" in code
 
@@ -105,7 +113,7 @@ def verify_coding(response: str, timeout_s: float = 5.0) -> dict[str, bool]:
     except (subprocess.TimeoutExpired, OSError):
         correct = False
 
-    return {"correct": correct, "has_docstring": has_docstring}
+    return CodingResult(correct=correct, has_docstring=has_docstring)
 
 
 async def evaluate_general_capability(
@@ -159,11 +167,11 @@ async def evaluate_general_capability(
                 logger.warning("IFEval probe failed: %s", e)
 
     ifeval_pass_rate = passes / total if total > 0 else 0.0
-    general_score = 0.5 * float(coding_result["correct"]) + 0.5 * ifeval_pass_rate
+    general_score = 0.5 * float(coding_result.correct) + 0.5 * ifeval_pass_rate
 
     return GeneralCapability(
-        coding_correct=coding_result["correct"],
-        coding_has_docstring=coding_result["has_docstring"],
+        coding_correct=coding_result.correct,
+        coding_has_docstring=coding_result.has_docstring,
         ifeval_pass_rate=ifeval_pass_rate,
         general_score=general_score,
     )

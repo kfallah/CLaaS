@@ -12,6 +12,10 @@ from __future__ import annotations
 import json
 import logging
 
+import httpx
+
+from .types import GeminiEvalResult
+
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
@@ -50,12 +54,8 @@ class GeminiUser:
         self,
         chatbot_response: str,
         user_prompt: str,
-    ) -> dict:
-        """Ask Gemini to evaluate the chatbot's response.
-
-        Returns:
-            {"satisfied": bool, "feedback": str | None}
-        """
+    ) -> GeminiEvalResult:
+        """Ask Gemini to evaluate the chatbot's response."""
         client = self._get_client()
         system = _SYSTEM_PROMPT.format(
             preference_description=self._preference_description,
@@ -76,13 +76,17 @@ class GeminiUser:
             # Handle cases where Gemini wraps JSON in markdown code blocks
             if text.startswith("```"):
                 text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            return json.loads(text)
+            parsed = json.loads(text)
+            return GeminiEvalResult(
+                satisfied=parsed.get("satisfied", False),
+                feedback=parsed.get("feedback"),
+            )
         except (json.JSONDecodeError, ValueError, AttributeError) as e:
             logger.warning("Failed to parse Gemini response: %s", e)
-            return {"satisfied": False, "feedback": None}
-        except Exception as e:
+            return GeminiEvalResult(satisfied=False)
+        except (httpx.HTTPError, ConnectionError, OSError, RuntimeError) as e:
             logger.warning("Gemini API call failed: %s", e)
-            return {"satisfied": False, "feedback": None}
+            return GeminiEvalResult(satisfied=False)
 
 
 def get_feedback(

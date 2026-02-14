@@ -10,20 +10,22 @@ import json
 import logging
 import os
 
+from .types import StepResult, step_result_from_dict
+
 logger = logging.getLogger(__name__)
 
 
-def _load_steps(output_dir: str, preference: str) -> list[dict]:
+def _load_steps(output_dir: str, preference: str) -> list[StepResult]:
     """Load step results from JSONL file."""
     path = os.path.join(output_dir, preference, "steps.jsonl")
     if not os.path.exists(path):
         return []
-    steps = []
+    steps: list[StepResult] = []
     with open(path) as f:
         for line in f:
             line = line.strip()
             if line:
-                steps.append(json.loads(line))
+                steps.append(step_result_from_dict(json.loads(line)))
     return steps
 
 
@@ -40,7 +42,7 @@ def generate_plots(output_dir: str, preferences: list[str]) -> None:
     plots_dir = os.path.join(output_dir, "plots")
     os.makedirs(plots_dir, exist_ok=True)
 
-    all_steps: dict[str, list[dict]] = {}
+    all_steps: dict[str, list[StepResult]] = {}
     for pref in preferences:
         steps = _load_steps(output_dir, pref)
         if steps:
@@ -59,24 +61,25 @@ def generate_plots(output_dir: str, preferences: list[str]) -> None:
     logger.info("Plots saved to %s", plots_dir)
 
 
-def _plot_logprob_margins(all_steps: dict, plots_dir: str, plt) -> None:
+def _plot_logprob_margins(
+    all_steps: dict[str, list[StepResult]], plots_dir: str, plt: object,
+) -> None:
     """Plot logprob margin vs step."""
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))  # type: ignore[union-attr]
     has_data = False
 
     for pref, steps in all_steps.items():
         x, y = [], []
         for s in steps:
-            margin_data = s.get("eval", {}).get("logprob_margin")
-            if margin_data:
-                x.append(s["step"])
-                y.append(margin_data["margin"])
+            if s.eval.logprob_margin:
+                x.append(s.step)
+                y.append(s.eval.logprob_margin.margin)
         if x:
             ax.plot(x, y, marker="o", label=pref)
             has_data = True
 
     if not has_data:
-        plt.close(fig)
+        plt.close(fig)  # type: ignore[union-attr]
         return
 
     ax.set_xlabel("Step")
@@ -86,27 +89,28 @@ def _plot_logprob_margins(all_steps: dict, plots_dir: str, plt) -> None:
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(os.path.join(plots_dir, "logprob_margins.png"), dpi=150)
-    plt.close(fig)
+    plt.close(fig)  # type: ignore[union-attr]
 
 
-def _plot_learning_curves(all_steps: dict, plots_dir: str, plt) -> None:
+def _plot_learning_curves(
+    all_steps: dict[str, list[StepResult]], plots_dir: str, plt: object,
+) -> None:
     """Plot preference compliance vs step."""
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))  # type: ignore[union-attr]
     has_data = False
 
     for pref, steps in all_steps.items():
         x, y = [], []
         for s in steps:
-            compliance = s.get("eval", {}).get("preference_compliance")
-            if compliance is not None:
-                x.append(s["step"])
-                y.append(compliance)
+            if s.eval.preference_compliance is not None:
+                x.append(s.step)
+                y.append(s.eval.preference_compliance)
         if x:
             ax.plot(x, y, marker="o", label=pref)
             has_data = True
 
     if not has_data:
-        plt.close(fig)
+        plt.close(fig)  # type: ignore[union-attr]
         return
 
     ax.set_xlabel("Step")
@@ -118,15 +122,17 @@ def _plot_learning_curves(all_steps: dict, plots_dir: str, plt) -> None:
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(os.path.join(plots_dir, "learning_curves.png"), dpi=150)
-    plt.close(fig)
+    plt.close(fig)  # type: ignore[union-attr]
 
 
-def _plot_collapse_dashboard(all_steps: dict, plots_dir: str, plt) -> None:
+def _plot_collapse_dashboard(
+    all_steps: dict[str, list[StepResult]], plots_dir: str, plt: object,
+) -> None:
     """Plot collapse metrics: entropy ratio, self-ROUGE-L, logprob drift."""
     has_data = False
     for steps in all_steps.values():
         for s in steps:
-            if s.get("eval", {}).get("collapse"):
+            if s.eval.collapse:
                 has_data = True
                 break
         if has_data:
@@ -135,7 +141,7 @@ def _plot_collapse_dashboard(all_steps: dict, plots_dir: str, plt) -> None:
     if not has_data:
         return
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))  # type: ignore[union-attr]
 
     for pref, steps in all_steps.items():
         x_ent, y_ent = [], []
@@ -143,16 +149,15 @@ def _plot_collapse_dashboard(all_steps: dict, plots_dir: str, plt) -> None:
         x_drift, y_drift = [], []
 
         for s in steps:
-            collapse = s.get("eval", {}).get("collapse")
+            collapse = s.eval.collapse
             if not collapse:
                 continue
-            step = s["step"]
-            x_ent.append(step)
-            y_ent.append(collapse["entropy_ratio_to_baseline"])
-            x_rouge.append(step)
-            y_rouge.append(collapse["self_rouge_l"])
-            x_drift.append(step)
-            y_drift.append(collapse["mean_logprob_drift"])
+            x_ent.append(s.step)
+            y_ent.append(collapse.entropy_ratio_to_baseline)
+            x_rouge.append(s.step)
+            y_rouge.append(collapse.self_rouge_l)
+            x_drift.append(s.step)
+            y_drift.append(collapse.mean_logprob_drift)
 
         if x_ent:
             axes[0].plot(x_ent, y_ent, marker="o", label=pref)
@@ -190,27 +195,28 @@ def _plot_collapse_dashboard(all_steps: dict, plots_dir: str, plt) -> None:
     fig.suptitle("Collapse Detection Dashboard")
     fig.tight_layout()
     fig.savefig(os.path.join(plots_dir, "collapse_dashboard.png"), dpi=150)
-    plt.close(fig)
+    plt.close(fig)  # type: ignore[union-attr]
 
 
-def _plot_forgetting(all_steps: dict, plots_dir: str, plt) -> None:
+def _plot_forgetting(
+    all_steps: dict[str, list[StepResult]], plots_dir: str, plt: object,
+) -> None:
     """Plot general capability score vs step."""
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))  # type: ignore[union-attr]
     has_data = False
 
     for pref, steps in all_steps.items():
         x, y = [], []
         for s in steps:
-            general = s.get("eval", {}).get("general")
-            if general:
-                x.append(s["step"])
-                y.append(general["general_score"])
+            if s.eval.general:
+                x.append(s.step)
+                y.append(s.eval.general.general_score)
         if x:
             ax.plot(x, y, marker="o", label=pref)
             has_data = True
 
     if not has_data:
-        plt.close(fig)
+        plt.close(fig)  # type: ignore[union-attr]
         return
 
     ax.set_xlabel("Step")
@@ -222,12 +228,14 @@ def _plot_forgetting(all_steps: dict, plots_dir: str, plt) -> None:
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(os.path.join(plots_dir, "forgetting.png"), dpi=150)
-    plt.close(fig)
+    plt.close(fig)  # type: ignore[union-attr]
 
 
-def _plot_sdpo_diagnostics(all_steps: dict, plots_dir: str, plt) -> None:
+def _plot_sdpo_diagnostics(
+    all_steps: dict[str, list[StepResult]], plots_dir: str, plt: object,
+) -> None:
     """Plot SDPO training metrics (distill_loss, kl_reg) over steps."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))  # type: ignore[union-attr]
     has_data = False
 
     for pref, steps in all_steps.items():
@@ -235,14 +243,13 @@ def _plot_sdpo_diagnostics(all_steps: dict, plots_dir: str, plt) -> None:
         x_kl, y_kl = [], []
 
         for s in steps:
-            sdpo = s.get("sdpo_metrics")
+            sdpo = s.sdpo_metrics
             if not sdpo:
                 continue
-            step = s["step"]
-            x_loss.append(step)
-            y_loss.append(sdpo["distill_loss"])
-            x_kl.append(step)
-            y_kl.append(sdpo["kl_reg"])
+            x_loss.append(s.step)
+            y_loss.append(sdpo.distill_loss)
+            x_kl.append(s.step)
+            y_kl.append(sdpo.kl_reg)
             has_data = True
 
         if x_loss:
@@ -251,7 +258,7 @@ def _plot_sdpo_diagnostics(all_steps: dict, plots_dir: str, plt) -> None:
             ax2.plot(x_kl, y_kl, marker="o", label=pref)
 
     if not has_data:
-        plt.close(fig)
+        plt.close(fig)  # type: ignore[union-attr]
         return
 
     ax1.set_xlabel("Step")
@@ -269,4 +276,4 @@ def _plot_sdpo_diagnostics(all_steps: dict, plots_dir: str, plt) -> None:
     fig.suptitle("SDPO Training Diagnostics")
     fig.tight_layout()
     fig.savefig(os.path.join(plots_dir, "sdpo_diagnostics.png"), dpi=150)
-    plt.close(fig)
+    plt.close(fig)  # type: ignore[union-attr]

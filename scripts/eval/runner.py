@@ -21,9 +21,11 @@ from .logprob import derive_vllm_model_name, measure_logprob_margin
 from .plotting import generate_plots
 from .preferences import PreferenceConfig, get_preference_configs
 from .types import (
+    CriteriaResult,
     EvalMetrics,
     ExperimentResult,
     HarnessConfig,
+    PreferenceSummary,
     SDPOMetrics,
     StepResult,
 )
@@ -35,27 +37,15 @@ logger = logging.getLogger(__name__)
 COLLAPSE_CHECK_STEPS = {0, 5, 10, 15, 19}
 
 
-async def _api_post(
-    url: str,
-    path: str,
-    json_body: dict | None = None,
-    timeout_s: float = 120.0,
-) -> dict:
-    """POST to an API endpoint and return the JSON response."""
-    async with httpx.AsyncClient(base_url=url, timeout=timeout_s) as client:
-        resp = await client.post(path, json=json_body)
-        resp.raise_for_status()
-        return resp.json()
-
-
 async def _init_lora(config: HarnessConfig, lora_id: str) -> str:
     """Initialize a fresh LoRA adapter via CLaaS API."""
-    result = await _api_post(
-        config.claas_url,
-        "/v1/lora/init",
-        json_body={"lora_id": lora_id, "base_model": "Qwen/Qwen3-8B"},
-    )
-    return result["lora_id"]
+    async with httpx.AsyncClient(base_url=config.claas_url, timeout=120.0) as client:
+        resp = await client.post(
+            "/v1/lora/init",
+            json={"lora_id": lora_id, "base_model": "Qwen/Qwen3-8B"},
+        )
+        resp.raise_for_status()
+        return resp.json()["lora_id"]
 
 
 async def _load_lora_into_vllm(
@@ -97,17 +87,18 @@ async def _submit_feedback(
     feedback: str,
 ) -> SDPOMetrics | None:
     """Submit feedback via CLaaS API and return SDPO metrics."""
-    result = await _api_post(
-        config.claas_url,
-        "/v1/feedback",
-        json_body={
-            "lora_id": lora_id,
-            "prompt": prompt,
-            "response": response,
-            "feedback": feedback,
-        },
-        timeout_s=180.0,
-    )
+    async with httpx.AsyncClient(base_url=config.claas_url, timeout=180.0) as client:
+        resp = await client.post(
+            "/v1/feedback",
+            json={
+                "lora_id": lora_id,
+                "prompt": prompt,
+                "response": response,
+                "feedback": feedback,
+            },
+        )
+        resp.raise_for_status()
+        result = resp.json()
 
     distill_result = result.get("distill_result")
     if not distill_result:
@@ -275,34 +266,41 @@ def _write_baseline(output_dir: str, preference: str, baseline: EvalMetrics) -> 
         json.dump(dataclasses.asdict(baseline), f, indent=2)
 
 
+def _evaluate_verdict(value: float, pass_thresh: float, marginal_thresh: float, higher_is_better: bool = True) -> str:
+    """Return 'pass', 'marginal', or 'fail' for a metric value."""
+    if higher_is_better:
+        if value > pass_thresh:
+            return "pass"
+        return "marginal" if value >= marginal_thresh else "fail"
+    # Lower is better (e.g. self_rouge_l)
+    if value < pass_thresh:
+        return "pass"
+    return "marginal" if value < marginal_thresh else "fail"
+
+
 def _write_summary(output_dir: str, results: list[ExperimentResult]) -> None:
     """Write aggregated summary with pass/fail per success criteria."""
-    summary = {}
+    summaries: dict[str, PreferenceSummary] = {}
+
     for result in results:
-        pref = result.preference
-        entry: dict = {"preference": pref, "lora_id": result.lora_id, "criteria": {}}
+        criteria = CriteriaResult()
+        entry = PreferenceSummary(
+            preference=result.preference,
+            lora_id=result.lora_id,
+            criteria=criteria,
+        )
 
         # Final logprob margin increase
         if result.steps and result.steps[-1].eval.logprob_margin:
             delta = result.steps[-1].eval.logprob_margin.margin_delta_from_baseline
-            if delta > 2.0:
-                entry["criteria"]["logprob_margin_increase"] = "pass"
-            elif delta >= 0.5:
-                entry["criteria"]["logprob_margin_increase"] = "marginal"
-            else:
-                entry["criteria"]["logprob_margin_increase"] = "fail"
-            entry["logprob_margin_delta"] = delta
+            criteria.logprob_margin_increase = _evaluate_verdict(delta, 2.0, 0.5)
+            entry.logprob_margin_delta = delta
 
-        # Preference compliance @ step 20
+        # Preference compliance @ final step
         if result.steps and result.steps[-1].eval.preference_compliance is not None:
             compliance = result.steps[-1].eval.preference_compliance
-            if compliance >= 0.8:
-                entry["criteria"]["preference_compliance"] = "pass"
-            elif compliance >= 0.5:
-                entry["criteria"]["preference_compliance"] = "marginal"
-            else:
-                entry["criteria"]["preference_compliance"] = "fail"
-            entry["final_compliance"] = compliance
+            criteria.preference_compliance = _evaluate_verdict(compliance, 0.8, 0.5)
+            entry.final_compliance = compliance
 
         # General capability retention
         if (
@@ -312,49 +310,40 @@ def _write_summary(output_dir: str, results: list[ExperimentResult]) -> None:
         ):
             baseline_score = result.baseline.general.general_score
             final_score = result.steps[-1].eval.general.general_score
-            if baseline_score > 0:
-                ratio = final_score / baseline_score
-            else:
-                ratio = 1.0
-            if ratio > 0.9:
-                entry["criteria"]["capability_retention"] = "pass"
-            elif ratio >= 0.7:
-                entry["criteria"]["capability_retention"] = "marginal"
-            else:
-                entry["criteria"]["capability_retention"] = "fail"
-            entry["capability_ratio"] = ratio
+            ratio = final_score / baseline_score if baseline_score > 0 else 1.0
+            criteria.capability_retention = _evaluate_verdict(ratio, 0.9, 0.7)
+            entry.capability_ratio = ratio
 
         # Collapse
-        collapse_entries = [
-            s for s in result.steps if s.eval.collapse
-        ]
+        collapse_entries = [s for s in result.steps if s.eval.collapse]
         if collapse_entries:
             last_collapse = collapse_entries[-1].eval.collapse
             if last_collapse is not None:
-                entry["criteria"]["entropy_ratio"] = (
-                    "pass" if last_collapse.entropy_ratio_to_baseline > 0.6
-                    else "marginal" if last_collapse.entropy_ratio_to_baseline > 0.4
-                    else "fail"
+                criteria.entropy_ratio = _evaluate_verdict(
+                    last_collapse.entropy_ratio_to_baseline, 0.6, 0.4,
                 )
-                entry["criteria"]["self_rouge_l"] = (
-                    "pass" if last_collapse.self_rouge_l < 0.85
-                    else "marginal" if last_collapse.self_rouge_l < 0.95
-                    else "fail"
+                criteria.self_rouge_l = _evaluate_verdict(
+                    last_collapse.self_rouge_l, 0.85, 0.95, higher_is_better=False,
                 )
 
         # Overall pass
-        criteria_values = list(entry["criteria"].values())
-        entry["overall"] = (
-            "pass" if criteria_values and all(v == "pass" for v in criteria_values)
-            else "fail" if any(v == "fail" for v in criteria_values)
-            else "marginal"
-        )
+        verdicts = criteria.verdicts()
+        if verdicts and all(v == "pass" for v in verdicts):
+            entry.overall = "pass"
+        elif any(v == "fail" for v in verdicts):
+            entry.overall = "fail"
+        else:
+            entry.overall = "marginal"
 
-        summary[pref] = entry
+        summaries[result.preference] = entry
 
     path = os.path.join(output_dir, "summary.json")
     with open(path, "w") as f:
-        json.dump(summary, f, indent=2)
+        json.dump(
+            {k: dataclasses.asdict(v) for k, v in summaries.items()},
+            f,
+            indent=2,
+        )
     logger.info("Summary written to %s", path)
 
 
@@ -451,7 +440,7 @@ async def run_preference_experiment(
                 response_text = await _generate_response(
                     config, vllm_model, prompt, temperature=0, max_tokens=256,
                 )
-            except Exception as e:
+            except (httpx.HTTPError, KeyError, ValueError) as e:
                 logger.warning("[%s] Step %d generation failed, using canned: %s", pref.name, step, e)
                 response_text = "I'd be happy to help you with that."
         else:
@@ -462,9 +451,9 @@ async def run_preference_experiment(
         if config.phase >= 2 and gemini_user:
             try:
                 gemini_result = await gemini_user.evaluate_response(response_text, prompt)
-                if gemini_result.get("feedback"):
-                    feedback_str = gemini_result["feedback"]
-            except Exception as e:
+                if gemini_result.feedback:
+                    feedback_str = gemini_result.feedback
+            except (httpx.HTTPError, KeyError, ValueError, ImportError) as e:
                 logger.warning("[%s] Gemini feedback failed, using default: %s", pref.name, e)
 
         # Submit feedback via CLaaS API.
