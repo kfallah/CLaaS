@@ -38,8 +38,10 @@ set -a; source .env.openclaw-local; set +a
 uv run bash scripts/openclaw-local/run_openclaw_local_stack.sh
 ```
 
-This starts vLLM + the OpenClaw gateway and monitors both. If either
-process exits or fails a health check, the stack restarts automatically.
+This starts vLLM + CLaaS feedback API + the OpenClaw gateway. The
+supervisor continuously monitors process liveness, vLLM/CLaaS health
+endpoints, and new log lines for OOM/crash signatures. If any check
+fails, the full stack is stopped and restarted automatically.
 
 ## Step-by-Step (Manual)
 
@@ -130,6 +132,12 @@ All variables have sensible defaults. Edit `.env.openclaw-local` to override.
 | `MODEL_IDS` | `qwen3-8b` | Model IDs for OpenClaw config |
 | `PRIMARY_MODEL` | `qwen3-8b` | Default model for OpenClaw agents |
 | `BASE_URL` | `http://127.0.0.1:8000/v1` | vLLM base URL for OpenClaw |
+| `MONITOR_INTERVAL_SECONDS` | `30` | Supervisor check cadence in seconds |
+| `RESTART_BACKOFF_SECONDS` | `3` | Delay before restarting a failed stack cycle |
+| `VLLM_HEALTH_URL` | `http://127.0.0.1:8000/health` | vLLM health endpoint monitored by supervisor |
+| `VLLM_MODELS_URL` | `http://127.0.0.1:8000/v1/models` | vLLM models endpoint used for readiness checks |
+| `CLAAS_API_HEALTH_URL` | `http://127.0.0.1:8080/v1/health` | CLaaS API health endpoint monitored by supervisor |
+| `CLAAS_API_WAIT_SECONDS` | `60` | Startup grace window for CLaaS API before monitor checks begin |
 
 ## LoRA Adapters
 
@@ -209,8 +217,9 @@ openclaw gateway --port 18789 --verbose
 
 ### vLLM OOM
 
-If vLLM runs out of GPU memory, reduce `MAX_MODEL_LEN` or
-`GPU_MEMORY_UTILIZATION` in `.env.openclaw-local`:
+The supervisor now auto-restarts the local stack when new vLLM or CLaaS
+logs contain OOM/crash signatures. To reduce repeat OOM cycles, lower
+`MAX_MODEL_LEN` or `GPU_MEMORY_UTILIZATION` in `.env.openclaw-local`:
 
 ```bash
 MAX_MODEL_LEN=16384
