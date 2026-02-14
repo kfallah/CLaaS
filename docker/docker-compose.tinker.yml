@@ -8,7 +8,7 @@ services:
       dockerfile: docker/Dockerfile.tinker-proxy
     environment:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
-      - CLAAS_TINKER_BASE_MODEL=${MODEL:-Qwen/Qwen3-235B-A22B}
+      - CLAAS_TINKER_BASE_MODEL=${MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
     ports:
       - "${TINKER_PROXY_PORT:-8000}:8000"
     healthcheck:
@@ -34,9 +34,9 @@ services:
     environment:
       - CLAAS_STORAGE_BACKEND=local_fs
       - CLAAS_DISTILL_EXECUTION_MODE=tinker
-      - CLAAS_BASE_MODEL_ID=${MODEL:-Qwen/Qwen3-235B-A22B}
+      - CLAAS_BASE_MODEL_ID=${MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
-      - CLAAS_TINKER_BASE_MODEL=${MODEL:-Qwen/Qwen3-235B-A22B}
+      - CLAAS_TINKER_BASE_MODEL=${MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
       - CLAAS_TINKER_STATE_PATH=/data/tinker_state.json
       - FEEDBACK_LOG_DIR=/feedback-logs
       - WAIT_FOR_BACKEND=0
@@ -62,7 +62,7 @@ services:
     environment:
       - CLAAS_DISTILL_EXECUTION_MODE=tinker
       - LORA_NAME=${LORA_NAME:-openclaw/assistant}
-      - MODEL=${MODEL:-Qwen/Qwen3-235B-A22B}
+      - MODEL=${MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
       - VLLM_BASE_URL=http://tinker-proxy:8000/v1
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - OPENCLAW_HOME=/openclaw-config
