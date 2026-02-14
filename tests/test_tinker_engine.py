@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from claas.training_engines.tinker.state import (
+    delete_entry,
     get_entry,
     get_tinker_path,
     list_loras,
@@ -16,6 +17,7 @@ from claas.training_engines.tinker.state import (
     set_tinker_path,
 )
 from claas.types import (
+    LoraDeleteResponse,
     LoraExistsPayload,
     LoraInitRequest,
     LoraInitResponse,
@@ -117,6 +119,18 @@ def test_state_update_step(state_file):
     assert entry.step == 1
 
 
+def test_delete_entry_existing(state_file):
+    """delete_entry removes an existing entry and returns True."""
+    set_tinker_path("user/model", "tinker://ckpt", "m", 8, path=state_file)
+    assert delete_entry("user/model", path=state_file) is True
+    assert get_entry("user/model", path=state_file) is None
+
+
+def test_delete_entry_missing(state_file):
+    """delete_entry returns False for a nonexistent entry."""
+    assert delete_entry("nonexistent/model", path=state_file) is False
+
+
 def test_state_corrupt_json(state_file):
     """Corrupt JSON file results in empty state (no crash)."""
     os.makedirs(os.path.dirname(state_file), exist_ok=True)
@@ -132,6 +146,7 @@ def test_state_corrupt_json(state_file):
 
 def _make_engine_with_mocks(state_file):
     """Create a TinkerTrainingEngine with mocked Tinker SDK."""
+    pytest.importorskip("tinker")
     with patch.dict(os.environ, {
         "CLAAS_TINKER_API_KEY": "fake-key",
         "CLAAS_TINKER_STATE_PATH": state_file,
@@ -149,10 +164,12 @@ def test_engine_init_lora(state_file):
     """init_lora creates a training client, saves state, and stores the path."""
     engine, mock_service = _make_engine_with_mocks(state_file)
 
+    # Use spec=[] so _await_api_future doesn't find auto-generated result_async.
+    mock_save_result = MagicMock(spec=[])
+    mock_save_result.path = "tinker://checkpoints/init-abc"
+
     mock_tc = MagicMock()
-    mock_tc.save_state_async = AsyncMock(
-        return_value=MagicMock(path="tinker://checkpoints/init-abc")
-    )
+    mock_tc.save_state_async = AsyncMock(return_value=mock_save_result)
     mock_service.create_lora_training_client_async = AsyncMock(return_value=mock_tc)
 
     request = LoraInitRequest(lora_id="test/lora", base_model="Qwen/Qwen3-235B-A22B", lora_r=32)
@@ -219,3 +236,34 @@ def test_engine_health_error(state_file):
     assert isinstance(result, ServiceHealth)
     assert result.status == "unhealthy"
     assert "down" in result.error
+
+
+def test_engine_delete_lora(state_file):
+    """delete_lora removes state entry and returns deleted=True."""
+    from claas.training_engines.tinker.state import LoraEntry
+
+    engine, mock_service = _make_engine_with_mocks(state_file)
+    mock_service.delete_checkpoint_from_tinker_path_async = AsyncMock(return_value=None)
+
+    mock_entry = LoraEntry(tinker_path="tinker://ckpt-del", base_model="m", rank=8, step=0)
+    with (
+        patch("claas.training_engines.tinker.engine.get_entry", return_value=mock_entry),
+        patch("claas.training_engines.tinker.engine.delete_entry") as mock_delete,
+    ):
+        result = asyncio.run(engine.delete_lora("test/del"))
+
+    assert isinstance(result, LoraDeleteResponse)
+    assert result.deleted is True
+    mock_service.delete_checkpoint_from_tinker_path_async.assert_called_once_with("tinker://ckpt-del")
+    mock_delete.assert_called_once_with("test/del")
+
+
+def test_engine_delete_lora_missing(state_file):
+    """delete_lora returns deleted=False for nonexistent LoRA."""
+    engine, _ = _make_engine_with_mocks(state_file)
+
+    with patch("claas.training_engines.tinker.engine.get_entry", return_value=None):
+        result = asyncio.run(engine.delete_lora("missing/lora"))
+
+    assert isinstance(result, LoraDeleteResponse)
+    assert result.deleted is False

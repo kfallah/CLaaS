@@ -10,11 +10,13 @@ RUN apt-get update && \
 RUN python3.12 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-RUN pip install --no-cache-dir \
-    claas modal torch transformers peft \
-    fastapi uvicorn httpx pydantic
+WORKDIR /app
+COPY . /app
 
-COPY scripts/claas-api-entrypoint.sh /app/entrypoint.sh
+RUN pip install --no-cache-dir torch && \
+    pip install --no-cache-dir ".[local]" modal
+
+COPY docker/scripts/claas-api-entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8080

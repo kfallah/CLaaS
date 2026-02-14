@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from claas.types import (
     DistillRequestPayload,
     DistillResponse,
+    LoraDeleteResponse,
     LoraExistsPayload,
     LoraExportPayload,
     LoraInitRequest,
@@ -73,6 +74,17 @@ class TrainingEngine(ABC):
 
         Returns:
             LoRA archive payload.
+        """
+
+    @abstractmethod
+    async def delete_lora(self, lora_id: str) -> LoraDeleteResponse:
+        """Delete a LoRA adapter.
+
+        Args:
+            lora_id: LoRA identifier.
+
+        Returns:
+            Delete response indicating whether the LoRA was found and deleted.
         """
 
     @abstractmethod

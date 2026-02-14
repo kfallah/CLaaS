@@ -113,6 +113,26 @@ def set_tinker_path(
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+def delete_entry(lora_id: str, path: str | None = None) -> bool:
+    """Remove the mapping for *lora_id*.  Returns ``True`` if it existed."""
+    state_path = path or _state_path()
+    parent = os.path.dirname(state_path)
+    os.makedirs(parent, exist_ok=True)
+    lock_path = f"{state_path}.lock"
+
+    with open(lock_path, "a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            state = _read_state(state_path)
+            if lora_id not in state:
+                return False
+            state.pop(lora_id)
+            _write_state(state, state_path)
+            return True
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def lora_exists(lora_id: str, path: str | None = None) -> bool:
     """Return ``True`` if *lora_id* is tracked in state."""
     return get_entry(lora_id, path) is not None

@@ -55,6 +55,7 @@ from .types import (
     FeedbackResponse,
     FeedbackTimingMs,
     HealthResponse,
+    LoraDeleteResponse,
     LoraInitRequest,
     LoraInitResponse,
     LoraListResponse,
@@ -615,6 +616,15 @@ async def list_lora_adapters(prefix: str = "") -> LoraListResponse:
             status_code=500,
             detail=f"Failed to list LoRAs: {str(e)}",
         ) from e
+
+
+@web_app.delete("/v1/lora", response_model=LoraDeleteResponse)
+async def delete_lora_adapter(lora_id: str) -> LoraDeleteResponse:
+    """Delete a LoRA adapter.
+
+    Returns {"deleted": false} if not found (idempotent, no 404).
+    """
+    return await _get_training_engine().delete_lora(lora_id)
 
 
 @web_app.get("/v1/lora/export")

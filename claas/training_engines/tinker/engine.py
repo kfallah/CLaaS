@@ -26,6 +26,7 @@ from claas.teacher import build_teacher_messages, teacher_messages_to_chat_templ
 from claas.training_engines.base import TrainingEngine
 from claas.training_engines.tinker.state import (
     LoraEntry,
+    delete_entry,
     get_entry,
     list_loras as state_list_loras,
     lora_exists as state_lora_exists,
@@ -34,6 +35,7 @@ from claas.training_engines.tinker.state import (
 from claas.types import (
     DistillRequestPayload,
     DistillResponse,
+    LoraDeleteResponse,
     LoraExistsPayload,
     LoraExportPayload,
     LoraInitRequest,
@@ -96,6 +98,14 @@ class TinkerTrainingEngine(TrainingEngine):
     async def list_loras(self, prefix: str) -> LoraListResponse:
         loras = state_list_loras(prefix)
         return LoraListResponse(loras=loras)
+
+    async def delete_lora(self, lora_id: str) -> LoraDeleteResponse:
+        entry = get_entry(lora_id)
+        if entry is None:
+            return LoraDeleteResponse(deleted=False)
+        await self.service.delete_checkpoint_from_tinker_path_async(entry.tinker_path)
+        delete_entry(lora_id)
+        return LoraDeleteResponse(deleted=True)
 
     async def lora_exists(self, lora_id: str) -> LoraExistsPayload:
         return LoraExistsPayload(exists=state_lora_exists(lora_id))
