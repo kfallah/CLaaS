@@ -1,6 +1,62 @@
 """Collapse detection: token entropy, self-ROUGE-L, logprob drift.
 
 Phase 3. Run at steps 0, 5, 10, 15, 20 for speed.
+
+This module implements three complementary algorithms to detect model collapse
+during continual distillation. Model collapse occurs when a student model
+degenerates during training -- it may start producing repetitive, low-diversity,
+or overly confident outputs instead of the nuanced behavior learned from the
+teacher. Each metric captures a different symptom of collapse:
+
+1. **Token Entropy** (``measure_token_entropy``)
+   - *What it measures*: The Shannon entropy of the predicted token distribution
+     at each generation step, averaged over all tokens in a response. We request
+     the top-20 logprobs from the model, convert them to probabilities, and
+     compute H = -sum(p * log(p)) for each position.
+   - *Why we chose it*: A healthy language model maintains a spread of plausible
+     next tokens at each step. When a model collapses, it becomes degenerate --
+     always predicting the same few tokens with near-certainty, which drives
+     entropy toward zero. Tracking mean token entropy gives a direct, per-token
+     measure of output diversity.
+   - *Threshold*: We compare current entropy to a baseline measurement taken at
+     step 0. An entropy ratio below 0.6 (i.e., a >40% drop from baseline)
+     triggers a collapse alert. This threshold was chosen to tolerate normal
+     training fluctuations while catching the steep entropy drops that
+     characterize true collapse.
+
+2. **Self-ROUGE-L** (``measure_self_rouge_l``)
+   - *What it measures*: The mean pairwise ROUGE-L F1 score across multiple
+     stochastic generations from the same prompt. ROUGE-L uses the longest
+     common subsequence (LCS) between two texts to compute precision and recall
+     at the word level, then combines them into an F1 score. We generate
+     ``n_samples`` (default 3) responses at temperature 0.7 and compute all
+     pairwise ROUGE-L scores.
+   - *Why we chose it*: A collapsed model produces near-identical outputs even
+     when sampling with temperature, because its probability mass is
+     concentrated on a single sequence. Self-ROUGE-L directly measures this
+     repetitiveness: if different samples are essentially the same text, ROUGE-L
+     between them will approach 1.0. Unlike simple string matching, ROUGE-L is
+     robust to minor word-order variations and partial overlaps.
+   - *Threshold*: A mean pairwise ROUGE-L score above 0.85 triggers an alert.
+     Normal stochastic generations from a healthy model typically have ROUGE-L
+     in the 0.3--0.6 range (similar topic, different phrasing). Scores above
+     0.85 indicate the model is producing nearly identical outputs regardless
+     of sampling randomness, a clear sign of mode collapse.
+
+3. **Logprob Drift** (``measure_collapse`` -- drift component)
+   - *What it measures*: The absolute shift in mean per-token log-probability
+     between the current checkpoint and a baseline. This captures how much the
+     model's overall confidence level has changed since the start of training.
+   - *Why we chose it*: During collapse, models often become pathologically
+     overconfident (logprobs shift toward 0) or underconfident (logprobs become
+     very negative). Tracking the drift in mean logprob from a known-good
+     baseline detects these confidence divergences even when entropy or ROUGE-L
+     have not yet crossed their thresholds. It serves as an early warning for
+     distribution shift.
+   - *Threshold*: An absolute drift exceeding 2.0 nats triggers an alert. This
+     corresponds to a roughly 7x change in mean token probability (e^2 ~= 7.4),
+     which is far outside normal training variance and indicates the model's
+     output distribution has shifted substantially from its baseline.
 """
 
 from __future__ import annotations
