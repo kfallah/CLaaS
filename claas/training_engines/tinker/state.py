@@ -6,6 +6,7 @@ tempfile-then-replace pattern (same as ``claas/storage.py``).
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import tempfile
@@ -95,11 +96,21 @@ def set_tinker_path(
     path: str | None = None,
 ) -> None:
     """Create or update the mapping for *lora_id*."""
-    state = _read_state(path)
-    state[lora_id] = asdict(
-        LoraEntry(tinker_path=tinker_path, base_model=base_model, rank=rank, step=step)
-    )
-    _write_state(state, path)
+    state_path = path or _state_path()
+    parent = os.path.dirname(state_path)
+    os.makedirs(parent, exist_ok=True)
+    lock_path = f"{state_path}.lock"
+
+    with open(lock_path, "a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            state = _read_state(state_path)
+            state[lora_id] = asdict(
+                LoraEntry(tinker_path=tinker_path, base_model=base_model, rank=rank, step=step)
+            )
+            _write_state(state, state_path)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def lora_exists(lora_id: str, path: str | None = None) -> bool:

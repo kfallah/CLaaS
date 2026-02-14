@@ -10,6 +10,7 @@ Reference implementation:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -103,13 +104,16 @@ class TinkerTrainingEngine(TrainingEngine):
     async def export_lora(self, lora_id: str) -> LoraExportPayload:
         entry = _require_entry(lora_id)
 
-        rest = self.service.create_rest_client()
-        archive_resp = rest.get_checkpoint_archive_url(entry.tinker_path)
-        url = archive_resp.result() if hasattr(archive_resp, "result") else archive_resp
-        resp = httpx.get(str(url), follow_redirects=True, timeout=120)
-        resp.raise_for_status()
-        filename = f"{quote(lora_id, safe='')}.zip"
-        return LoraExportPayload(filename=filename, content=resp.content)
+        def _export() -> LoraExportPayload:
+            rest = self.service.create_rest_client()
+            archive_resp = rest.get_checkpoint_archive_url(entry.tinker_path)
+            url = archive_resp.result()
+            resp = httpx.get(str(url), follow_redirects=True, timeout=120)
+            resp.raise_for_status()
+            filename = f"{quote(lora_id, safe='')}.zip"
+            return LoraExportPayload(filename=filename, content=resp.content)
+
+        return await asyncio.to_thread(_export)
 
     async def lora_runtime_ref(self, lora_id: str) -> LoraRuntimeRef:
         raise ValueError(
@@ -200,7 +204,7 @@ class TinkerTrainingEngine(TrainingEngine):
         )
 
         # ── Compute advantages with adaptive KL scaling ──
-        raw_kl_deltas = [t - s for s, t in zip(student_logprobs, teacher_logprobs)]
+        raw_kl_deltas = [t - s for s, t in zip(student_logprobs, teacher_logprobs, strict=True)]
         adv_abs_mean_raw = sum(abs(d) for d in raw_kl_deltas) / max(len(raw_kl_deltas), 1)
 
         gain = 1.0
@@ -208,7 +212,10 @@ class TinkerTrainingEngine(TrainingEngine):
             gain = min(max(_TARGET_ADV_ABS_MEAN / adv_abs_mean_raw, 1.0), _MAX_KL_GAIN)
         effective_kl_coef = kl_coef * gain
 
-        advantages = [effective_kl_coef * (t - s) for s, t in zip(student_logprobs, teacher_logprobs)]
+        advantages = [
+            effective_kl_coef * (t - s)
+            for s, t in zip(student_logprobs, teacher_logprobs, strict=True)
+        ]
 
         # ── Build Datum with right-shifted alignment ──
         # Right-shift: input = tokens[:-1], target = tokens[1:]
