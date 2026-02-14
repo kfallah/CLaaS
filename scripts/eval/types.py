@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 
@@ -17,7 +18,9 @@ class HarnessConfig:
     num_steps: int = 20
     output_dir: str = "./eval_results"
     gemini_api_key: str | None = None
-    phase: int = 1
+    metrics: list[str] = field(default_factory=lambda: ["logprob"])
+    plots: bool = False
+    collapse_steps: set[int] | None = None
     lora_id_prefix: str = "eval"
     seed: int = 42
 
@@ -142,6 +145,20 @@ class PreferenceSummary:
     final_compliance: float | None = None
     capability_ratio: float | None = None
     overall: str = "pending"
+
+
+@dataclass
+class MetricContext:
+    """Bundled arguments passed to each metric's measure() method."""
+
+    vllm_url: str
+    vllm_api_key: str
+    vllm_model: str
+    step: int
+    pref: object  # PreferenceConfig (forward ref to avoid circular import)
+    baseline: EvalMetrics
+    response_text: str | None = None
+    generate: Callable[[str], Awaitable[str]] | None = None
 
 
 def step_result_from_dict(data: dict[str, object]) -> StepResult:
