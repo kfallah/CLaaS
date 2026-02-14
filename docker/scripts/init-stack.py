@@ -10,14 +10,18 @@ import json
 import os
 import stat
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+import httpx
 
 # ---------------------------------------------------------------------------
 # Environment
 # ---------------------------------------------------------------------------
 LORA_NAME = os.environ.get("LORA_NAME", "openclaw/assistant")
 BASE_MODEL = os.environ.get("MODEL", "Qwen/Qwen3-8B")
+DISTILL_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local").strip().lower()
 LORA_ROOT = os.environ.get("CLAAS_LORA_ROOT", "/loras")
 OPENCLAW_HOME = Path(os.environ.get("OPENCLAW_HOME", "/openclaw-config"))
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://vllm:8000/v1")
@@ -59,6 +63,10 @@ def _read_aliases() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 def create_lora() -> None:
     alias_key = f"{LORA_NAME}-latest"
+    if DISTILL_MODE == "tinker":
+        create_tinker_lora(alias_key)
+        return
+
     aliases = _read_aliases()
 
     if alias_key in aliases:
@@ -74,6 +82,41 @@ def create_lora() -> None:
 
     full_id = create_initial_lora(LORA_NAME, base_model_name=BASE_MODEL)
     print(f"Created initial LoRA: {full_id}")
+
+
+def _wait_for_api(timeout_s: float = 120.0) -> None:
+    deadline = time.time() + timeout_s
+    while True:
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.get(f"{CLAAS_API_URL.rstrip('/')}/")
+                if resp.status_code < 500:
+                    return
+        except httpx.HTTPError:
+            pass
+        if time.time() >= deadline:
+            raise RuntimeError(f"Timed out waiting for CLaaS API at {CLAAS_API_URL}")
+        time.sleep(2)
+
+
+def create_tinker_lora(alias_key: str) -> None:
+    """Initialize LoRA in Tinker mode via the CLaaS API."""
+    _wait_for_api()
+    api_url = CLAAS_API_URL.rstrip("/")
+    with httpx.Client(timeout=30.0) as client:
+        listed = client.get(f"{api_url}/v1/lora", params={"prefix": LORA_NAME})
+        listed.raise_for_status()
+        loras = listed.json().get("loras", [])
+        if alias_key in loras:
+            print(f"LoRA '{alias_key}' already exists in Tinker state, skipping creation.")
+            return
+
+        init_resp = client.post(
+            f"{api_url}/v1/lora/init",
+            json={"lora_id": alias_key, "base_model": BASE_MODEL},
+        )
+        init_resp.raise_for_status()
+        print(f"Created initial Tinker LoRA: {alias_key}")
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +302,7 @@ def main() -> None:
     print(f"  BASE_MODEL      = {BASE_MODEL}")
     print(f"  LORA_ROOT       = {LORA_ROOT}")
     print(f"  OPENCLAW_HOME   = {OPENCLAW_HOME}")
+    print(f"  DISTILL_MODE    = {DISTILL_MODE}")
     print(f"  VLLM_BASE_URL   = {VLLM_BASE_URL}")
     print()
 
