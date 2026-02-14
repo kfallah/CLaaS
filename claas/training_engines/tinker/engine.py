@@ -10,7 +10,6 @@ Reference implementation:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -18,11 +17,14 @@ from urllib.parse import quote
 
 import httpx
 import tinker
+import torch
 from tinker import types as T
 from tinker.types.tensor_data import TensorData
 
+from claas.teacher import build_teacher_messages, teacher_messages_to_chat_template
 from claas.training_engines.base import TrainingEngine
 from claas.training_engines.tinker.state import (
+    LoraEntry,
     get_entry,
     set_tinker_path,
 )
@@ -54,17 +56,6 @@ _TARGET_ADV_ABS_MEAN = 0.03
 _MAX_KL_GAIN = 4.0
 
 
-def _import_cookbook():  # noqa: ANN202
-    """Lazy import of tinker_cookbook to avoid hard failure when not installed."""
-    from tinker_cookbook import model_info  # noqa: F811
-    from tinker_cookbook.renderers import get_renderer  # noqa: F811
-    from tinker_cookbook.supervised.common import (
-        create_rightshifted_model_input_and_leftshifted_targets,  # noqa: F811
-    )
-
-    return get_renderer, create_rightshifted_model_input_and_leftshifted_targets, model_info
-
-
 class TinkerTrainingEngine(TrainingEngine):
     """Executes training and LoRA management through the Tinker Python SDK."""
 
@@ -88,22 +79,19 @@ class TinkerTrainingEngine(TrainingEngine):
         base_model = request.base_model or _DEFAULT_BASE_MODEL
         rank = request.lora_r
 
-        def _init() -> LoraInitResponse:
-            tc = self.service.create_lora_training_client(
-                base_model=base_model,
-                rank=rank,
-            )
-            save_resp = tc.save_state("init").result()
-            set_tinker_path(
-                lora_id=request.lora_id,
-                tinker_path=save_resp.path,
-                base_model=base_model,
-                rank=rank,
-                step=0,
-            )
-            return LoraInitResponse(lora_id=request.lora_id)
-
-        return await asyncio.to_thread(_init)
+        tc = await self.service.create_lora_training_client_async(
+            base_model=base_model,
+            rank=rank,
+        )
+        save_resp = await tc.save_state_async("init")
+        set_tinker_path(
+            lora_id=request.lora_id,
+            tinker_path=save_resp.path,
+            base_model=base_model,
+            rank=rank,
+            step=0,
+        )
+        return LoraInitResponse(lora_id=request.lora_id)
 
     async def list_loras(self, prefix: str) -> LoraListResponse:
         loras = state_list_loras(prefix)
@@ -113,20 +101,15 @@ class TinkerTrainingEngine(TrainingEngine):
         return LoraExistsPayload(exists=state_lora_exists(lora_id))
 
     async def export_lora(self, lora_id: str) -> LoraExportPayload:
-        entry = get_entry(lora_id)
-        if entry is None:
-            raise FileNotFoundError(f"LoRA not found in Tinker state: {lora_id}")
+        entry = _require_entry(lora_id)
 
-        def _export() -> LoraExportPayload:
-            rest = self.service.create_rest_client()
-            archive_resp = rest.get_checkpoint_archive_url(entry.tinker_path)
-            url = archive_resp.result() if hasattr(archive_resp, "result") else archive_resp
-            resp = httpx.get(str(url), follow_redirects=True, timeout=120)
-            resp.raise_for_status()
-            filename = f"{quote(lora_id, safe='')}.zip"
-            return LoraExportPayload(filename=filename, content=resp.content)
-
-        return await asyncio.to_thread(_export)
+        rest = self.service.create_rest_client()
+        archive_resp = rest.get_checkpoint_archive_url(entry.tinker_path)
+        url = archive_resp.result() if hasattr(archive_resp, "result") else archive_resp
+        resp = httpx.get(str(url), follow_redirects=True, timeout=120)
+        resp.raise_for_status()
+        filename = f"{quote(lora_id, safe='')}.zip"
+        return LoraExportPayload(filename=filename, content=resp.content)
 
     async def lora_runtime_ref(self, lora_id: str) -> LoraRuntimeRef:
         raise ValueError(
@@ -138,14 +121,11 @@ class TinkerTrainingEngine(TrainingEngine):
     # ------------------------------------------------------------------
 
     async def health(self) -> ServiceHealth:
-        def _health() -> ServiceHealth:
-            try:
-                self.service.get_server_capabilities()
-                return ServiceHealth(status="healthy", error=None)
-            except Exception as exc:
-                return ServiceHealth(status="unhealthy", error=str(exc))
-
-        return await asyncio.to_thread(_health)
+        try:
+            await self.service.get_server_capabilities_async()
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            return ServiceHealth(status="unhealthy", error=str(exc))
+        return ServiceHealth(status="healthy", error=None)
 
     # ------------------------------------------------------------------
     # Distillation
@@ -154,91 +134,67 @@ class TinkerTrainingEngine(TrainingEngine):
     async def distill(self, payload: DistillRequestPayload) -> DistillResponse:
         """Run one SDPO distillation step entirely through the Tinker SDK.
 
-        Follows the continualcode reference implementation:
-        1. Tokenize prompt+completion with the renderer
+        Follows the local worker implementation path:
+        1. Tokenize prompt + response directly (no chat wrapping)
         2. Compute student (rollout) logprobs via SamplingClient
-        3. Compute teacher logprobs (base model conditioned on feedback)
-        4. Derive advantages with adaptive KL scaling
-        5. Build Datum with right-shifted alignment
-        6. forward_backward with importance_sampling loss
-        7. optim_step with AdamW
-        8. Save checkpoint → update state
+        3. Build teacher prompt using build_teacher_messages (feedback reprompt)
+        4. Compute teacher logprobs (base model conditioned on feedback)
+        5. Derive advantages with adaptive KL scaling
+        6. Build Datum with right-shifted alignment
+        7. forward_backward with importance_sampling loss
+        8. optim_step with AdamW
+        9. Save checkpoint and update state
         """
-
-        def _run() -> DistillResponse:
-            return self._distill_sync(payload)
-
-        return await asyncio.to_thread(_run)
-
-    def _distill_sync(self, payload: DistillRequestPayload) -> DistillResponse:
-        """Synchronous distillation core — runs in a worker thread."""
-        get_renderer, create_rightshifted, model_info = _import_cookbook()
-
-        lora_id = payload.lora_id
-        entry = get_entry(lora_id)
-        if entry is None:
-            raise FileNotFoundError(f"LoRA not found in Tinker state: {lora_id}")
+        entry = _require_entry(payload.lora_id)
 
         base_model = entry.base_model
-        tinker_path = entry.tinker_path
-        step = entry.step
         lr = payload.training.learning_rate
-        kl_coef = payload.training.alpha  # reuse alpha as kl_coef
+        kl_coef = payload.training.alpha
 
         # ── Restore training client from checkpoint ──
-        training_client = self.service.create_training_client_from_state(tinker_path)
+        training_client = await self.service.create_training_client_from_state_async(
+            entry.tinker_path
+        )
         tokenizer = training_client.get_tokenizer()
 
-        # ── Set up renderer ──
-        renderer_name = model_info.get_recommended_renderer_name(base_model)
-        renderer = get_renderer(renderer_name, tokenizer=tokenizer)
+        # ── Tokenize prompt + response directly (matching local worker) ──
+        prompt_tokens: list[int] = tokenizer.encode(payload.prompt, add_special_tokens=True)
+        response_tokens: list[int] = tokenizer.encode(payload.response, add_special_tokens=False)
+        full_tokens = prompt_tokens + response_tokens
+        prompt_len = len(prompt_tokens)
+        completion_len = len(response_tokens)
 
-        # ── Build student prompt + completion as ModelInput ──
-        student_messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": payload.prompt},
-        ]
-        student_model_input = renderer.build_generation_prompt(student_messages)
-        prompt_len = student_model_input.length()
-
-        completion_tokens = tokenizer.encode(payload.response, add_special_tokens=False)
-        student_full = student_model_input.append(
-            T.EncodedTextChunk(tokens=completion_tokens)
-        )
-        completion_len = len(completion_tokens)
+        student_full = T.ModelInput.from_ints(full_tokens)
 
         # ── Compute student (rollout) logprobs ──
         if payload.rollout_logprobs is not None and len(payload.rollout_logprobs) == completion_len:
             student_logprobs = list(payload.rollout_logprobs)
         else:
-            sampling_client = training_client.save_weights_and_get_sampling_client("current")
-            student_logprobs_full = sampling_client.compute_logprobs(student_full).result()
+            sampling_client = await training_client.save_weights_and_get_sampling_client_async(
+                "current"
+            )
+            student_logprobs_full = await sampling_client.compute_logprobs_async(student_full)
             student_logprobs = _slice_completion_logprobs(
                 student_logprobs_full, prompt_len, completion_len
             )
 
-        # ── Build teacher prompt (conversation + feedback reprompt) ──
-        teacher_messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": payload.prompt},
-            {"role": "assistant", "content": payload.response},
-            {
-                "role": "user",
-                "content": (
-                    f"{payload.prompt}\n\nFeedback:\n{payload.feedback}\n\n"
-                    "Correctly solve the original question."
-                ),
-            },
-        ]
-        teacher_model_input = renderer.build_generation_prompt(teacher_messages)
-        teacher_prompt_len = teacher_model_input.length()
-        teacher_full = teacher_model_input.append(
-            T.EncodedTextChunk(tokens=completion_tokens)
+        # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
+        teacher_messages = build_teacher_messages(payload.prompt, payload.feedback)
+        template_messages = teacher_messages_to_chat_template(teacher_messages)
+        teacher_prompt_tokens: list[int] = tokenizer.apply_chat_template(
+            template_messages,
+            add_generation_prompt=True,
+            tokenize=True,
         )
+        teacher_full_tokens = teacher_prompt_tokens + response_tokens
+        teacher_prompt_len = len(teacher_prompt_tokens)
+        teacher_full = T.ModelInput.from_ints(teacher_full_tokens)
 
         # ── Compute teacher logprobs (base model = self-distillation) ──
-        teacher_sampling = self.service.create_sampling_client(base_model=base_model)
-        teacher_logprobs_full = teacher_sampling.compute_logprobs(teacher_full).result()
+        teacher_sampling = await self.service.create_sampling_client_async(
+            base_model=base_model
+        )
+        teacher_logprobs_full = await teacher_sampling.compute_logprobs_async(teacher_full)
         teacher_logprobs = _slice_completion_logprobs(
             teacher_logprobs_full, teacher_prompt_len, completion_len
         )
@@ -254,18 +210,19 @@ class TinkerTrainingEngine(TrainingEngine):
 
         advantages = [effective_kl_coef * (t - s) for s, t in zip(student_logprobs, teacher_logprobs)]
 
-        # ── Build Datum using right-shifted alignment ──
-        input_model_input, target_tokens = create_rightshifted(student_full.chunks)
+        # ── Build Datum with right-shifted alignment ──
+        # Right-shift: input = tokens[:-1], target = tokens[1:]
+        # This matches datum_from_tokens_weights from tinker_cookbook.
+        input_tokens = full_tokens[:-1]
+        target_tokens = full_tokens[1:]
+        input_model_input = T.ModelInput.from_ints(input_tokens)
 
         # Pad prompt positions with 0.0, real values for completion only.
         # After right-shift the sequence is 1 shorter; we drop the first position.
         full_logprobs = [0.0] * prompt_len + student_logprobs
         full_advantages = [0.0] * prompt_len + advantages
-        # Right-shift: drop position 0 (it becomes position -1 in targets)
         shifted_logprobs = full_logprobs[1:]
         shifted_advantages = full_advantages[1:]
-
-        import torch
 
         datum = T.Datum(
             model_input=input_model_input,
@@ -283,20 +240,20 @@ class TinkerTrainingEngine(TrainingEngine):
         )
 
         # ── Train with importance_sampling loss ──
-        fwd_future = training_client.forward_backward([datum], "importance_sampling")
-        optim_future = training_client.optim_step(
+        fwd_bwd = await training_client.forward_backward_async(
+            [datum], "importance_sampling"
+        )
+        await training_client.optim_step_async(
             T.AdamParams(learning_rate=lr, beta1=0.9, beta2=0.95)
         )
-        fwd_bwd = fwd_future.result()
-        optim_future.result()
 
         # ── Save checkpoint & update state ──
-        new_step = step + 1
+        new_step = entry.step + 1
         checkpoint_name = f"step-{new_step}"
-        save_result = training_client.save_state(checkpoint_name).result()
+        save_result = await training_client.save_state_async(checkpoint_name)
 
         set_tinker_path(
-            lora_id=lora_id,
+            lora_id=payload.lora_id,
             tinker_path=save_result.path,
             base_model=base_model,
             rank=entry.rank,
@@ -308,7 +265,7 @@ class TinkerTrainingEngine(TrainingEngine):
         adv_abs_mean = sum(abs(a) for a in advantages) / max(len(advantages), 1)
         kl_mean = sum(raw_kl_deltas) / max(len(raw_kl_deltas), 1)
 
-        metadata = {
+        metadata: dict[str, object] = {
             "step": new_step,
             "tinker_path": save_result.path,
             "completion_len": completion_len,
@@ -323,11 +280,18 @@ class TinkerTrainingEngine(TrainingEngine):
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Merge metrics from Tinker's forward_backward output if available.
         if hasattr(fwd_bwd, "metrics") and fwd_bwd.metrics:
             metadata["tinker_fwd_metrics"] = fwd_bwd.metrics
 
-        return DistillResponse(lora_id=lora_id, metadata=metadata)
+        return DistillResponse(lora_id=payload.lora_id, metadata=metadata)
+
+
+def _require_entry(lora_id: str) -> LoraEntry:
+    """Return the state entry for *lora_id* or raise ``FileNotFoundError``."""
+    entry = get_entry(lora_id)
+    if entry is None:
+        raise FileNotFoundError(f"LoRA not found in Tinker state: {lora_id}")
+    return entry
 
 
 def _slice_completion_logprobs(

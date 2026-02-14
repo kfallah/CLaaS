@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -147,10 +147,10 @@ def test_engine_init_lora(state_file):
     engine, mock_service = _make_engine_with_mocks(state_file)
 
     mock_tc = MagicMock()
-    mock_save_future = MagicMock()
-    mock_save_future.result.return_value = MagicMock(path="tinker://checkpoints/init-abc")
-    mock_tc.save_state.return_value = mock_save_future
-    mock_service.create_lora_training_client.return_value = mock_tc
+    mock_tc.save_state_async = AsyncMock(
+        return_value=MagicMock(path="tinker://checkpoints/init-abc")
+    )
+    mock_service.create_lora_training_client_async = AsyncMock(return_value=mock_tc)
 
     request = LoraInitRequest(lora_id="test/lora", base_model="Qwen/Qwen3-235B-A22B", lora_r=32)
 
@@ -159,10 +159,10 @@ def test_engine_init_lora(state_file):
 
     assert isinstance(result, LoraInitResponse)
     assert result.lora_id == "test/lora"
-    mock_service.create_lora_training_client.assert_called_once_with(
+    mock_service.create_lora_training_client_async.assert_called_once_with(
         base_model="Qwen/Qwen3-235B-A22B", rank=32
     )
-    mock_tc.save_state.assert_called_once_with("init")
+    mock_tc.save_state_async.assert_called_once_with("init")
 
 
 def test_engine_list_loras(state_file):
@@ -198,7 +198,7 @@ def test_engine_lora_runtime_ref_raises(state_file):
 def test_engine_health_ok(state_file):
     """health returns healthy when service responds."""
     engine, mock_service = _make_engine_with_mocks(state_file)
-    mock_service.get_server_capabilities.return_value = MagicMock()
+    mock_service.get_server_capabilities_async = AsyncMock(return_value=MagicMock())
 
     result = asyncio.run(engine.health())
     assert isinstance(result, ServiceHealth)
@@ -208,7 +208,9 @@ def test_engine_health_ok(state_file):
 def test_engine_health_error(state_file):
     """health returns unhealthy when service raises."""
     engine, mock_service = _make_engine_with_mocks(state_file)
-    mock_service.get_server_capabilities.side_effect = ConnectionError("down")
+    mock_service.get_server_capabilities_async = AsyncMock(
+        side_effect=ConnectionError("down")
+    )
 
     result = asyncio.run(engine.health())
     assert isinstance(result, ServiceHealth)

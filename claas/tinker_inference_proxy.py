@@ -16,13 +16,16 @@ import json
 import os
 import time
 import uuid
-from typing import Any
+from collections.abc import Generator
 
 import tinker
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from tinker import types as T
+from tinker_cookbook import model_info
+from tinker_cookbook.renderers import Renderer, get_renderer
+from transformers import PreTrainedTokenizerBase
 
 app = FastAPI(title="CLaaS Tinker Inference Proxy")
 
@@ -38,9 +41,9 @@ class _SamplerHolder:
 
     def __init__(self) -> None:
         self._service: tinker.ServiceClient | None = None
-        self._sampler: Any = None
-        self._tokenizer: Any = None
-        self._renderer: Any = None
+        self._sampler: tinker.SamplingClient | None = None
+        self._tokenizer: PreTrainedTokenizerBase | None = None
+        self._renderer: Renderer | None = None
         self._model_path: str | None = None
 
     def _ensure(self) -> None:
@@ -53,25 +56,25 @@ class _SamplerHolder:
         self._sampler = self._service.create_sampling_client(base_model=_BASE_MODEL)
         self._tokenizer = self._sampler.get_tokenizer()
 
-        from tinker_cookbook import model_info
-        from tinker_cookbook.renderers import get_renderer
-
         renderer_name = model_info.get_recommended_renderer_name(_BASE_MODEL)
         self._renderer = get_renderer(renderer_name, tokenizer=self._tokenizer)
 
     @property
-    def sampler(self) -> Any:
+    def sampler(self) -> tinker.SamplingClient:
         self._ensure()
+        assert self._sampler is not None
         return self._sampler
 
     @property
-    def tokenizer(self) -> Any:
+    def tokenizer(self) -> PreTrainedTokenizerBase:
         self._ensure()
+        assert self._tokenizer is not None
         return self._tokenizer
 
     @property
-    def renderer(self) -> Any:
+    def renderer(self) -> Renderer:
         self._ensure()
+        assert self._renderer is not None
         return self._renderer
 
     def refresh(self, model_path: str | None = None) -> None:
@@ -118,12 +121,16 @@ class CompletionRequest(BaseModel):
     stop: list[str] | None = None
 
 
+class RefreshRequest(BaseModel):
+    model_path: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
 @app.post("/v1/chat/completions")
-async def chat_completions(req: ChatCompletionRequest) -> dict | StreamingResponse:
+async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | StreamingResponse:
     renderer = _holder.renderer
     sampler = _holder.sampler
 
@@ -179,11 +186,11 @@ async def chat_completions(req: ChatCompletionRequest) -> dict | StreamingRespon
 
 
 @app.post("/v1/completions")
-async def completions(req: CompletionRequest) -> dict | StreamingResponse:
+async def completions(req: CompletionRequest) -> dict[str, object] | StreamingResponse:
     tokenizer = _holder.tokenizer
     sampler = _holder.sampler
 
-    tokens = tokenizer.encode(req.prompt)
+    tokens: list[int] = tokenizer.encode(req.prompt)
     model_input = T.ModelInput.from_ints(tokens)
 
     stop_seqs = req.stop or []
@@ -203,7 +210,7 @@ async def completions(req: CompletionRequest) -> dict | StreamingResponse:
     ).result()
 
     seq = resp.sequences[0]
-    text = tokenizer.decode(seq.tokens, skip_special_tokens=True)
+    text: str = tokenizer.decode(seq.tokens, skip_special_tokens=True)
 
     completion_id = f"cmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
@@ -232,16 +239,14 @@ async def completions(req: CompletionRequest) -> dict | StreamingResponse:
 
 
 @app.post("/v1/sampler/refresh")
-async def refresh_sampler(request: Request) -> dict:
+async def refresh_sampler(body: RefreshRequest) -> dict[str, object]:
     """Refresh the sampling client, optionally pointing at a new checkpoint."""
-    body = await request.json()
-    model_path = body.get("model_path")
-    _holder.refresh(model_path=model_path)
-    return {"status": "ok", "model_path": model_path}
+    _holder.refresh(model_path=body.model_path)
+    return {"status": "ok", "model_path": body.model_path}
 
 
 @app.get("/v1/models")
-async def list_models() -> dict:
+async def list_models() -> dict[str, object]:
     return {
         "object": "list",
         "data": [
@@ -255,7 +260,7 @@ async def list_models() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# SSE streaming helper
+# SSE streaming helpers
 # ---------------------------------------------------------------------------
 
 def _stream_chat_response(
@@ -266,8 +271,7 @@ def _stream_chat_response(
 ) -> StreamingResponse:
     """Wrap a complete response as an SSE stream for OpenAI-compatible clients."""
 
-    def _generate():
-        # Single chunk with the full content (Tinker returns all at once).
+    def _generate() -> Generator[str]:
         chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -283,7 +287,6 @@ def _stream_chat_response(
         }
         yield f"data: {json.dumps(chunk)}\n\n"
 
-        # Final chunk signaling stop.
         final = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -311,8 +314,7 @@ def _stream_completion_response(
 ) -> StreamingResponse:
     """Wrap a complete text-completion response as an SSE stream."""
 
-    def _generate():
-        # Single chunk with the full text (Tinker returns all at once).
+    def _generate() -> Generator[str]:
         chunk = {
             "id": completion_id,
             "object": "text_completion",
@@ -328,7 +330,6 @@ def _stream_completion_response(
         }
         yield f"data: {json.dumps(chunk)}\n\n"
 
-        # Final chunk signaling stop.
         final = {
             "id": completion_id,
             "object": "text_completion",
