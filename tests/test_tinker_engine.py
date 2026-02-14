@@ -131,6 +131,7 @@ def test_delete_entry_missing(state_file):
     assert delete_entry("nonexistent/model", path=state_file) is False
 
 
+
 def test_state_corrupt_json(state_file):
     """Corrupt JSON file results in empty state (no crash)."""
     os.makedirs(os.path.dirname(state_file), exist_ok=True)

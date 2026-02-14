@@ -133,6 +133,7 @@ def delete_entry(lora_id: str, path: str | None = None) -> bool:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+
 def lora_exists(lora_id: str, path: str | None = None) -> bool:
     """Return ``True`` if *lora_id* is tracked in state."""
     return get_entry(lora_id, path) is not None
