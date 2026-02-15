@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from claas.types import (
-    DistillRequestPayload,
+    DistillBatchRequestPayload,
     DistillResponse,
     LoraExistsPayload,
     LoraExportPayload,
@@ -32,7 +32,10 @@ class TrainingEngine(ABC):
     """Abstract engine contract for distillation and LoRA lifecycle operations."""
 
     @abstractmethod
-    async def distill(self, payload: DistillRequestPayload) -> DistillResponse:
+    async def distill(
+        self,
+        payload: DistillBatchRequestPayload,
+    ) -> DistillResponse:
         """Run one distillation step.
 
         Args:

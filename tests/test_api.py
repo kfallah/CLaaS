@@ -155,11 +155,16 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     response = client.post(
         "/v1/feedback",
         json={
-            "lora_id": "user/model",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "training": {"teacher_mode": "self"},
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "training": {"teacher_mode": "self"},
+                }
+            ],
+            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
         },
     )
 
@@ -211,11 +216,16 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
     response = client.post(
         "/v1/feedback",
         json={
-            "lora_id": "user/model",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "training": {"teacher_mode": "self"},
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "training": {"teacher_mode": "self"},
+                }
+            ],
+            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
         },
     )
 
@@ -291,11 +301,16 @@ def test_feedback_calls_drain_before_sleep(monkeypatch, tmp_path):
     response = client.post(
         "/v1/feedback",
         json={
-            "lora_id": "user/model",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "training": {"teacher_mode": "self"},
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "training": {"teacher_mode": "self"},
+                }
+            ],
+            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
         },
     )
 
@@ -326,11 +341,16 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
     response = client.post(
         "/v1/feedback",
         json={
-            "lora_id": "user/model",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "training": {"teacher_mode": "self"},
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "training": {"teacher_mode": "self"},
+                }
+            ],
+            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
         },
     )
 
@@ -367,16 +387,21 @@ def test_feedback_fetches_rollout_logprobs(monkeypatch, tmp_path):
     response = client.post(
         "/v1/feedback",
         json={
-            "lora_id": "user/model",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "training": {"teacher_mode": "self"},
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "training": {"teacher_mode": "self"},
+                }
+            ],
+            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
         },
     )
 
     assert response.status_code == 200
-    assert captured["request"]["rollout_logprobs"] == [-0.5, -1.2, -0.3]
+    assert captured["request"]["samples"][0]["rollout_logprobs"] == [-0.5, -1.2, -0.3]
 
 
 def test_feedback_logprobs_fetch_failure_continues(monkeypatch, tmp_path):
@@ -410,16 +435,21 @@ def test_feedback_logprobs_fetch_failure_continues(monkeypatch, tmp_path):
     response = client.post(
         "/v1/feedback",
         json={
-            "lora_id": "user/model",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "training": {"teacher_mode": "self"},
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "training": {"teacher_mode": "self"},
+                }
+            ],
+            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
         },
     )
 
     assert response.status_code == 200
-    assert captured["request"]["rollout_logprobs"] is None
+    assert captured["request"]["samples"][0]["rollout_logprobs"] is None
 
 
 def test_feedback_skips_logprobs_when_provided(monkeypatch, tmp_path):
@@ -453,17 +483,22 @@ def test_feedback_skips_logprobs_when_provided(monkeypatch, tmp_path):
     response = client.post(
         "/v1/feedback",
         json={
-            "lora_id": "user/model",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "rollout_logprobs": [-0.1, -0.2],
-            "training": {"teacher_mode": "self"},
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "rollout_logprobs": [-0.1, -0.2],
+                    "training": {"teacher_mode": "self"},
+                }
+            ],
+            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
         },
     )
 
     assert response.status_code == 200
-    assert captured["request"]["rollout_logprobs"] == [-0.1, -0.2]
+    assert captured["request"]["samples"][0]["rollout_logprobs"] == [-0.1, -0.2]
     assert fetch_called == []
 
 
@@ -504,12 +539,16 @@ def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
     response = client.post(
         "/v1/feedback",
         json={
-            "lora_id": "user/model-latest",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "training": {"teacher_mode": "self"},
-            "orchestration": {"sleep_before": False, "wake_after": False},
+            "requests": [
+                {
+                    "lora_id": "user/model-latest",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "training": {"teacher_mode": "self"},
+                }
+            ],
+            "orchestration": {"sleep_before": False, "wake_after": False, "wake_on_failure": True, "sleep_level": 1},
         },
     )
 
@@ -538,11 +577,16 @@ def test_feedback_tinker_accepts_default_orchestration(monkeypatch, tmp_path):
     response = client.post(
         "/v1/feedback",
         json={
-            "lora_id": "user/model",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "training": {"teacher_mode": "self"},
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "training": {"teacher_mode": "self"},
+                }
+            ],
+            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
         },
     )
 

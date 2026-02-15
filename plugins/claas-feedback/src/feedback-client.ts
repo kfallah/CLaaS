@@ -1,20 +1,27 @@
 /**
- * HTTP client for the CLaaS feedback API.
- *
- * Uses native fetch() (Node 22+).
- * POST {claasApiUrl}/v1/feedback with the feedback payload.
- * 2-minute timeout to match CLaaS lock timeout.
+ * HTTP client for the CLaaS batched feedback API.
  */
 
-const TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+const TIMEOUT_MS = 2 * 60 * 1000;
 
-export interface FeedbackPayload {
+export interface DistillRequestPayload {
   lora_id: string;
   prompt: string;
   response: string;
   feedback: string;
+  rollout_logprobs?: number[];
   training: {
     teacher_mode: string;
+  };
+}
+
+export interface FeedbackBatchPayload {
+  requests: DistillRequestPayload[];
+  orchestration: {
+    sleep_before: boolean;
+    wake_after: boolean;
+    wake_on_failure: boolean;
+    sleep_level: number;
   };
 }
 
@@ -22,6 +29,7 @@ export interface FeedbackResult {
   status: string;
   request_id?: string;
   lora_id?: string;
+  batch_size?: number;
   timing_ms?: {
     total?: number;
     distill?: number;
@@ -34,67 +42,44 @@ export interface FeedbackResult {
       distill_loss?: number;
       tokens_processed?: number;
       grad_norm?: number;
+      batch_size?: number;
     };
   };
 }
 
+/**
+ * Submit one explicit batch to CLaaS.
+ */
 export async function submitFeedback(
   claasApiUrl: string,
-  payload: FeedbackPayload,
+  payload: FeedbackBatchPayload,
 ): Promise<FeedbackResult> {
   const url = `${claasApiUrl.replace(/\/+$/, "")}/v1/feedback`;
-
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === "AbortError") {
-        throw new Error(
-          `CLaaS API request timed out after ${Math.round(TIMEOUT_MS / 1000)}s`,
-        );
-      }
-
-      const cause = err && typeof err === "object" && "cause" in err
-        ? (err as { cause?: unknown }).cause
-        : undefined;
-      const code = cause && typeof cause === "object" && "code" in cause
-        ? String((cause as { code?: unknown }).code)
-        : undefined;
-      const address = cause && typeof cause === "object" && "address" in cause
-        ? String((cause as { address?: unknown }).address)
-        : undefined;
-      const port = cause && typeof cause === "object" && "port" in cause
-        ? String((cause as { port?: unknown }).port)
-        : undefined;
-      const reason = [code, address, port].filter(Boolean).join(" ");
-      const suffix = reason ? ` (${reason})` : "";
-      throw new Error(`Failed to reach CLaaS API at ${url}${suffix}`);
-    }
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
 
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      const truncated = body.slice(0, 500);
-
-      if (res.status === 409) {
-        throw new Error(
-          "Another feedback update is in progress. Try again in a moment.",
-        );
-      }
-      throw new Error(
-        `CLaaS API returned ${res.status}: ${truncated}`,
-      );
+      const body = await res.text();
+      throw new Error(`CLaaS API returned ${res.status}: ${body.slice(0, 500)}`);
     }
 
     return (await res.json()) as FeedbackResult;
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`CLaaS API request timed out after ${Math.round(TIMEOUT_MS / 1000)}s`);
+    }
+    if (err instanceof Error) {
+      throw err;
+    }
+    throw new Error(String(err));
   } finally {
     clearTimeout(timer);
   }

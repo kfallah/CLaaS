@@ -22,6 +22,7 @@ import type {
 import * as contextStore from "./src/context-store.ts";
 import { buildChatML } from "./src/chatml.ts";
 import { submitFeedback } from "./src/feedback-client.ts";
+import { appendFeedback, getPendingSize, takePendingBatch } from "./src/feedback-history-store.ts";
 
 // FIFO queue: message_received pushes sender keys, agent_end pops them.
 const pendingSenders: string[] = [];
@@ -36,6 +37,7 @@ interface ClaasConfig {
   claasApiUrl?: string;
   loraId?: string;
   debug?: boolean;
+  feedbackBatchSize?: number;
 }
 
 export default function register(api: OpenClawPluginApi) {
@@ -46,6 +48,7 @@ export default function register(api: OpenClawPluginApi) {
     "http://claas-api:8080";
   const loraId = config.loraId ?? "openclaw/assistant-latest";
   const debugEnabled = config.debug === true || process.env.CLAAS_FEEDBACK_DEBUG === "true";
+  const feedbackBatchSize = config.feedbackBatchSize ?? 16;
   const logDebug = (message: string): void => {
     if (debugEnabled) {
       console.debug(message);
@@ -164,14 +167,34 @@ export default function register(api: OpenClawPluginApi) {
       }
 
       // Submit to CLaaS
+      const { pendingSize } = appendFeedback(senderKey, chatML.prompt, chatML.response, feedbackText);
+      if (pendingSize < feedbackBatchSize) {
+        return {
+          text: `✅ Feedback queued (buffer: ${pendingSize}/${feedbackBatchSize})`,
+        };
+      }
+
+      const batch = takePendingBatch(senderKey, feedbackBatchSize);
+      if (batch.length !== feedbackBatchSize) {
+        throw new Error("pending feedback batch size mismatch");
+      }
+
       const startMs = Date.now();
       try {
         const result = await submitFeedback(claasApiUrl, {
-          lora_id: loraId,
-          prompt: chatML.prompt,
-          response: chatML.response,
-          feedback: feedbackText,
-          training: { teacher_mode: "self" },
+          requests: batch.map((item) => ({
+            lora_id: loraId,
+            prompt: item.prompt,
+            response: item.response,
+            feedback: item.feedback,
+            training: { teacher_mode: "self" },
+          })),
+          orchestration: {
+            sleep_before: true,
+            wake_after: true,
+            wake_on_failure: true,
+            sleep_level: 1,
+          },
         });
 
         const elapsed = Date.now() - startMs;
@@ -180,13 +203,15 @@ export default function register(api: OpenClawPluginApi) {
         const meta = result.distill_result?.metadata;
         const loss = meta?.total_loss;
         const tokens = meta?.tokens_processed;
+        const remaining = getPendingSize(senderKey);
 
         let detail = `${seconds}s`;
         if (loss !== undefined) detail += ` | loss: ${loss.toFixed(4)}`;
         if (tokens !== undefined) detail += ` | ${tokens} tokens`;
+        detail += ` | buffer: ${remaining}/${feedbackBatchSize}`;
 
         return {
-          text: `\u2705 Feedback applied (${detail})`,
+          text: `✅ Feedback applied (${detail})`,
         };
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
