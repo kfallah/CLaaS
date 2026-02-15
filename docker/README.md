@@ -134,7 +134,7 @@ All settings are in `.env`:
 | `TELEGRAM_BOT_TOKEN` | *(required)* | Bot token from @BotFather |
 | `TINKER_API_KEY` | *(tinker only)* | API key for Tinker SDK |
 | `HF_TOKEN` | — | HuggingFace token for gated models (local only) |
-| `MODEL` | `Qwen/Qwen3-8B` (local) / `Qwen/Qwen3-30B-A3B-Instruct-2507` (tinker) | Base model ID |
+| `MODEL` | `Qwen/Qwen3-8B` (local) / `gpt-oss/GPT-OSS-120B` (tinker) | Base model ID |
 | `MAX_MODEL_LEN` | `32768` | Max sequence length (local only) |
 | `GPU_MEMORY_UTILIZATION` | `0.70` | GPU VRAM fraction (local only) |
 | `LORA_NAME` | `openclaw/assistant` | LoRA adapter identity |
@@ -148,7 +148,7 @@ For `.env.tinker`, key variables are:
 |----------|---------|-------------|
 | `TELEGRAM_BOT_TOKEN` | *(required)* | Bot token from @BotFather |
 | `TINKER_API_KEY` | *(required)* | API key for Tinker SDK calls |
-| `MODEL` | `Qwen/Qwen3-30B-A3B-Instruct-2507` | Hosted base model for proxy and distillation |
+| `MODEL` | `gpt-oss/GPT-OSS-120B` | Hosted base model for proxy and distillation |
 | `LORA_NAME` | `openclaw/assistant` | LoRA adapter identity |
 | `TINKER_PROXY_PORT` | `8000` | Host port for the local OpenAI-compatible proxy |
 | `CLAAS_API_PORT` | `8080` | Host port for CLaaS API |

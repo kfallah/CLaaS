@@ -527,11 +527,11 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             woke = True
 
         if _get_engine_kind() == "tinker" and distill_result is not None:
-            tinker_path = (distill_result.metadata or {}).get("tinker_path")
-            if tinker_path:
+            sampler_path = (distill_result.metadata or {}).get("sampler_weights_path")
+            if sampler_path:
                 phase = "wake"
                 wake_start = time.perf_counter()
-                await _tinker_proxy_refresh(str(tinker_path))
+                await _tinker_proxy_refresh(str(sampler_path))
                 timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
                 woke = True
 

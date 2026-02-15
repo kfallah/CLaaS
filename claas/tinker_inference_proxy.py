@@ -6,7 +6,7 @@ without a local GPU.
 
 Usage::
 
-    TINKER_API_KEY=... CLAAS_TINKER_BASE_MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507 \
+    TINKER_API_KEY=... CLAAS_TINKER_BASE_MODEL=gpt-oss/GPT-OSS-120B \
         uvicorn claas.tinker_inference_proxy:app --host 0.0.0.0 --port 8000
 """
 
@@ -36,7 +36,7 @@ else:
 
 app = FastAPI(title="CLaaS Tinker Inference Proxy")
 
-_BASE_MODEL = os.environ.get("CLAAS_TINKER_BASE_MODEL", "Qwen/Qwen3-30B-A3B-Instruct-2507")
+_BASE_MODEL = os.environ.get("CLAAS_TINKER_BASE_MODEL", "gpt-oss/GPT-OSS-120B")
 
 
 # ---------------------------------------------------------------------------

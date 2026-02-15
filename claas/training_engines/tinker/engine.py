@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 # Default model for the Tinker engine.
 _DEFAULT_BASE_MODEL = os.environ.get(
     "CLAAS_TINKER_BASE_MODEL",
-    "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "gpt-oss/GPT-OSS-120B",
 )
 
 # Adaptive KL scaling defaults (from continualcode reference).
@@ -273,6 +273,12 @@ class TinkerTrainingEngine(TrainingEngine):
         checkpoint_name = f"step-{new_step}"
         save_result = await _await_api_future(await training_client.save_state_async(checkpoint_name))
 
+        # Save sampler-compatible weights for the inference proxy.
+        sampler_save = await _await_api_future(
+            await training_client.save_weights_for_sampler_async(checkpoint_name)
+        )
+        sampler_weights_path = sampler_save.path
+
         set_tinker_path(
             lora_id=payload.lora_id,
             tinker_path=save_result.path,
@@ -289,6 +295,7 @@ class TinkerTrainingEngine(TrainingEngine):
         metadata: dict[str, object] = {
             "step": new_step,
             "tinker_path": save_result.path,
+            "sampler_weights_path": sampler_weights_path,
             "completion_len": completion_len,
             "effective_kl_coef": effective_kl_coef,
             "kl_gain": gain,

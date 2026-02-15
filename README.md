@@ -115,7 +115,7 @@ Set `CLAAS_DISTILL_EXECUTION_MODE` to control which training engine implementati
 
 - **`local`** (default) — Runs on the same machine. Requires a GPU with enough VRAM for Qwen3-8B + LoRA training.
 - **`modal`** — Runs the distill step remotely on Modal (L40S) and keeps teacher scoring on Modal.
-- **`tinker`** — Uses the Tinker SDK for distillation **and** LoRA lifecycle operations (`/v1/lora/init`, `/v1/lora`, `/v1/lora/export`) with hosted models such as `Qwen/Qwen3-30B-A3B-Instruct-2507`. Requires `CLAAS_TINKER_API_KEY`; model selection is controlled by `CLAAS_TINKER_BASE_MODEL` (or `MODEL` in Docker compose).
+- **`tinker`** — Uses the Tinker SDK for distillation **and** LoRA lifecycle operations (`/v1/lora/init`, `/v1/lora`, `/v1/lora/export`) with hosted models such as `gpt-oss/GPT-OSS-120B`. Requires `CLAAS_TINKER_API_KEY`; model selection is controlled by `CLAAS_TINKER_BASE_MODEL` (or `MODEL` in Docker compose).
 
 ## Storage
 
