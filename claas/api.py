@@ -242,7 +242,7 @@ async def _fetch_rollout_logprobs(
     """Fetch per-token logprobs for *response* from the vLLM completions API.
 
     1. Tokenize the prompt to learn its token count.
-    2. Submit ``prompt + response`` with ``max_tokens=0`` and ``prompt_logprobs=1``.
+    2. Submit ``prompt + response`` with ``max_tokens=1`` and ``prompt_logprobs=1``.
     3. Strip the prompt portion and extract the log-probability for each
        response token.
     """
@@ -261,7 +261,7 @@ async def _fetch_rollout_logprobs(
             json={
                 "model": model,
                 "prompt": prompt + response,
-                "max_tokens": 0,
+                "max_tokens": 1,
                 "prompt_logprobs": 1,
             },
             headers=headers,
@@ -428,7 +428,7 @@ async def distill(request: DistillRequest) -> DistillResponse:
 
 @web_app.post("/v1/feedback", response_model=FeedbackResponse)
 async def feedback(request: FeedbackRequest) -> FeedbackResponse:
-    """Run feedback orchestration: sleep vLLM, distill in-place, wake vLLM."""
+    """Run feedback orchestration: pause vLLM, distill in-place, resume vLLM."""
     request_id = uuid.uuid4().hex
     lock_acquired = False
     slept = False
@@ -475,7 +475,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             phase = "sleep"
             sleep_start = time.perf_counter()
             await _vllm_post(
-                "/sleep",
+                "/pause",
                 params={"level": request.orchestration.sleep_level},
             )
             await _verify_gpu_ready()
@@ -508,7 +508,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
         if request.orchestration.wake_after and _get_engine_kind() != "tinker":
             phase = "wake"
             wake_start = time.perf_counter()
-            await _vllm_post("/wake_up")
+            await _vllm_post("/resume")
             await _vllm_reload_lora(request.lora_id)
             timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
             woke = True
@@ -538,7 +538,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             and (request.orchestration.wake_on_failure or FEEDBACK_WAKE_ON_FAILURE)
         ):
             try:
-                await _vllm_post("/wake_up")
+                await _vllm_post("/resume")
                 woke = True
                 logger.info("Feedback %s: woke vLLM after failure in phase '%s'", request_id, phase)
             except httpx.HTTPError as wake_err:

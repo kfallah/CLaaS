@@ -168,10 +168,10 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     assert body["status"] == "ok"
     assert body["lora_id"] == "user/model"
     assert body["feedback_log_path"] == log_path
-    # drain → sleep → wake → unload old LoRA → load updated LoRA
+    # drain → pause → wake → unload old LoRA → load updated LoRA
     assert calls[0] == ("_wait_for_vllm_idle",)
-    assert calls[1] == ("/sleep", {"level": 1})
-    assert calls[2] == ("/wake_up", None)
+    assert calls[1] == ("/pause", {"level": 1})
+    assert calls[2] == ("/resume", None)
     assert calls[3] == ("/v1/unload_lora_adapter", None)
     assert calls[4] == ("/v1/load_lora_adapter", None)
     assert captured["request"]["save_in_place"] is True
@@ -300,9 +300,9 @@ def test_feedback_calls_drain_before_sleep(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 200
-    # drain must come before /sleep
+    # drain must come before /pause
     assert order[0] == "drain"
-    assert order[1] == "/sleep"
+    assert order[1] == "/pause"
 
 
 def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):

@@ -82,6 +82,12 @@ def main() -> None:
     for mid in MODEL_IDS:
         cfg["tools"]["byProvider"].setdefault(f"local/{mid}", {"deny": ["*"]})
 
+    # Enable OpenAI-compatible chat completions endpoint on the gateway
+    cfg.setdefault("gateway", {})
+    cfg["gateway"].setdefault("http", {})
+    cfg["gateway"]["http"].setdefault("endpoints", {})
+    cfg["gateway"]["http"]["endpoints"]["chatCompletions"] = {"enabled": True}
+
     cfg.setdefault("meta", {})
     cfg["meta"]["lastTouchedAt"] = now
 
