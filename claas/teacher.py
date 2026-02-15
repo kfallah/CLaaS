@@ -15,8 +15,7 @@ from __future__ import annotations
 import importlib
 import os
 import warnings
-from typing import TYPE_CHECKING
-from typing import Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 import modal
 

@@ -52,6 +52,10 @@ feedback_logs/
 .local_loras/
 .run-logs/
 
+# Eval harness results
+eval_results*/
+eval_smoke*/
+
 # Docker
 docker/.env
 docker/.env.*

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from claas.training_engines.local.engine import LocalTrainingEngine
-from claas.types import DistillRequestPayload
+from claas.types import DistillRequestPayload, TrainingConfig
 
 
 class _Worker:
@@ -29,7 +29,7 @@ def test_local_engine_distill_ignores_cleanup_error(monkeypatch):
                 prompt="p",
                 response="r",
                 feedback="f",
-                training={},
+                training=TrainingConfig(),
             )
         )
     )
