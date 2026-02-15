@@ -1,0 +1,103 @@
+services:
+  # ------------------------------------------------------------------
+  # tinker-proxy: OpenAI-compatible inference endpoint backed by Tinker
+  # ------------------------------------------------------------------
+  tinker-proxy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.tinker-proxy
+    environment:
+      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
+      - CLAAS_TINKER_BASE_MODEL=${MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
+    ports:
+      - "${TINKER_PROXY_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 10s
+      start_period: 20s
+      retries: 20
+
+  # ------------------------------------------------------------------
+  # claas-api: Feedback API in Tinker execution mode
+  # ------------------------------------------------------------------
+  claas-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.tinker-claas-api
+    environment:
+      - CLAAS_STORAGE_BACKEND=local_fs
+      - CLAAS_DISTILL_EXECUTION_MODE=tinker
+      - CLAAS_BASE_MODEL_ID=${MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
+      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
+      - CLAAS_TINKER_BASE_MODEL=${MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
+      - CLAAS_TINKER_STATE_PATH=/data/tinker_state.json
+      - FEEDBACK_LOG_DIR=/feedback-logs
+      - WAIT_FOR_BACKEND=0
+    volumes:
+      - claas-feedback-logs:/feedback-logs
+      - tinker-state:/data
+    ports:
+      - "${CLAAS_API_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 20
+
+  # ------------------------------------------------------------------
+  # init: one-shot container — initialize Tinker LoRA + OpenClaw config
+  # ------------------------------------------------------------------
+  init:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.tinker-init
+    environment:
+      - CLAAS_DISTILL_EXECUTION_MODE=tinker
+      - LORA_NAME=${LORA_NAME:-openclaw/assistant}
+      - MODEL=${MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
+      - VLLM_BASE_URL=http://tinker-proxy:8000/v1
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - OPENCLAW_HOME=/openclaw-config
+      - CLAAS_API_URL=http://claas-api:8080
+    volumes:
+      - openclaw-config:/openclaw-config
+      - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro
+    depends_on:
+      tinker-proxy:
+        condition: service_healthy
+      claas-api:
+        condition: service_healthy
+
+  # ------------------------------------------------------------------
+  # openclaw: Telegram bot gateway (uses tinker-proxy endpoint)
+  # ------------------------------------------------------------------
+  openclaw:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.tinker-openclaw
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - VLLM_BASE_URL=http://tinker-proxy:8000
+      - BACKEND_HEALTH_URL=http://tinker-proxy:8000/v1/models
+    volumes:
+      - openclaw-config:/home/node/.openclaw
+    ports:
+      - "${OPENCLAW_PORT:-18789}:18789"
+    depends_on:
+      tinker-proxy:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+
+volumes:
+  openclaw-config:
+  claas-feedback-logs:
+  tinker-state:

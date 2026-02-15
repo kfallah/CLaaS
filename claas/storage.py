@@ -21,9 +21,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import modal
-import torch
-from safetensors.torch import save_file
-from transformers import AutoConfig
 
 # Modal volume for LoRA storage
 lora_volume = modal.Volume.from_name("claas-loras", create_if_missing=True)
@@ -327,6 +324,16 @@ def create_initial_lora(
     Returns:
         The lora_id of the created adapter
     """
+    try:
+        import torch
+        from safetensors.torch import save_file
+        from transformers import AutoConfig
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Local LoRA initialization requires optional local dependencies. "
+            "Install with: uv sync --extra local"
+        ) from exc
+
     if target_modules is None:
         target_modules = [
             "q_proj", "k_proj", "v_proj", "o_proj",

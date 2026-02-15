@@ -66,7 +66,7 @@ import math
 
 import httpx
 
-from .types import CollapseMetrics, EvalRollout
+from .types import ChatMessage, CollapseMetrics, EvalRollout
 from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
@@ -133,7 +133,7 @@ async def measure_entropy_and_mean_logprob(
     prompt: str = COLLAPSE_PROBE,
     timeout_s: float = 60.0,
     system_prompt: str | None = None,
-    prompt_preamble: list[dict[str, str]] | None = None,
+    prompt_preamble: list[ChatMessage] | None = None,
     rollout_log: list[EvalRollout] | None = None,
 ) -> tuple[float, float]:
     """Generate one response and return (mean_entropy, mean_logprob)."""
@@ -201,23 +201,18 @@ async def measure_entropy_and_mean_logprob(
         else 0.0
     )
     if rollout_log is not None:
+        rollout_msgs: list[ChatMessage] = list(prompt_preamble or [])
+        if system_prompt and not any(
+            m.get("role") == "system" and m.get("content") == system_prompt
+            for m in rollout_msgs
+        ):
+            rollout_msgs.append(ChatMessage(role="system", content=system_prompt))
+        rollout_msgs.append(ChatMessage(role="user", content=prompt))
+        rollout_msgs.append(ChatMessage(role="assistant", content=response_text))
         rollout_log.append(
             EvalRollout(
                 metric="collapse",
-                messages=[
-                    *(list(prompt_preamble or [])),
-                    *(
-                        [{"role": "system", "content": system_prompt}]
-                        if system_prompt
-                        and not any(
-                            m.get("role") == "system" and m.get("content") == system_prompt
-                            for m in (prompt_preamble or [])
-                        )
-                        else []
-                    ),
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": response_text},
-                ],
+                messages=rollout_msgs,
                 metadata={
                     "task": "entropy_probe",
                     "mean_entropy": mean_entropy,
@@ -236,7 +231,7 @@ async def measure_self_rouge_l(
     n_samples: int = 3,
     timeout_s: float = 60.0,
     system_prompt: str | None = None,
-    prompt_preamble: list[dict[str, str]] | None = None,
+    prompt_preamble: list[ChatMessage] | None = None,
     rollout_log: list[EvalRollout] | None = None,
     openclaw_url: str | None = None,
     openclaw_api_key: str = "openclaw-local-dev-token",
@@ -295,24 +290,20 @@ async def measure_self_rouge_l(
             scores.append(rouge_l_score(clean_responses[i], clean_responses[j]))
 
     if rollout_log is not None:
+        base_msgs: list[ChatMessage] = list(prompt_preamble or [])
+        if system_prompt and not any(
+            m.get("role") == "system" and m.get("content") == system_prompt
+            for m in base_msgs
+        ):
+            base_msgs.append(ChatMessage(role="system", content=system_prompt))
         for idx, response in enumerate(responses):
+            sample_msgs = list(base_msgs)
+            sample_msgs.append(ChatMessage(role="user", content=prompt))
+            sample_msgs.append(ChatMessage(role="assistant", content=response))
             rollout_log.append(
                 EvalRollout(
                     metric="collapse",
-                    messages=[
-                        *(list(prompt_preamble or [])),
-                        *(
-                            [{"role": "system", "content": system_prompt}]
-                            if system_prompt
-                            and not any(
-                                m.get("role") == "system" and m.get("content") == system_prompt
-                                for m in (prompt_preamble or [])
-                            )
-                            else []
-                        ),
-                        {"role": "user", "content": prompt},
-                        {"role": "assistant", "content": response},
-                    ],
+                    messages=sample_msgs,
                     metadata={
                         "task": "diversity_probe",
                         "sample_index": idx,
@@ -323,7 +314,7 @@ async def measure_self_rouge_l(
         rollout_log.append(
             EvalRollout(
                 metric="collapse",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[ChatMessage(role="user", content=prompt)],
                 metadata={"task": "diversity_scores", "pairwise_scores": scores},
             )
         )
@@ -337,7 +328,7 @@ async def measure_collapse(
     baseline_entropy: float | None = None,
     baseline_mean_logprob: float | None = None,
     system_prompt: str | None = None,
-    prompt_preamble: list[dict[str, str]] | None = None,
+    prompt_preamble: list[ChatMessage] | None = None,
     rollout_log: list[EvalRollout] | None = None,
     openclaw_url: str | None = None,
     openclaw_api_key: str = "openclaw-local-dev-token",

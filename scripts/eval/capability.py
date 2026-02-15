@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from .types import EvalRollout, GeneralCapability
+from .types import ChatMessage, EvalRollout, GeneralCapability
 from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ async def evaluate_general_capability(
     model: str,
     timeout_s: float = 60.0,
     system_prompt: str | None = None,
-    prompt_preamble: list[dict[str, str]] | None = None,
+    prompt_preamble: list[ChatMessage] | None = None,
     rollout_log: list[EvalRollout] | None = None,
     openclaw_url: str | None = None,
     openclaw_api_key: str = "openclaw-local-dev-token",
@@ -224,23 +224,18 @@ async def evaluate_general_capability(
 
     coding_result = verify_coding(coding_text)
     if rollout_log is not None:
+        coding_msgs: list[ChatMessage] = list(prompt_preamble or [])
+        if system_prompt and not any(
+            m.get("role") == "system" and m.get("content") == system_prompt
+            for m in coding_msgs
+        ):
+            coding_msgs.append(ChatMessage(role="system", content=system_prompt))
+        coding_msgs.append(ChatMessage(role="user", content=CODING_PROMPT))
+        coding_msgs.append(ChatMessage(role="assistant", content=coding_text))
         rollout_log.append(
             EvalRollout(
                 metric="general",
-                messages=[
-                    *(list(prompt_preamble or [])),
-                    *(
-                        [{"role": "system", "content": system_prompt}]
-                        if system_prompt
-                        and not any(
-                            m.get("role") == "system" and m.get("content") == system_prompt
-                            for m in (prompt_preamble or [])
-                        )
-                        else []
-                    ),
-                    {"role": "user", "content": CODING_PROMPT},
-                    {"role": "assistant", "content": coding_text},
-                ],
+                messages=coding_msgs,
                 metadata={
                     "task": "coding",
                     "max_tokens_used": coding_budget,
@@ -264,24 +259,18 @@ async def evaluate_general_capability(
                 if passed:
                     passes += 1
                 if rollout_log is not None:
+                    probe_msgs: list[ChatMessage] = list(prompt_preamble or [])
+                    if system_prompt and not any(
+                        m.get("role") == "system" and m.get("content") == system_prompt
+                        for m in probe_msgs
+                    ):
+                        probe_msgs.append(ChatMessage(role="system", content=system_prompt))
+                    probe_msgs.append(ChatMessage(role="user", content=probe.prompt))
+                    probe_msgs.append(ChatMessage(role="assistant", content=text))
                     rollout_log.append(
                         EvalRollout(
                             metric="general",
-                            messages=[
-                                *(list(prompt_preamble or [])),
-                                *(
-                                    [{"role": "system", "content": system_prompt}]
-                                    if system_prompt
-                                    and not any(
-                                        m.get("role") == "system"
-                                        and m.get("content") == system_prompt
-                                        for m in (prompt_preamble or [])
-                                    )
-                                    else []
-                                ),
-                                {"role": "user", "content": probe.prompt},
-                                {"role": "assistant", "content": text},
-                            ],
+                            messages=probe_msgs,
                             metadata={
                                 "task": "ifeval",
                                 "max_tokens_used": budget_used,
@@ -292,23 +281,17 @@ async def evaluate_general_capability(
             except (httpx.HTTPError, KeyError, ValueError) as e:
                 logger.warning("IFEval probe failed: %s", e)
                 if rollout_log is not None:
+                    err_msgs: list[ChatMessage] = list(prompt_preamble or [])
+                    if system_prompt and not any(
+                        m.get("role") == "system" and m.get("content") == system_prompt
+                        for m in err_msgs
+                    ):
+                        err_msgs.append(ChatMessage(role="system", content=system_prompt))
+                    err_msgs.append(ChatMessage(role="user", content=probe.prompt))
                     rollout_log.append(
                         EvalRollout(
                             metric="general",
-                            messages=(
-                                list(prompt_preamble or [])
-                                + (
-                                    [{"role": "system", "content": system_prompt}]
-                                    if system_prompt
-                                    and not any(
-                                        m.get("role") == "system"
-                                        and m.get("content") == system_prompt
-                                        for m in (prompt_preamble or [])
-                                    )
-                                    else []
-                                )
-                                + [{"role": "user", "content": probe.prompt}]
-                            ),
+                            messages=err_msgs,
                             metadata={"task": "ifeval", "error": str(e), "passed": False},
                         )
                     )

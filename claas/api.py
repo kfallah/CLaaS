@@ -1,25 +1,26 @@
 """CLaaS API: FastAPI web endpoint for SDPO continual distillation.
 
-This module provides the REST API for the distillation service.
+This module provides the REST API for the distillation service.  The
+training backend is selected via ``CLAAS_DISTILL_EXECUTION_MODE``
+(local | modal | tinker).
 
 Endpoints:
-- POST /v1/distill: Run a single SDPO distillation step
+- POST /v1/feedback: Run one online update transaction (primary endpoint)
+- POST /v1/distill: Run a single SDPO distillation step (low-level)
 - POST /v1/lora/init: Initialize a new LoRA adapter
 - GET /v1/lora: List all LoRA adapters
+- GET /v1/lora/export: Download a LoRA as a zip archive
 - GET /v1/health: Health check
 
-Example usage:
-    curl -X POST https://your-modal-app.modal.run/v1/distill \\
+Example usage (feedback)::
+
+    curl -X POST http://localhost:8080/v1/feedback \\
         -H "Content-Type: application/json" \\
         -d '{
-            "lora_id": "user123/coder-v1",
+            "lora_id": "user/my-lora-init",
             "prompt": "Write a function to calculate factorial",
-            "response": "def factorial(n):\\n    if n <= 1:\\n        return 1\\n    return n * factorial(n-1)",
-            "feedback": "Good recursive solution",
-            "training": {
-                "learning_rate": 1e-4,
-                "alpha": 0.5
-            }
+            "response": "def factorial(n): ...",
+            "feedback": "Good recursive solution"
         }'
 """
 

@@ -17,14 +17,31 @@ CLaaS turns every user interaction into an online learning step via Self-Distill
 
 This enables real-time model personalization where the model learns from each interaction.
 
+## Hybrid engine
+
+The request path is driven by a hybrid engine that switches between:
+
+- **Serving mode**: route request traffic through vLLM (local or remote) for low-latency generation.
+- **Update mode**: run a single SDPO LoRA step using the provided feedback to adapt the adapter.
+
+In practice, the flow is: request is answered by vLLM, then the engine performs (or schedules) the training step, and subsequent requests can use the updated adapter. The engine can prefer local or remote teacher inference depending on `teacher_mode`.
+
+![Hybrid engine diagram](assets/image.png)
+
 ## Installation
 
 ```bash
-uv sync
+# Local GPU workflow (vLLM + local distillation)
+uv sync --extra local
+
+# Tinker workflow (no GPU deps; install CPU torch wheel)
+uv sync --extra tinker
+uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu torch
 ```
 
-**Prerequisites:** Python 3.11+, `uv`, a CUDA GPU, and `vllm` for local serving.
-For remote execution, also run `uv run modal token new`.
+**Prerequisites:** Python 3.11+ and `uv`.
+- Local mode also requires a CUDA GPU and `vllm`.
+- For remote execution, also run `uv run modal token new`.
 
 ## Quick Start
 
@@ -98,7 +115,7 @@ Set `CLAAS_DISTILL_EXECUTION_MODE` to control which training engine implementati
 
 - **`local`** (default) — Runs on the same machine. Requires a GPU with enough VRAM for Qwen3-8B + LoRA training.
 - **`modal`** — Runs the distill step remotely on Modal (L40S) and keeps teacher scoring on Modal.
-- **`tinker`** — Uses a Tinker-hosted CLaaS backend for distillation **and** LoRA lifecycle operations (`/v1/lora/init`, `/v1/lora`, `/v1/lora/export`). This mode is designed for large hosted teachers/models such as Qwen3 235B MoE and requires `CLAAS_TINKER_BASE_URL` and `CLAAS_TINKER_API_KEY`.
+- **`tinker`** — Uses the Tinker SDK for distillation **and** LoRA lifecycle operations (`/v1/lora/init`, `/v1/lora`, `/v1/lora/export`) with hosted models such as `Qwen/Qwen3-30B-A3B-Instruct-2507`. Requires `CLAAS_TINKER_API_KEY`; model selection is controlled by `CLAAS_TINKER_BASE_MODEL` (or `MODEL` in Docker compose).
 
 ## Storage
 
@@ -119,6 +136,15 @@ docker compose up --build
 ```
 
 This brings up four services: an init container (creates the LoRA + config), vLLM with Qwen3-8B and LoRA serving, the CLaaS feedback API, and OpenClaw's Telegram gateway. See [`docker/README.md`](docker/README.md) for details.
+
+For hosted Tinker instead of local vLLM, use the dedicated compose file:
+
+```bash
+cd docker
+cp .env.tinker.example .env.tinker
+# Edit .env.tinker (set TELEGRAM_BOT_TOKEN + TINKER_API_KEY)
+docker compose -f docker-compose.tinker.yml --env-file .env.tinker up --build
+```
 
 ## Local vLLM + OpenClaw
 
@@ -151,7 +177,7 @@ This skill installs all dependencies (CLaaS, vLLM, OpenClaw), initializes the Lo
 ## Development
 
 ```bash
-uv sync --extra dev
+uv sync --extra dev --extra local
 uv run ruff check claas/ tests/
 uv run ty check
 uv run pytest -q
@@ -164,6 +190,7 @@ uv run pytest -q
 3. Modal GPU Memory Snapshots: https://modal.com/blog/gpu-mem-snapshots
 4. vLLM: https://github.com/vllm-project/vllm
 5. PEFT/LoRA: https://github.com/huggingface/peft
+6. Tinker SDPO training reference (continualcode): https://github.com/sdan/continualcode
 
 ## License
 

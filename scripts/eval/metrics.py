@@ -14,7 +14,7 @@ import httpx
 from .capability import evaluate_general_capability
 from .collapse import measure_collapse
 from .logprob import measure_logprob_margin
-from .types import EvalMetrics, EvalRollout, LogprobMargin, MetricContext
+from .types import ChatMessage, EvalMetrics, EvalRollout, LogprobMargin, MetricContext
 from .verifiers import explain_verifier, run_verifier
 
 logger = logging.getLogger(__name__)
@@ -26,16 +26,16 @@ def _prefixed_messages(
     prompt: str,
     response_text: str | None,
     system_prompt: str | None,
-    prompt_preamble: list[dict[str, str]],
-) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = list(prompt_preamble)
+    prompt_preamble: list[ChatMessage],
+) -> list[ChatMessage]:
+    messages: list[ChatMessage] = list(prompt_preamble)
     if system_prompt and not any(
         m.get("role") == "system" and m.get("content") == system_prompt for m in messages
     ):
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
+        messages.append(ChatMessage(role="system", content=system_prompt))
+    messages.append(ChatMessage(role="user", content=prompt))
     if response_text is not None:
-        messages.append({"role": "assistant", "content": response_text})
+        messages.append(ChatMessage(role="assistant", content=response_text))
     return messages
 
 

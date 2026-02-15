@@ -20,6 +20,7 @@ from .metrics import Metric, build_metrics
 from .plotting import generate_plots
 from .preferences import PreferenceConfig, get_preference_configs
 from .types import (
+    ChatMessage,
     CriteriaResult,
     EvalMetrics,
     ExperimentResult,
@@ -36,15 +37,15 @@ logger = logging.getLogger(__name__)
 def _build_messages(
     prompt: str,
     system_prompt: str | None = None,
-    prompt_preamble: list[dict[str, str]] | None = None,
-) -> list[dict[str, str]]:
+    prompt_preamble: list[ChatMessage] | None = None,
+) -> list[ChatMessage]:
     """Build chat messages with optional preamble and system prompt."""
-    messages: list[dict[str, str]] = list(prompt_preamble or [])
+    messages: list[ChatMessage] = list(prompt_preamble or [])
     if system_prompt and not any(
         m.get("role") == "system" and m.get("content") == system_prompt for m in messages
     ):
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
+        messages.append(ChatMessage(role="system", content=system_prompt))
+    messages.append(ChatMessage(role="user", content=prompt))
     return messages
 
 

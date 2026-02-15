@@ -18,7 +18,7 @@ import json
 import os
 
 from .runner import run_harness
-from .types import HarnessConfig
+from .types import ChatMessage, HarnessConfig
 
 
 def parse_args() -> HarnessConfig:
@@ -154,7 +154,7 @@ def parse_args() -> HarnessConfig:
         "OPENCLAW_GATEWAY_TOKEN", "openclaw-local-dev-token"
     )
 
-    prompt_preamble: list[dict[str, str]] = []
+    prompt_preamble: list[ChatMessage] = []
     if args.preamble_file:
         with open(args.preamble_file) as f:
             raw = json.load(f)
@@ -162,14 +162,14 @@ def parse_args() -> HarnessConfig:
             raw = raw.get("messages", [])
         if not isinstance(raw, list):
             raise ValueError("--preamble-file JSON must be a list or {\"messages\": [...]} format")
-        parsed: list[dict[str, str]] = []
+        parsed: list[ChatMessage] = []
         for item in raw:
             if not isinstance(item, dict):
                 continue
             role = item.get("role")
             content = item.get("content")
             if role in {"system", "user", "assistant"} and isinstance(content, str):
-                parsed.append({"role": role, "content": content})
+                parsed.append(ChatMessage(role=role, content=content))
         prompt_preamble = parsed
 
     return HarnessConfig(

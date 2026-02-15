@@ -213,9 +213,9 @@ def step_result_from_dict(data: dict[str, object]) -> StepResult:
     if isinstance(rollouts, list):
         eval_metrics.rollouts = [
             EvalRollout(
-                metric=item.get("metric", ""),  # type: ignore[union-attr]
-                messages=item.get("messages", []),  # type: ignore[union-attr]
-                metadata=item.get("metadata", {}),  # type: ignore[union-attr]
+                metric=item.get("metric", ""),
+                messages=item.get("messages", []),
+                metadata=item.get("metadata", {}),
             )
             for item in rollouts
             if isinstance(item, dict)
