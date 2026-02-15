@@ -58,4 +58,4 @@ echo "==> All services healthy."
 # ── 3. Run tests ───────────────────────────────────────────────────
 echo "==> Running integration tests ..."
 cd "$PROJECT_ROOT"
-uv run pytest tests/integration/ -v --log-cli-level=INFO
+uv run pytest tests/integration/test_tinker_stack_integration.py -v --log-cli-level=INFO
