@@ -38,6 +38,7 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    environment: CI
     if: github.event_name == 'workflow_dispatch'
     timeout-minutes: 20
     steps:
