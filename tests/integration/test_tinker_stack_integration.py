@@ -173,7 +173,23 @@ class TestTinkerStackRoundTrip:
                     "Expected tinker-proxy refresh after distillation"
                 )
 
-                # 5. Post-distillation health: inference still works
+                # 5. Verify the proxy switched to the distilled LoRA
+                expected_path = fb_data["distill_result"]["metadata"][
+                    "sampler_weights_path"
+                ]
+                status_resp = client.get(
+                    f"{proxy_url}/v1/sampler/status",
+                    timeout=15.0,
+                )
+                assert status_resp.status_code == 200
+                actual_path = status_resp.json()["model_path"]
+                logger.info("Post-distillation sampler model_path: %s", actual_path)
+                assert actual_path == expected_path, (
+                    f"Proxy should be serving distilled LoRA {expected_path!r}, "
+                    f"got {actual_path!r}"
+                )
+
+                # 6. Post-distillation health: inference still works
                 post_payload = {
                     "model": tinker_stack.model,
                     "messages": [{"role": "user", "content": "Say hi."}],
@@ -323,6 +339,22 @@ class TestOpenClawEndToEnd:
                 # Verify tinker-proxy was refreshed with new weights
                 assert fb_data["vllm"]["woke"] is True, (
                     "Expected tinker-proxy refresh after distillation"
+                )
+
+                # Verify the proxy switched to the distilled LoRA
+                expected_path = fb_data["distill_result"]["metadata"][
+                    "sampler_weights_path"
+                ]
+                post_status = client.get(
+                    f"{tinker_stack.proxy_url}/v1/sampler/status",
+                    timeout=15.0,
+                )
+                assert post_status.status_code == 200
+                actual_path = post_status.json()["model_path"]
+                logger.info("Post-distillation sampler model_path: %s", actual_path)
+                assert actual_path == expected_path, (
+                    f"Proxy should be serving distilled LoRA {expected_path!r}, "
+                    f"got {actual_path!r}"
                 )
 
                 # 4. Post-distillation health: OpenClaw still works

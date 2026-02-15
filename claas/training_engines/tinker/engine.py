@@ -26,6 +26,7 @@ from claas.teacher import build_teacher_messages, teacher_messages_to_chat_templ
 from claas.training_engines.base import TrainingEngine
 from claas.training_engines.tinker.state import (
     LoraEntry,
+    all_checkpoint_paths,
     delete_entry,
     get_entry,
     list_loras as state_list_loras,
@@ -104,7 +105,11 @@ class TinkerTrainingEngine(TrainingEngine):
         if entry is None:
             return LoraDeleteResponse(deleted=False)
         rest = self.service.create_rest_client()
-        await rest.delete_checkpoint_from_tinker_path_async(entry.tinker_path)
+        for ckpt_path in all_checkpoint_paths(entry):
+            try:
+                await rest.delete_checkpoint_from_tinker_path_async(ckpt_path)
+            except Exception:
+                logger.warning("Failed to delete checkpoint %s", ckpt_path, exc_info=True)
         delete_entry(lora_id)
         return LoraDeleteResponse(deleted=True)
 
@@ -285,6 +290,7 @@ class TinkerTrainingEngine(TrainingEngine):
             base_model=base_model,
             rank=entry.rank,
             step=new_step,
+            sampler_weights_path=sampler_weights_path,
         )
 
         # ── Return metrics ──

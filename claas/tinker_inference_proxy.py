@@ -276,6 +276,12 @@ async def refresh_sampler(body: RefreshRequest) -> dict[str, object]:
     return {"status": "ok", "model_path": body.model_path}
 
 
+@app.get("/v1/sampler/status")
+async def sampler_status() -> dict[str, object]:
+    """Return the currently loaded model path (null = base model only)."""
+    return {"model_path": _holder._model_path, "base_model": _BASE_MODEL}
+
+
 @app.get("/v1/models")
 async def list_models() -> dict[str, object]:
     return {
