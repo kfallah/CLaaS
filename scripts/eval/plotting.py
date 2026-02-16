@@ -32,9 +32,9 @@ def _load_steps(output_dir: str, preference: str) -> list[StepResult]:
 def generate_plots(output_dir: str, preferences: list[str]) -> None:
     """Generate all summary plots. Requires matplotlib."""
     try:
-        import matplotlib
+        import matplotlib  # type: ignore[import-not-found]
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        import matplotlib.pyplot as plt  # type: ignore[import-not-found]
     except ImportError:
         logger.warning("matplotlib not installed — skipping plots")
         return

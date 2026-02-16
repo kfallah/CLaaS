@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 
 class ChatMessage(TypedDict):
@@ -178,7 +178,7 @@ class MetricContext:
     vllm_api_key: str
     vllm_model: str
     step: int
-    pref: object  # PreferenceConfig (forward ref to avoid circular import)
+    pref: Any  # PreferenceConfig (forward ref to avoid circular import)
     baseline: EvalMetrics
     response_text: str | None = None
     generate: Callable[[str], Awaitable[str]] | None = None
