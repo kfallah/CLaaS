@@ -220,68 +220,6 @@ async def _wait_for_vllm_idle(
         await asyncio.sleep(0.5)
 
 
-def _resolve_vllm_model_name(lora_id: str) -> str | None:
-    """Derive the vLLM model name for a LoRA, matching _vllm_reload_lora logic.
-
-    Returns ``None`` when rollout-logprob fetching is explicitly disabled
-    (``VLLM_ROLLOUT_MODEL=""``) or when *lora_id* is empty.
-    """
-    import re
-
-    if VLLM_ROLLOUT_MODEL == "":
-        return None
-    if VLLM_ROLLOUT_MODEL is not None:
-        return VLLM_ROLLOUT_MODEL
-    return re.sub(r"[^a-zA-Z0-9._-]+", "-", lora_id.strip("/")).strip("-") or None
-
-
-async def _fetch_rollout_logprobs(
-    prompt: str,
-    response: str,
-    model: str,
-    timeout_s: float = 60.0,
-) -> list[float]:
-    """Fetch per-token logprobs for *response* from the vLLM completions API.
-
-    1. Tokenize the prompt to learn its token count.
-    2. Submit ``prompt + response`` with ``max_tokens=0`` and ``prompt_logprobs=1``.
-    3. Strip the prompt portion and extract the log-probability for each
-       response token.
-    """
-    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
-    async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
-        tok_resp = await client.post(
-            "/tokenize",
-            json={"model": model, "prompt": prompt},
-            headers=headers,
-        )
-        tok_resp.raise_for_status()
-        prompt_token_count = tok_resp.json()["count"]
-
-        comp_resp = await client.post(
-            "/v1/completions",
-            json={
-                "model": model,
-                "prompt": prompt + response,
-                "max_tokens": 0,
-                "prompt_logprobs": 1,
-            },
-            headers=headers,
-        )
-        comp_resp.raise_for_status()
-
-    raw_logprobs = comp_resp.json()["choices"][0]["prompt_logprobs"]
-
-    # Skip prompt tokens and null entries; extract logprob values.
-    logprobs: list[float] = []
-    for entry in raw_logprobs[prompt_token_count:]:
-        if entry is None:
-            continue
-        top = next(iter(entry.values()))
-        logprobs.append(top["logprob"])
-    return logprobs
-
-
 async def _verify_gpu_ready(
     min_free_gb: float = FEEDBACK_MIN_FREE_VRAM_GB,
     timeout_s: float = FEEDBACK_SLEEP_VERIFY_TIMEOUT_S,
@@ -481,22 +419,12 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
         try:
             batch_samples: list[DistillBatchItem] = []
             for req in batch_requests:
-                rollout_logprobs = req.rollout_logprobs
-                if rollout_logprobs is None:
-                    phase = "logprobs"
-                    logprobs_start = time.perf_counter()
-                    vllm_model = _resolve_vllm_model_name(req.lora_id)
-                    if vllm_model is None:
-                        raise HTTPException(status_code=500, detail="rollout model resolution failed")
-                    rollout_logprobs = await _fetch_rollout_logprobs(req.prompt, req.response, vllm_model)
-                    timing_ms.logprobs += int((time.perf_counter() - logprobs_start) * 1000)
-
                 batch_samples.append(
                     DistillBatchItem(
                         prompt=req.prompt,
                         response=req.response,
                         feedback=req.feedback,
-                        rollout_logprobs=rollout_logprobs,
+                        rollout_logprobs=req.rollout_logprobs,
                     )
                 )
 

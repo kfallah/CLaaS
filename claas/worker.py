@@ -357,20 +357,17 @@ class DistillWorker:
             student_logits = student_output.logits[:, response_start - 1 : -1, :].contiguous()
             del student_output
 
-            if sample.rollout_logprobs is not None:
-                old_student_logprobs = torch.tensor(
-                    sample.rollout_logprobs,
-                    dtype=torch.float32,
-                    device=self.device,
-                ).unsqueeze(0)
-                if old_student_logprobs.shape[1] > t_resp:
-                    old_student_logprobs = old_student_logprobs[:, :t_resp]
-                elif old_student_logprobs.shape[1] < t_resp:
-                    raise ValueError(
-                        "rollout_logprobs length must match response token length"
-                    )
-            else:
-                raise ValueError("rollout_logprobs is required for distill requests")
+            old_student_logprobs = torch.tensor(
+                sample.rollout_logprobs,
+                dtype=torch.float32,
+                device=self.device,
+            ).unsqueeze(0)
+            if old_student_logprobs.shape[1] > t_resp:
+                old_student_logprobs = old_student_logprobs[:, :t_resp]
+            elif old_student_logprobs.shape[1] < t_resp:
+                raise ValueError(
+                    "rollout_logprobs length must match response token length"
+                )
 
             if config.teacher_mode == "remote":
                 if sample.teacher_result is None:

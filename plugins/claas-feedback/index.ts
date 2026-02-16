@@ -22,7 +22,7 @@ import type {
 import * as contextStore from "./src/context-store.ts";
 import { buildChatML } from "./src/chatml.ts";
 import { submitFeedback } from "./src/feedback-client.ts";
-import { appendFeedback, getPendingSize, takePendingBatch } from "./src/feedback-history-store.ts";
+import { appendFeedback, getPendingSize, takePendingBatch, requeuePendingBatch } from "./src/feedback-history-store.ts";
 
 // FIFO queue: message_received pushes sender keys, agent_end pops them.
 const pendingSenders: string[] = [];
@@ -214,11 +214,12 @@ export default function register(api: OpenClawPluginApi) {
           text: `✅ Feedback applied (${detail})`,
         };
       } catch (err: unknown) {
+        requeuePendingBatch(senderKey, batch);
         const msg = err instanceof Error ? err.message : String(err);
         console.error(
           `[claas-feedback] /feedback failed: api=${claasApiUrl} lora=${loraId} error=${msg}`,
         );
-        return { text: `\u274C Feedback failed: ${msg}` };
+        return { text: `\u274C Feedback failed (batch re-queued): ${msg}` };
       }
     },
   });

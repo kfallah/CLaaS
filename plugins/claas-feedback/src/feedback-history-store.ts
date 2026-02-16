@@ -53,6 +53,18 @@ export function takePendingBatch(sessionKey: string, batchSize: number): Feedbac
   return batch;
 }
 
+
+/**
+ * Prepend a previously dequeued batch back to pending entries for retry.
+ */
+export function requeuePendingBatch(sessionKey: string, batch: FeedbackHistoryEntry[]): void {
+  if (batch.length === 0) {
+    return;
+  }
+  const pending = pendingBySession.get(sessionKey) ?? [];
+  pendingBySession.set(sessionKey, [...batch, ...pending]);
+}
+
 /**
  * Return the current pending-buffer size for a session.
  */
