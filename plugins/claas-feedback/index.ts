@@ -4,7 +4,7 @@
  * Registers:
  * - message_received hook: pushes sender key to a queue for agent_end to consume
  * - agent_end hook: pops sender key, caches { messages } keyed by sender
- * - /feedback command: looks up cached context, builds ChatML, calls CLaaS API
+ * - /feedback command: looks up cached context, fetches raw completion from proxy, calls CLaaS API
  *
  * message_received fires synchronously before the agent processes a message,
  * and agent_end fires after, so a simple FIFO queue links the two.
@@ -19,9 +19,12 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk";
 
+import { createHash } from "node:crypto";
+
 import * as contextStore from "./src/context-store.ts";
-import { buildChatML } from "./src/chatml.ts";
+import { extractContent, fetchRawCompletion } from "./src/chatml.ts";
 import { submitFeedback } from "./src/feedback-client.ts";
+import { appendFeedback, getPendingSize, takePendingBatch, requeuePendingBatch } from "./src/feedback-history-store.ts";
 
 // FIFO queue: message_received pushes sender keys, agent_end pops them.
 const pendingSenders: string[] = [];
@@ -34,8 +37,10 @@ const redactIdentifier = (value: string): string => {
 
 interface ClaasConfig {
   claasApiUrl?: string;
+  proxyUrl?: string;
   loraId?: string;
   debug?: boolean;
+  feedbackBatchSize?: number;
 }
 
 export default function register(api: OpenClawPluginApi) {
@@ -44,8 +49,14 @@ export default function register(api: OpenClawPluginApi) {
     (typeof config.claasApiUrl === "string" && config.claasApiUrl.trim()) ||
     (typeof process.env.CLAAS_API_URL === "string" && process.env.CLAAS_API_URL.trim()) ||
     "http://claas-api:8080";
+  const proxyUrl =
+    (typeof config.proxyUrl === "string" && config.proxyUrl.trim()) ||
+    (typeof process.env.CLAAS_TINKER_PROXY_URL === "string" && process.env.CLAAS_TINKER_PROXY_URL.trim()) ||
+    (typeof process.env.CLAAS_VLLM_BASE_URL === "string" && process.env.CLAAS_VLLM_BASE_URL.trim()) ||
+    "http://tinker-proxy:8000";
   const loraId = config.loraId ?? "openclaw/assistant-latest";
   const debugEnabled = config.debug === true || process.env.CLAAS_FEEDBACK_DEBUG === "true";
+  const feedbackBatchSize = Math.max(1, config.feedbackBatchSize ?? 4);
   const logDebug = (message: string): void => {
     if (debugEnabled) {
       console.debug(message);
@@ -142,10 +153,35 @@ export default function register(api: OpenClawPluginApi) {
         };
       }
 
-      // Build ChatML prompt/response from cached messages
-      const chatML = buildChatML(cached.messages);
-      if (!chatML) {
+      // Extract the last assistant content and look up the raw completion
+      // from the inference proxy cache (keyed by SHA-256 of parsed content).
+      const lastAssistant = cached.messages
+        .slice()
+        .reverse()
+        .find((m: Record<string, unknown>) => m.role === "assistant");
+      if (!lastAssistant) {
         return { text: "No bot response found in the last conversation." };
+      }
+      const parsedContent = extractContent((lastAssistant as Record<string, unknown>).content);
+      if (!parsedContent) {
+        return { text: "No bot response found in the last conversation." };
+      }
+      const contentHash = createHash("sha256").update(parsedContent).digest("hex");
+
+      let rawPrompt: string;
+      let rawResponse: string;
+      let rolloutLogprobs: number[] | null = null;
+      try {
+        const raw = await fetchRawCompletion(proxyUrl, contentHash);
+        rawPrompt = raw.prompt;
+        rawResponse = raw.response;
+        rolloutLogprobs = raw.logprobs;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[claas-feedback] raw completion fetch failed: ${msg}`);
+        return {
+          text: `\u274C Raw completion not available. The proxy may have restarted or the completion expired.`,
+        };
       }
 
       // Send a "processing" indicator before the long-running CLaaS call
@@ -164,14 +200,35 @@ export default function register(api: OpenClawPluginApi) {
       }
 
       // Submit to CLaaS
+      const { pendingSize } = appendFeedback(senderKey, rawPrompt, rawResponse, feedbackText, rolloutLogprobs);
+      if (pendingSize < feedbackBatchSize) {
+        return {
+          text: `✅ Feedback queued (buffer: ${pendingSize}/${feedbackBatchSize})`,
+        };
+      }
+
+      const batch = takePendingBatch(senderKey, feedbackBatchSize);
+      if (batch.length !== feedbackBatchSize) {
+        throw new Error("pending feedback batch size mismatch");
+      }
+
       const startMs = Date.now();
       try {
         const result = await submitFeedback(claasApiUrl, {
-          lora_id: loraId,
-          prompt: chatML.prompt,
-          response: chatML.response,
-          feedback: feedbackText,
-          training: { teacher_mode: "self" },
+          requests: batch.map((item) => ({
+            lora_id: loraId,
+            prompt: item.prompt,
+            response: item.response,
+            feedback: item.feedback,
+            rollout_logprobs: item.rollout_logprobs,
+            training: { teacher_mode: "self" },
+          })),
+          orchestration: {
+            sleep_before: true,
+            wake_after: true,
+            wake_on_failure: true,
+            sleep_level: 1,
+          },
         });
 
         const elapsed = Date.now() - startMs;
@@ -180,20 +237,23 @@ export default function register(api: OpenClawPluginApi) {
         const meta = result.distill_result?.metadata;
         const loss = meta?.total_loss;
         const tokens = meta?.tokens_processed;
+        const remaining = getPendingSize(senderKey);
 
         let detail = `${seconds}s`;
         if (loss !== undefined) detail += ` | loss: ${loss.toFixed(4)}`;
         if (tokens !== undefined) detail += ` | ${tokens} tokens`;
+        detail += ` | buffer: ${remaining}/${feedbackBatchSize}`;
 
         return {
-          text: `\u2705 Feedback applied (${detail})`,
+          text: `✅ Feedback applied (${detail})`,
         };
       } catch (err: unknown) {
+        requeuePendingBatch(senderKey, batch);
         const msg = err instanceof Error ? err.message : String(err);
         console.error(
           `[claas-feedback] /feedback failed: api=${claasApiUrl} lora=${loraId} error=${msg}`,
         );
-        return { text: `\u274C Feedback failed: ${msg}` };
+        return { text: `\u274C Feedback failed (batch re-queued): ${msg}` };
       }
     },
   });

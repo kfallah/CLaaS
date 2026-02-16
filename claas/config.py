@@ -57,6 +57,9 @@ class TrainingDefaults:
     # Teacher scoring
     teacher_top_k: int = 100  # Number of top logprobs from teacher
 
+    # Batching
+    default_batch_size: int = 16
+
     # Optimizer
     weight_decay: float = 0.01
     beta1: float = 0.9

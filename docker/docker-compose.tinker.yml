@@ -68,6 +68,7 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - OPENCLAW_HOME=/openclaw-config
       - CLAAS_API_URL=http://claas-api:8080
+      - FEEDBACK_BATCH_SIZE=${FEEDBACK_BATCH_SIZE:-4}
     volumes:
       - openclaw-config:/openclaw-config
       - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro

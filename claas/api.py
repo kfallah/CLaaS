@@ -47,12 +47,14 @@ from .teacher import format_teacher_prompt
 from .training_engines import get_training_engine
 from .training_engines.base import EngineKind, TrainingEngine
 from .types import (
+    DistillBatchItem,
+    DistillBatchRequestPayload,
     DistillRequest,
     DistillRequestPayload,
     DistillResponse,
+    FeedbackBatchRequest,
     FeedbackLogRecord,
     FeedbackLogVllmState,
-    FeedbackRequest,
     FeedbackResponse,
     FeedbackTimingMs,
     HealthResponse,
@@ -78,9 +80,7 @@ web_app = FastAPI(
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
 VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "sk-local")
 FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
-FEEDBACK_DASHBOARD_TEMPLATE = (
-    Path(__file__).resolve().parent / "templates" / "feedback_recent" / "index.html"
-)
+FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "index.html"
 FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
 # Default "local" assumes GPU deps (torch, etc.) are available on this machine.
 # Set to "modal" for Modal deployments where the API image is CPU-only.
@@ -128,7 +128,6 @@ FEEDBACK_SLEEP_VERIFY_TIMEOUT_S = float(os.environ.get("FEEDBACK_SLEEP_VERIFY_TI
 FEEDBACK_DRAIN_TIMEOUT_S = float(os.environ.get("FEEDBACK_DRAIN_TIMEOUT_S", "30"))
 # vLLM model name for fetching rollout logprobs.
 # None = auto-derive from LoRA ID.  "" = disabled.
-VLLM_ROLLOUT_MODEL = os.environ.get("VLLM_ROLLOUT_MODEL")
 
 ALLOWED_INIT_BASE_MODELS = {
     model.strip()
@@ -234,68 +233,6 @@ async def _wait_for_vllm_idle(
             waiting,
         )
         await asyncio.sleep(0.5)
-
-
-def _resolve_vllm_model_name(lora_id: str) -> str | None:
-    """Derive the vLLM model name for a LoRA, matching _vllm_reload_lora logic.
-
-    Returns ``None`` when rollout-logprob fetching is explicitly disabled
-    (``VLLM_ROLLOUT_MODEL=""``) or when *lora_id* is empty.
-    """
-    import re
-
-    if VLLM_ROLLOUT_MODEL == "":
-        return None
-    if VLLM_ROLLOUT_MODEL is not None:
-        return VLLM_ROLLOUT_MODEL
-    return re.sub(r"[^a-zA-Z0-9._-]+", "-", lora_id.strip("/")).strip("-") or None
-
-
-async def _fetch_rollout_logprobs(
-    prompt: str,
-    response: str,
-    model: str,
-    timeout_s: float = 60.0,
-) -> list[float]:
-    """Fetch per-token logprobs for *response* from the vLLM completions API.
-
-    1. Tokenize the prompt to learn its token count.
-    2. Submit ``prompt + response`` with ``max_tokens=1`` and ``prompt_logprobs=1``.
-    3. Strip the prompt portion and extract the log-probability for each
-       response token.
-    """
-    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
-    async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
-        tok_resp = await client.post(
-            "/tokenize",
-            json={"model": model, "prompt": prompt},
-            headers=headers,
-        )
-        tok_resp.raise_for_status()
-        prompt_token_count = tok_resp.json()["count"]
-
-        comp_resp = await client.post(
-            "/v1/completions",
-            json={
-                "model": model,
-                "prompt": prompt + response,
-                "max_tokens": 1,
-                "prompt_logprobs": 1,
-            },
-            headers=headers,
-        )
-        comp_resp.raise_for_status()
-
-    raw_logprobs = comp_resp.json()["choices"][0]["prompt_logprobs"]
-
-    # Skip prompt tokens and null entries; extract logprob values.
-    logprobs: list[float] = []
-    for entry in raw_logprobs[prompt_token_count:]:
-        if entry is None:
-            continue
-        top = next(iter(entry.values()))
-        logprobs.append(top["logprob"])
-    return logprobs
 
 
 async def _verify_gpu_ready(
@@ -431,8 +368,7 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
         HTML table rows with expandable detail sections.
     """
     rows: list[str] = []
-    for index, record in enumerate(records):
-        detail_row_id = f"feedback-detail-{index}"
+    for record_index, record in enumerate(records):
         metrics_payload = {}
         if record.distill_result is not None:
             metrics_payload = record.distill_result.metadata
@@ -440,54 +376,61 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
         metrics_json = json.dumps(metrics_payload, indent=2, sort_keys=True)
         vllm_json = json.dumps(record.vllm.model_dump(mode="json"), indent=2, sort_keys=True)
         error_value = record.error or ""
-        prompt_preview = _feedback_prompt_preview(record.request.prompt)
+        batch_size = len(record.requests)
+        for item_index, req in enumerate(record.requests):
+            detail_row_id = f"feedback-detail-{record_index}-{item_index}"
+            prompt_preview = _feedback_prompt_preview(req.prompt)
 
-        rows.append(
-            """
-            <tr>
-              <td>{request_id}<br><small>{timestamp}</small></td>
-              <td>{status} ({phase})</td>
-              <td>{lora_id}</td>
-              <td><div class="prompt-preview">{prompt_preview}</div></td>
-              <td>{distill_ms}</td>
-              <td>{total_ms}</td>
-              <td><button type="button" onclick="toggleDetails('{detail_row_id}', this)">Expand</button></td>
-            </tr>
-            <tr id="{detail_row_id}" class="detail-row">
-              <td colspan="7">
-                <div class="detail-panel">
-                  <section><h3>Prompt</h3><pre>{prompt}</pre></section>
-                  <section><h3>Response</h3><pre>{response}</pre></section>
-                  <section><h3>Feedback</h3><pre>{feedback}</pre></section>
-                  <section><h3>Timing (ms)</h3><pre>{timing_json}</pre></section>
-                  <section><h3>Training metrics</h3><pre>{metrics_json}</pre></section>
-                  <section><h3>vLLM orchestration</h3><pre>{vllm_json}</pre></section>
-                  <section><h3>Error</h3><pre>{error_value}</pre></section>
-                </div>
-              </td>
-            </tr>
-            """.format(
-                request_id=html.escape(record.request_id),
-                timestamp=html.escape(record.timestamp_utc),
-                status=html.escape(record.status),
-                phase=html.escape(record.phase),
-                lora_id=html.escape(record.lora_id),
-                prompt_preview=html.escape(prompt_preview),
-                distill_ms=record.timing_ms.distill,
-                total_ms=record.timing_ms.total,
-                detail_row_id=detail_row_id,
-                prompt=html.escape(record.request.prompt),
-                response=html.escape(record.request.response),
-                feedback=html.escape(record.request.feedback),
-                timing_json=html.escape(timing_json),
-                metrics_json=html.escape(metrics_json),
-                vllm_json=html.escape(vllm_json),
-                error_value=html.escape(error_value),
+            rows.append(
+                """
+                <tr>
+                  <td>{request_id}<br><small>{timestamp}</small></td>
+                  <td>{item_number}/{batch_size}</td>
+                  <td>{status} ({phase})</td>
+                  <td>{lora_id}</td>
+                  <td><div class="prompt-preview">{prompt_preview}</div></td>
+                  <td>{distill_ms}</td>
+                  <td>{total_ms}</td>
+                  <td><button type="button" onclick="toggleDetails('{detail_row_id}', this)">Expand</button></td>
+                </tr>
+                <tr id="{detail_row_id}" class="detail-row">
+                  <td colspan="8">
+                    <div class="detail-panel">
+                      <section><h3>Batch Item</h3><pre>{item_number}/{batch_size}</pre></section>
+                      <section><h3>Prompt</h3><pre>{prompt}</pre></section>
+                      <section><h3>Response</h3><pre>{response}</pre></section>
+                      <section><h3>Feedback</h3><pre>{feedback}</pre></section>
+                      <section><h3>Timing (ms)</h3><pre>{timing_json}</pre></section>
+                      <section><h3>Training metrics</h3><pre>{metrics_json}</pre></section>
+                      <section><h3>vLLM orchestration</h3><pre>{vllm_json}</pre></section>
+                      <section><h3>Error</h3><pre>{error_value}</pre></section>
+                    </div>
+                  </td>
+                </tr>
+                """.format(
+                    request_id=html.escape(record.request_id),
+                    timestamp=html.escape(record.timestamp_utc),
+                    item_number=item_index + 1,
+                    batch_size=batch_size,
+                    status=html.escape(record.status),
+                    phase=html.escape(record.phase),
+                    lora_id=html.escape(record.lora_id),
+                    prompt_preview=html.escape(prompt_preview),
+                    distill_ms=record.timing_ms.distill,
+                    total_ms=record.timing_ms.total,
+                    detail_row_id=detail_row_id,
+                    prompt=html.escape(req.prompt),
+                    response=html.escape(req.response),
+                    feedback=html.escape(req.feedback),
+                    timing_json=html.escape(timing_json),
+                    metrics_json=html.escape(metrics_json),
+                    vllm_json=html.escape(vllm_json),
+                    error_value=html.escape(error_value),
+                )
             )
-        )
 
     if not rows:
-        return '<tr><td colspan="7">No feedback records found.</td></tr>'
+        return '<tr><td colspan="8">No feedback records found.</td></tr>'
     return "\n".join(rows)
 
 
@@ -506,7 +449,7 @@ def _feedback_dashboard_html(records: list[FeedbackLogRecord]) -> str:
 
 
 
-async def _run_distill(payload: DistillRequestPayload) -> DistillResponse:
+async def _run_distill(payload: DistillBatchRequestPayload) -> DistillResponse:
     """Execute a distill request via configured execution backend."""
     engine = _get_training_engine()
     return await engine.distill(payload)
@@ -539,7 +482,21 @@ async def distill(request: DistillRequest) -> DistillResponse:
                 detail=f"LoRA not found: {request.lora_id}",
             )
 
-        payload = DistillRequestPayload.model_validate(request.model_dump())
+        single_payload = DistillRequestPayload.model_validate(request.model_dump())
+        payload = DistillBatchRequestPayload(
+            lora_id=single_payload.lora_id,
+            training=single_payload.training,
+            save_in_place=single_payload.save_in_place,
+            samples=[
+                DistillBatchItem(
+                    prompt=single_payload.prompt,
+                    response=single_payload.response,
+                    feedback=single_payload.feedback,
+                    rollout_logprobs=single_payload.rollout_logprobs,
+                    teacher_result=single_payload.teacher_result,
+                )
+            ],
+        )
 
         # Remote teacher is optional; self-distillation is the default path.
         if request.training.teacher_mode == "remote" and _uses_modal_teacher():
@@ -555,7 +512,7 @@ async def distill(request: DistillRequest) -> DistillResponse:
                     status_code=502,
                     detail="Remote teacher returned empty scores",
                 )
-            payload = DistillRequestPayload.model_validate({**payload.model_dump(), "teacher_result": teacher_scored[0]})
+            payload.samples[0] = payload.samples[0].model_copy(update={"teacher_result": teacher_scored[0]})
 
         result = await _run_distill(payload)
 
@@ -571,10 +528,9 @@ async def distill(request: DistillRequest) -> DistillResponse:
 
 
 @web_app.post("/v1/feedback", response_model=FeedbackResponse)
-async def feedback(request: FeedbackRequest) -> FeedbackResponse:
-    """Run feedback orchestration: pause vLLM, distill in-place, resume vLLM."""
+async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
+    """Run one explicit batched feedback update without API-side buffering."""
     request_id = uuid.uuid4().hex
-    lock_acquired = False
     slept = False
     woke = False
     phase = "validate"
@@ -583,93 +539,108 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
     log_path = ""
     timing_ms = FeedbackTimingMs()
     started_total = time.perf_counter()
+    batch_requests = request.requests
+
+    if len(batch_requests) == 0:
+        raise HTTPException(status_code=422, detail="requests must contain at least one item")
+
+    first_request = batch_requests[0]
+    lora_id = first_request.lora_id
+    training_ref = first_request.training.model_dump(mode="json")
+
+    for req in batch_requests[1:]:
+        if req.lora_id != lora_id:
+            raise HTTPException(status_code=400, detail="all requests must use the same lora_id")
+        if req.training.model_dump(mode="json") != training_ref:
+            raise HTTPException(status_code=400, detail="all requests must use the same training config")
 
     try:
-        exists_payload = await _get_training_engine().lora_exists(request.lora_id)
+        exists_payload = await _get_training_engine().lora_exists(lora_id)
         if not exists_payload.exists:
-            raise HTTPException(status_code=404, detail=f"LoRA not found: {request.lora_id}")
+            raise HTTPException(status_code=404, detail=f"LoRA not found: {lora_id}")
 
-        lock_key = await _get_feedback_lock_key(request.lora_id)
+        lock_key = await _get_feedback_lock_key(lora_id)
         lock = await _get_feedback_lock(lock_key)
-
         await asyncio.wait_for(lock.acquire(), timeout=FEEDBACK_LOCK_TIMEOUT_S)
-        lock_acquired = True
 
-        if request.orchestration.sleep_before and _get_engine_kind() != "tinker":
-            phase = "drain"
-            try:
-                await _wait_for_vllm_idle()
-            except (TimeoutError, httpx.HTTPError) as e:
-                raise HTTPException(status_code=503, detail=f"vLLM not idle: {e}") from e
-
-            if request.rollout_logprobs is None:
-                phase = "logprobs"
-                logprobs_start = time.perf_counter()
-                vllm_model = _resolve_vllm_model_name(request.lora_id)
-                if vllm_model:
-                    try:
-                        fetched = await _fetch_rollout_logprobs(
-                            request.prompt, request.response, vllm_model,
-                        )
-                        request = request.model_copy(update={"rollout_logprobs": fetched})
-                    except (httpx.HTTPError, ValueError, KeyError) as e:
-                        logger.warning("Failed to fetch rollout logprobs: %s", e)
-                timing_ms.logprobs = int((time.perf_counter() - logprobs_start) * 1000)
-
-            phase = "sleep"
-            sleep_start = time.perf_counter()
-            await _vllm_post(
-                "/pause",
-                params={"level": request.orchestration.sleep_level},
-            )
-            await _verify_gpu_ready()
-            timing_ms.sleep = int((time.perf_counter() - sleep_start) * 1000)
-            slept = True
-
-        phase = "distill"
-        distill_start = time.perf_counter()
-        payload = DistillRequestPayload.model_validate(request.model_dump())
-        payload = DistillRequestPayload.model_validate({**payload.model_dump(), "save_in_place": True})
-
-        if request.training.teacher_mode == "remote" and _uses_modal_teacher():
-            teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-            teacher_prompt = format_teacher_prompt(request.prompt, request.feedback)
-            teacher_scored = await teacher_score_fn.remote.aio(
-                prompts=[teacher_prompt],
-                completions=[request.response],
-                top_k=request.training.teacher_top_k,
-            )
-            if not teacher_scored or not teacher_scored[0]:
-                raise HTTPException(
-                    status_code=502,
-                    detail="Remote teacher returned empty scores",
+        try:
+            batch_samples: list[DistillBatchItem] = []
+            for req in batch_requests:
+                batch_samples.append(
+                    DistillBatchItem(
+                        prompt=req.prompt,
+                        response=req.response,
+                        feedback=req.feedback,
+                        rollout_logprobs=req.rollout_logprobs,
+                    )
                 )
-            payload = DistillRequestPayload.model_validate({**payload.model_dump(), "teacher_result": teacher_scored[0]})
 
-        distill_result = await _run_distill(payload)
-        timing_ms.distill = int((time.perf_counter() - distill_start) * 1000)
+            if request.orchestration.sleep_before and _get_engine_kind() != "tinker":
+                phase = "drain"
+                try:
+                    await _wait_for_vllm_idle()
+                except (TimeoutError, httpx.HTTPError) as e:
+                    raise HTTPException(status_code=503, detail=f"vLLM not idle: {e}") from e
 
-        if request.orchestration.wake_after and _get_engine_kind() != "tinker":
-            phase = "wake"
-            wake_start = time.perf_counter()
-            await _vllm_post("/resume")
-            await _vllm_reload_lora(request.lora_id)
-            timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
-            woke = True
+                phase = "sleep"
+                sleep_start = time.perf_counter()
+                await _vllm_post(
+                    "/pause",
+                    params={"level": request.orchestration.sleep_level},
+                )
+                await _verify_gpu_ready()
+                timing_ms.sleep = int((time.perf_counter() - sleep_start) * 1000)
+                slept = True
 
-        if _get_engine_kind() == "tinker" and distill_result is not None:
-            sampler_path = (distill_result.metadata or {}).get("sampler_weights_path")
-            if sampler_path:
+            phase = "distill"
+            distill_start = time.perf_counter()
+            payload = DistillBatchRequestPayload(
+                lora_id=lora_id,
+                training=first_request.training,
+                samples=batch_samples,
+                save_in_place=True,
+            )
+
+            if first_request.training.teacher_mode == "remote" and _uses_modal_teacher():
+                teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
+                teacher_scored = await teacher_score_fn.remote.aio(
+                    prompts=[format_teacher_prompt(s.prompt, s.feedback) for s in batch_samples],
+                    completions=[s.response for s in batch_samples],
+                    top_k=first_request.training.teacher_top_k,
+                )
+                if not teacher_scored or len(teacher_scored) != len(batch_samples):
+                    raise HTTPException(status_code=502, detail="Remote teacher returned invalid scores")
+                payload.samples = [
+                    sample_item.model_copy(update={"teacher_result": teacher_scored[idx]})
+                    for idx, sample_item in enumerate(payload.samples)
+                ]
+
+            distill_result = await _run_distill(payload)
+            timing_ms.distill = int((time.perf_counter() - distill_start) * 1000)
+
+            if request.orchestration.wake_after and _get_engine_kind() != "tinker":
                 phase = "wake"
                 wake_start = time.perf_counter()
-                await _tinker_proxy_refresh(str(sampler_path))
+                await _vllm_post("/resume")
+                await _vllm_reload_lora(lora_id)
                 timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
                 woke = True
+
+            if _get_engine_kind() == "tinker" and distill_result is not None:
+                sampler_path = (distill_result.metadata or {}).get("sampler_weights_path")
+                if sampler_path:
+                    phase = "wake"
+                    wake_start = time.perf_counter()
+                    await _tinker_proxy_refresh(str(sampler_path))
+                    timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
+                    woke = True
+        finally:
+            lock.release()
 
         timing_ms.total = int((time.perf_counter() - started_total) * 1000)
     except asyncio.TimeoutError:
         phase = "lock"
-        error_message = f"Timed out waiting for lock on LoRA '{request.lora_id}'"
+        error_message = f"Timed out waiting for lock on LoRA '{lora_id}'"
         raise HTTPException(status_code=409, detail=error_message) from None
     except HTTPException as e:
         error_message = str(e.detail)
@@ -683,7 +654,6 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             detail=f"Feedback update failed in phase '{phase}': {error_message}",
         ) from e
     finally:
-        # Wake vLLM if we slept it and haven't woken it yet.
         if (
             slept
             and not woke
@@ -698,27 +668,31 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
                 logger.warning("Feedback %s: failed to wake vLLM after error: %s", request_id, wake_err)
 
         timing_ms.total = int((time.perf_counter() - started_total) * 1000)
-        if lock_acquired:
-            lock.release()
 
         log_record = FeedbackLogRecord(
             request_id=request_id,
             timestamp_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             status="ok" if error_message is None else "error",
             phase=phase,
-            lora_id=request.lora_id,
-            teacher_mode=request.training.teacher_mode,
-            request=request,
+            lora_id=lora_id,
+            teacher_mode=first_request.training.teacher_mode,
+            requests=batch_requests,
             vllm=FeedbackLogVllmState(slept=slept, woke=woke),
             timing_ms=timing_ms,
+            batch_samples=[
+                DistillBatchItem(
+                    prompt=req.prompt,
+                    response=req.response,
+                    feedback=req.feedback,
+                    rollout_logprobs=req.rollout_logprobs,
+                )
+                for req in batch_requests
+            ],
             distill_result=distill_result,
             error=error_message,
         )
         try:
-            log_path = await asyncio.to_thread(
-                _write_feedback_log,
-                log_record.model_dump(mode="json"),
-            )
+            log_path = await asyncio.to_thread(_write_feedback_log, log_record.model_dump(mode="json"))
         except (OSError, TypeError, ValueError):
             logger.warning("Failed to write feedback log for request %s", request_id, exc_info=True)
             log_path = ""
@@ -726,11 +700,12 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
     return FeedbackResponse(
         status="ok",
         request_id=request_id,
-        lora_id=distill_result.lora_id if distill_result else request.lora_id,
+        lora_id=distill_result.lora_id if distill_result else lora_id,
         distill_result=distill_result,
         vllm=FeedbackLogVllmState(slept=slept, woke=woke),
         feedback_log_path=log_path,
         timing_ms=timing_ms,
+        batch_size=len(batch_requests),
     )
 
 
@@ -839,8 +814,8 @@ async def health_check() -> HealthResponse:
     return HealthResponse(status=status, worker=worker, teacher=teacher)
 
 
-@web_app.get("/v1/feedback/recent", response_class=HTMLResponse)
-async def recent_feedback_dashboard(limit: int = Query(default=20, ge=1, le=200)) -> HTMLResponse:
+@web_app.get("/v1/dashboard", response_class=HTMLResponse)
+async def dashboard(limit: int = Query(default=20, ge=1, le=200)) -> HTMLResponse:
     """Serve a minimal dashboard of recent feedback records.
 
     Args:

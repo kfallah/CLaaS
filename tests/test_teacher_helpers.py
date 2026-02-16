@@ -119,4 +119,4 @@ class TestParseTeacherResult:
         from claas.teacher import parse_teacher_result
 
         with pytest.raises(ValueError, match="empty top-K"):
-            parse_teacher_result([{"indices": [], "logprobs": []}])
+            parse_teacher_result([{"indices": [], "logprobs": []}])  # type: ignore[list-item]

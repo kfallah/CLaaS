@@ -195,6 +195,7 @@ class TestCreateInitialLora:
 
     def test_creates_config_file(self, tmp_path, monkeypatch):
         """Creates adapter_config.json with correct content."""
+        pytest.importorskip("transformers")
         from claas import storage
 
         class MockVolume:

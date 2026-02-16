@@ -11,7 +11,12 @@ torch = pytest.importorskip("torch")
 
 from claas import storage  # noqa: E402
 from claas.training_engines.local.engine import LocalTrainingEngine  # noqa: E402
-from claas.types import DistillRequestPayload, LoraInitRequest, TrainingConfig  # noqa: E402
+from claas.types import (  # noqa: E402
+    DistillBatchItem,
+    DistillBatchRequestPayload,
+    LoraInitRequest,
+    TrainingConfig,
+)
 
 
 @dataclass
@@ -86,12 +91,17 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
 
     distill_response = asyncio.run(
         local_engine.distill(
-            DistillRequestPayload(
+            DistillBatchRequestPayload(
                 lora_id=lora_id,
-                prompt="prompt",
-                response="response",
-                feedback="feedback",
                 training=TrainingConfig(),
+                samples=[
+                    DistillBatchItem(
+                        prompt="prompt",
+                        response="response",
+                        feedback="feedback",
+                        rollout_logprobs=[-0.1],
+                    )
+                ],
             )
         )
     )
@@ -120,12 +130,17 @@ def test_local_engine_cleanup_failure_is_ignored(monkeypatch):
 
     result = asyncio.run(
         LocalTrainingEngine().distill(
-            DistillRequestPayload(
+            DistillBatchRequestPayload(
                 lora_id="user/integration",
-                prompt="prompt",
-                response="response",
-                feedback="feedback",
                 training=TrainingConfig(),
+                samples=[
+                    DistillBatchItem(
+                        prompt="prompt",
+                        response="response",
+                        feedback="feedback",
+                        rollout_logprobs=[-0.1],
+                    )
+                ],
             )
         )
     )

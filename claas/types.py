@@ -115,11 +115,10 @@ class DistillRequest(BaseModel):
         min_length=1,
         description="Feedback about response quality",
     )
-    rollout_logprobs: list[float] | None = Field(
-        default=None,
-        description="Log-probabilities from the inference server that generated the rollout. "
-        "Required for proper off-policy IS correction. If not provided, logprobs are computed "
-        "from the current model (which is incorrect for off-policy learning).",
+    rollout_logprobs: list[float] = Field(
+        ...,
+        min_length=1,
+        description="Log-probabilities from the inference server that generated the rollout.",
     )
     training: TrainingConfig = Field(
         default_factory=TrainingConfig,
@@ -141,9 +140,28 @@ class DistillRequestPayload(BaseModel):
     prompt: str
     response: str
     feedback: str
-    rollout_logprobs: list[float] | None = None
+    rollout_logprobs: list[float]
     training: TrainingConfig
     teacher_result: list[TeacherTokenLogprobs] | None = None
+    save_in_place: bool = False
+
+
+class DistillBatchItem(BaseModel):
+    """One prompt/response/feedback sample used in batched distillation."""
+
+    prompt: str
+    response: str
+    feedback: str
+    rollout_logprobs: list[float]
+    teacher_result: list[TeacherTokenLogprobs] | None = None
+
+
+class DistillBatchRequestPayload(BaseModel):
+    """Typed batched payload forwarded to the training engine."""
+
+    lora_id: str
+    training: TrainingConfig
+    samples: list[DistillBatchItem] = Field(min_length=1)
     save_in_place: bool = False
 
 
@@ -192,18 +210,10 @@ class FeedbackOrchestration(BaseModel):
     sleep_level: int = Field(default=1, ge=1, le=2)
 
 
-class FeedbackRequest(BaseModel):
-    """Request for a feedback-triggered in-place LoRA update."""
+class FeedbackBatchRequest(BaseModel):
+    """Request for a feedback-triggered batched LoRA update."""
 
-    lora_id: str = Field(
-        ...,
-        description="Fixed LoRA identifier to update in place",
-    )
-    prompt: str = Field(..., min_length=1)
-    response: str = Field(..., min_length=1)
-    feedback: str = Field(..., min_length=1)
-    rollout_logprobs: list[float] | None = Field(default=None)
-    training: TrainingConfig = Field(default_factory=TrainingConfig)
+    requests: list[DistillRequest] = Field(min_length=1)
     orchestration: FeedbackOrchestration = Field(default_factory=FeedbackOrchestration)
 
 
@@ -235,6 +245,7 @@ class FeedbackResponse(BaseModel):
     vllm: FeedbackLogVllmState
     feedback_log_path: str
     timing_ms: FeedbackTimingMs
+    batch_size: int
 
 
 class FeedbackLogRecord(BaseModel):
@@ -246,9 +257,10 @@ class FeedbackLogRecord(BaseModel):
     phase: str
     lora_id: str
     teacher_mode: str
-    request: FeedbackRequest
+    requests: list[DistillRequest]
     vllm: FeedbackLogVllmState
     timing_ms: FeedbackTimingMs
+    batch_samples: list[DistillBatchItem]
     distill_result: DistillResponse | None = None
     error: str | None = None
 

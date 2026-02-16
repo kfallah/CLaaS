@@ -22,6 +22,8 @@ import modal
 if TYPE_CHECKING:
     import torch
 
+    from claas.types import TeacherTokenLogprobs
+
 
 class TokenLogprobs(TypedDict):
     """Log-probabilities for a single token position."""
@@ -288,13 +290,13 @@ def format_teacher_prompt(
 
 
 def parse_teacher_result(
-    result: list[TokenLogprobs],
+    result: list[TokenLogprobs] | list["TeacherTokenLogprobs"],
     device: str = "cuda",
 ) -> tuple["torch.Tensor", "torch.Tensor"]:
     """Parse teacher scoring result into tensors.
 
     Args:
-        result: List of TokenLogprobs from score_tokens
+        result: List of TokenLogprobs (dict) or TeacherTokenLogprobs (Pydantic)
         device: Device to place tensors on
 
     Returns:
@@ -307,8 +309,14 @@ def parse_teacher_result(
 
     import torch
 
+    def _get(pos: object, key: str) -> list[int] | list[float]:
+        """Access field by key (dict) or attribute (Pydantic)."""
+        if isinstance(pos, dict):
+            return pos[key]  # type: ignore[return-value]
+        return getattr(pos, key)
+
     # Find max K across positions
-    max_k = max(len(pos["indices"]) for pos in result)
+    max_k = max(len(_get(pos, "indices")) for pos in result)
     if max_k == 0:
         raise ValueError("All teacher positions have empty top-K results")
 
@@ -319,10 +327,12 @@ def parse_teacher_result(
     teacher_indices = torch.zeros((T, max_k), dtype=torch.long, device=device)
 
     for t, pos in enumerate(result):
-        k = len(pos["indices"])
+        indices = _get(pos, "indices")
+        logprobs = _get(pos, "logprobs")
+        k = len(indices)
         if k > 0:
-            teacher_indices[t, :k] = torch.tensor(pos["indices"], dtype=torch.long, device=device)
-            teacher_logprobs[t, :k] = torch.tensor(pos["logprobs"], dtype=torch.float, device=device)
+            teacher_indices[t, :k] = torch.tensor(indices, dtype=torch.long, device=device)
+            teacher_logprobs[t, :k] = torch.tensor(logprobs, dtype=torch.float, device=device)
 
     return teacher_logprobs, teacher_indices
 

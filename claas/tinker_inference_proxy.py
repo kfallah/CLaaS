@@ -13,11 +13,15 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import logging
 import os
+import re
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +32,8 @@ from pydantic import BaseModel
 from tinker import types as T
 from tinker_cookbook import model_info
 from tinker_cookbook.renderers import Message, Renderer, get_renderer
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
@@ -40,8 +46,61 @@ _BASE_MODEL = os.environ.get("CLAAS_TINKER_BASE_MODEL", "gpt-oss/GPT-OSS-120B")
 
 
 # ---------------------------------------------------------------------------
+# Fallback renderer using the tokenizer's built-in chat template
+# ---------------------------------------------------------------------------
+
+class _TokenizerChatRenderer:
+    """Minimal renderer that delegates to ``tokenizer.apply_chat_template``.
+
+    Used when *tinker_cookbook* doesn't have a dedicated renderer for the model.
+    """
+
+    def __init__(self, tokenizer: PreTrainedTokenizerBase) -> None:
+        self._tokenizer = tokenizer
+
+    def build_generation_prompt(self, messages: list[Message]) -> T.ModelInput:
+        dicts = [{"role": m["role"], "content": m.get("content", "")} for m in messages]
+        result = self._tokenizer.apply_chat_template(
+            dicts, add_generation_prompt=True, tokenize=True,
+        )
+        # apply_chat_template may return a plain list[int] or a BatchEncoding
+        if isinstance(result, list):
+            token_ids: list[int] = result  # type: ignore[assignment]
+        else:
+            token_ids = result["input_ids"]  # type: ignore[index]
+        return T.ModelInput.from_ints(token_ids)  # type: ignore[arg-type]
+
+    def parse_response(self, tokens: list[int]) -> tuple[dict[str, str], list[Any]]:
+        text = self._tokenizer.decode(tokens, skip_special_tokens=True)
+        return {"role": "assistant", "content": text}, []
+
+    def get_stop_sequences(self) -> list[str]:
+        seqs: list[str] = []
+        for attr in ("eos_token",):
+            tok = getattr(self._tokenizer, attr, None)
+            if tok:
+                seqs.append(tok)
+        return seqs
+
+
+# ---------------------------------------------------------------------------
 # Lazy singleton for the sampling client
 # ---------------------------------------------------------------------------
+
+def _make_renderer(
+    base_model: str, tokenizer: PreTrainedTokenizerBase
+) -> Renderer | _TokenizerChatRenderer:
+    """Return a tinker_cookbook renderer, falling back to the tokenizer's chat template."""
+    try:
+        renderer_name = model_info.get_recommended_renderer_name(base_model)
+        return get_renderer(renderer_name, tokenizer=tokenizer)  # type: ignore[arg-type]
+    except (ValueError, KeyError):
+        logger.warning(
+            "No tinker_cookbook renderer for %s; falling back to tokenizer chat template",
+            base_model,
+        )
+        return _TokenizerChatRenderer(tokenizer)
+
 
 class _SamplerHolder:
     """Holds a lazily-initialized Tinker SamplingClient and tokenizer."""
@@ -50,7 +109,7 @@ class _SamplerHolder:
         self._service: tinker.ServiceClient | None = None
         self._sampler: tinker.SamplingClient | None = None
         self._tokenizer: PreTrainedTokenizerBase | None = None
-        self._renderer: Renderer | None = None
+        self._renderer: Renderer | _TokenizerChatRenderer | None = None
         self._model_path: str | None = None
         self._lock = threading.Lock()
 
@@ -65,8 +124,7 @@ class _SamplerHolder:
             self._sampler = self._service.create_sampling_client(base_model=_BASE_MODEL)
             self._tokenizer = self._sampler.get_tokenizer()
 
-            renderer_name = model_info.get_recommended_renderer_name(_BASE_MODEL)
-            self._renderer = get_renderer(renderer_name, tokenizer=self._tokenizer)
+            self._renderer = _make_renderer(_BASE_MODEL, self._tokenizer)
 
     @property
     def sampler(self) -> tinker.SamplingClient:
@@ -81,7 +139,7 @@ class _SamplerHolder:
         return self._tokenizer
 
     @property
-    def renderer(self) -> Renderer:
+    def renderer(self) -> Renderer | _TokenizerChatRenderer:
         self._ensure()
         assert self._renderer is not None
         return self._renderer
@@ -99,12 +157,71 @@ class _SamplerHolder:
             else:
                 self._sampler = self._service.create_sampling_client(base_model=_BASE_MODEL)
             self._tokenizer = self._sampler.get_tokenizer()
-            renderer_name = model_info.get_recommended_renderer_name(_BASE_MODEL)
-            self._renderer = get_renderer(renderer_name, tokenizer=self._tokenizer)
+            self._renderer = _make_renderer(_BASE_MODEL, self._tokenizer)
             self._model_path = model_path
 
 
 _holder = _SamplerHolder()
+
+
+# ---------------------------------------------------------------------------
+# Raw completion cache
+# ---------------------------------------------------------------------------
+
+_CACHE_MAX_SIZE = int(os.environ.get("CLAAS_COMPLETION_CACHE_SIZE", "100"))
+_CACHE_TTL_SECS = 3600  # 1 hour
+
+
+class _CompletionCacheEntry:
+    __slots__ = ("prompt", "response", "token_ids", "logprobs", "created_at")
+
+    def __init__(
+        self,
+        prompt: str,
+        response: str,
+        token_ids: list[int],
+        logprobs: list[float] | None,
+    ) -> None:
+        self.prompt = prompt
+        self.response = response
+        self.token_ids = token_ids
+        self.logprobs = logprobs
+        self.created_at = time.monotonic()
+
+    def is_expired(self) -> bool:
+        return (time.monotonic() - self.created_at) > _CACHE_TTL_SECS
+
+
+class _CompletionCache:
+    """FIFO cache keyed by SHA-256 of parsed content text."""
+
+    def __init__(self, max_size: int = _CACHE_MAX_SIZE) -> None:
+        self._store: OrderedDict[str, _CompletionCacheEntry] = OrderedDict()
+        self._max_size = max_size
+        self._lock = threading.Lock()
+
+    def put(self, content_hash: str, entry: _CompletionCacheEntry) -> None:
+        with self._lock:
+            if content_hash in self._store:
+                self._store.move_to_end(content_hash)
+                self._store[content_hash] = entry
+            else:
+                self._store[content_hash] = entry
+                while len(self._store) > self._max_size:
+                    self._store.popitem(last=False)
+
+    def get(self, content_hash: str) -> _CompletionCacheEntry | None:
+        with self._lock:
+            entry = self._store.get(content_hash)
+            if entry is None:
+                return None
+            if entry.is_expired():
+                del self._store[content_hash]
+                return None
+            return entry
+
+
+_completion_cache = _CompletionCache()
 
 
 async def _sample_async(
@@ -188,6 +305,22 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
     seq = resp.sequences[0]
     text_msg, _ = renderer.parse_response(seq.tokens)
     content = text_msg.get("content", "") if isinstance(text_msg, dict) else str(text_msg)
+    content = _extract_final_channel(content)
+
+    # Cache raw completion for training pipeline retrieval
+    tokenizer = _holder.tokenizer
+    raw_completion_text = tokenizer.decode(seq.tokens, skip_special_tokens=False)
+    prompt_text = tokenizer.decode(model_input.to_ints(), skip_special_tokens=False)
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    _completion_cache.put(
+        content_hash,
+        _CompletionCacheEntry(
+            prompt=prompt_text,
+            response=f"<|im_start|>assistant\n{raw_completion_text}<|im_end|>",
+            token_ids=list(seq.tokens),
+            logprobs=list(seq.logprobs) if seq.logprobs is not None else None,
+        ),
+    )
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
@@ -282,6 +415,25 @@ async def sampler_status() -> dict[str, object]:
     return {"model_path": _holder._model_path, "base_model": _BASE_MODEL}
 
 
+@app.get("/v1/completions/raw")
+async def get_raw_completion(content_hash: str) -> dict[str, object]:
+    """Retrieve cached raw completion by SHA-256 hash of parsed content text."""
+    entry = _completion_cache.get(content_hash)
+    if entry is None:
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(  # type: ignore[return-value]
+            status_code=404,
+            content={"error": "No cached completion found for this content hash"},
+        )
+    return {
+        "prompt": entry.prompt,
+        "response": entry.response,
+        "token_ids": entry.token_ids,
+        "logprobs": entry.logprobs,
+    }
+
+
 @app.get("/v1/models")
 async def list_models() -> dict[str, object]:
     return {
@@ -341,6 +493,34 @@ def _stream_chat_response(
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+_FINAL_CHANNEL_RE = re.compile(
+    r"<\|channel\|>final<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|$)",
+    re.DOTALL,
+)
+_ANALYSIS_CHANNEL_RE = re.compile(
+    r"<\|channel\|>analysis<\|message\|>",
+)
+
+
+def _extract_final_channel(text: str) -> str:
+    """Extract the ``final`` channel content from GPT-OSS style output.
+
+    GPT-OSS generates ``<|channel|>analysis<|message|>...<|end|>
+    <|start|>assistant<|channel|>final<|message|>...``.  Only the *final*
+    channel should be shown to the user.  If the model ran out of tokens
+    before producing a ``final`` channel, return an empty string rather
+    than leaking the raw analysis text.
+    """
+    m = _FINAL_CHANNEL_RE.search(text)
+    if m:
+        return m.group(1).strip()
+    # If the text contains an analysis channel but no final channel,
+    # the model ran out of tokens mid-reasoning — return empty.
+    if _ANALYSIS_CHANNEL_RE.search(text):
+        return ""
+    return text
 
 
 def _coerce_content(content: Any) -> str:

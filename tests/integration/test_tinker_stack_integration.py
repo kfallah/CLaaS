@@ -142,11 +142,15 @@ class TestTinkerStackRoundTrip:
                 )
 
                 feedback_payload = {
-                    "lora_id": lora_id,
-                    "prompt": user_prompt,
-                    "response": response_content,
-                    "feedback": feedback_text,
-                    "training": {"teacher_mode": "self"},
+                    "requests": [
+                        {
+                            "lora_id": lora_id,
+                            "prompt": user_prompt,
+                            "response": response_content,
+                            "feedback": feedback_text,
+                            "training": {"teacher_mode": "self"},
+                        },
+                    ],
                     "orchestration": {
                         "sleep_before": False,
                         "wake_after": False,
@@ -308,11 +312,15 @@ class TestOpenClawEndToEnd:
                 )
 
                 feedback_payload = {
-                    "lora_id": lora_id,
-                    "prompt": user_prompt,
-                    "response": response_content,
-                    "feedback": feedback_text,
-                    "training": {"teacher_mode": "self"},
+                    "requests": [
+                        {
+                            "lora_id": lora_id,
+                            "prompt": user_prompt,
+                            "response": response_content,
+                            "feedback": feedback_text,
+                            "training": {"teacher_mode": "self"},
+                        },
+                    ],
                     "orchestration": {
                         "sleep_before": False,
                         "wake_after": False,
