@@ -43,11 +43,11 @@ def state_file(tmp_path):
 def tinker_env(state_file):
     """Point all tinker state operations at a temp file for the test duration.
 
-    Patches ``_DEFAULT_STATE_PATH`` so every call to ``get_entry``,
+    Patches ``_state_path()`` so every call to ``get_entry``,
     ``set_tinker_path``, etc. (even without an explicit ``path=``)
     reads/writes the temp file.
     """
-    with patch("claas.training.engine.tinker.state._DEFAULT_STATE_PATH", state_file):
+    with patch("claas.training.engine.tinker.state._state_path", return_value=state_file):
         yield state_file
 
 
@@ -59,7 +59,17 @@ def tinker_engine(tinker_env):
     routed to the temp state file via ``tinker_env``.
     """
     pytest.importorskip("tinker")
-    with patch.dict(os.environ, {"CLAAS_TINKER_API_KEY": "fake-key"}):
+    from claas.core.config import TinkerConfig
+
+    fake_cfg = TinkerConfig(
+        mode="tinker",
+        tinker_api_key="fake-key",
+        tinker_base_model="gpt-oss/GPT-OSS-120B",
+        tinker_state_path=tinker_env,
+        vllm_base_url="http://127.0.0.1:8000",
+        vllm_api_key="sk-local",
+    )
+    with patch("claas.training.engine.tinker.engine.get_config", return_value=fake_cfg):
         from claas.training.engine.tinker.engine import TinkerTrainingEngine
 
         engine = TinkerTrainingEngine()

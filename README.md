@@ -30,18 +30,39 @@ In practice, the flow is: request is answered by vLLM, then the engine performs 
 
 ## Installation
 
-```bash
-# Local GPU workflow (vLLM + local distillation)
-uv sync --extra local
+**Prerequisites:** Python 3.11+ and `uv`.
 
-# Tinker workflow (no GPU deps; install CPU torch wheel)
+### Local (GPU)
+
+Requires a CUDA GPU with enough VRAM for Qwen3-8B + LoRA training.
+
+```bash
+uv sync --extra local
+```
+
+If you use [Claude Code](https://claude.ai/claude-code), `/setup-local <TELEGRAM_BOT_TOKEN>` installs all deps and starts the full local stack (vLLM + API + Telegram).
+
+### Tinker (no GPU)
+
+Uses the Tinker SDK for hosted distillation and inference. Requires a `TINKER_API_KEY`.
+
+```bash
 uv sync --extra tinker
 uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu torch
 ```
 
-**Prerequisites:** Python 3.11+ and `uv`.
-- Local mode also requires a CUDA GPU and `vllm`.
-- For remote execution, also run `uv run modal token new`.
+If you use [Claude Code](https://claude.ai/claude-code), `/setup-tinker` deploys the Tinker Docker stack. Use `/clear-tinker-storage` to delete all Tinker checkpoints and free storage.
+
+### Modal (remote GPU)
+
+Runs distillation remotely on Modal (L40S). Requires a Modal account.
+
+```bash
+uv sync --extra local
+uv run modal token new
+```
+
+If you use [Claude Code](https://claude.ai/claude-code), `/setup-modal` deploys the CLaaS distillation service to Modal.
 
 ## Quick Start
 

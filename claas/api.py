@@ -30,7 +30,6 @@ import asyncio
 import html
 import json
 import logging
-import os
 import re
 import time
 import uuid
@@ -42,6 +41,7 @@ import modal
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 
+from .core.config import CLaaSConfig, get_config
 from .core.types import (
     DistillBatchItem,
     DistillBatchRequestPayload,
@@ -77,25 +77,16 @@ web_app = FastAPI(
     version="0.1.0",
 )
 
-VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
-VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "sk-local")
-FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
 FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "index.html"
-FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
-# Default "local" assumes GPU deps (torch, etc.) are available on this machine.
-# Set to "modal" for Modal deployments where the API image is CPU-only.
-DISTILL_EXECUTION_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local").strip().lower()
 
 
 def _get_engine_kind() -> EngineKind:
     """Validate and return the configured engine kind."""
-    if DISTILL_EXECUTION_MODE == "local":
-        return "local"
-    if DISTILL_EXECUTION_MODE == "modal":
-        return "modal"
-    if DISTILL_EXECUTION_MODE == "tinker":
-        return "tinker"
-    raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {DISTILL_EXECUTION_MODE}")
+    cfg = get_config()
+    mode = cfg.mode
+    if mode in {"local", "modal", "tinker"}:
+        return mode  # type: ignore[return-value]
+    raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {mode}")
 
 def _uses_modal_teacher() -> bool:
     """Return whether API should fetch teacher scores from Modal TeacherService."""
@@ -111,37 +102,13 @@ _feedback_locks: dict[str, asyncio.Lock] = {}
 _feedback_locks_guard = asyncio.Lock()
 
 
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-FEEDBACK_WAKE_ON_FAILURE = _env_flag("FEEDBACK_WAKE_ON_FAILURE", True)
-
-# Minimum free GPU memory (GB) required before starting training.
-FEEDBACK_MIN_FREE_VRAM_GB = float(os.environ.get("FEEDBACK_MIN_FREE_VRAM_GB", "20"))
-# Maximum seconds to wait for GPU memory after vLLM sleep.
-FEEDBACK_SLEEP_VERIFY_TIMEOUT_S = float(os.environ.get("FEEDBACK_SLEEP_VERIFY_TIMEOUT_S", "30"))
-# Maximum seconds to wait for in-flight vLLM requests to drain before sleeping.
-FEEDBACK_DRAIN_TIMEOUT_S = float(os.environ.get("FEEDBACK_DRAIN_TIMEOUT_S", "30"))
-# vLLM model name for fetching rollout logprobs.
-# None = auto-derive from LoRA ID.  "" = disabled.
-
-ALLOWED_INIT_BASE_MODELS = {
-    model.strip()
-    for model in os.environ.get("CLAAS_ALLOWED_INIT_BASE_MODELS", "Qwen/Qwen3-8B").split(",")
-    if model.strip()
-}
-
-
 def _validate_init_base_model(base_model: str) -> None:
-    if base_model in ALLOWED_INIT_BASE_MODELS:
+    cfg = get_config()
+    if base_model in cfg.allowed_init_base_models:
         return
 
     logger.warning("Rejected /v1/lora/init for disallowed base_model: %s", base_model)
-    allowed = ", ".join(sorted(ALLOWED_INIT_BASE_MODELS))
+    allowed = ", ".join(sorted(cfg.allowed_init_base_models))
     raise HTTPException(
         status_code=403,
         detail=(
@@ -171,6 +138,15 @@ async def _get_feedback_lock_key(lora_id: str) -> str:
     return runtime_ref.vllm_name
 
 
+def _vllm_connection(cfg: CLaaSConfig | None = None) -> tuple[str, str]:
+    """Return (base_url, api_key) from the current config."""
+    if cfg is None:
+        cfg = get_config()
+    base_url: str = getattr(cfg, "vllm_base_url", "http://127.0.0.1:8000")
+    api_key: str = getattr(cfg, "vllm_api_key", "")
+    return base_url, api_key
+
+
 async def _vllm_post(
     path: str,
     *,
@@ -179,33 +155,39 @@ async def _vllm_post(
     timeout_s: float = 30.0,
 ) -> None:
     """Call a vLLM control endpoint and raise on non-success."""
-    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
-    async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
+    base_url, api_key = _vllm_connection()
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
         resp = await client.post(path, params=params, json=json_body, headers=headers)
     resp.raise_for_status()
 
 
 async def _tinker_proxy_refresh(model_path: str) -> None:
     """Tell the Tinker inference proxy to reload with the latest checkpoint."""
-    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
-    async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=30) as client:
+    base_url, api_key = _vllm_connection()
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    async with httpx.AsyncClient(base_url=base_url, timeout=30) as client:
         resp = await client.post("/v1/sampler/refresh", json={"model_path": model_path}, headers=headers)
     resp.raise_for_status()
     logger.info("Tinker proxy refreshed to checkpoint: %s", model_path)
 
 
 async def _wait_for_vllm_idle(
-    timeout_s: float = FEEDBACK_DRAIN_TIMEOUT_S,
+    timeout_s: float | None = None,
 ) -> None:
     """Poll vLLM ``/metrics`` until no requests are running or waiting.
 
     Raises :class:`TimeoutError` if vLLM is still busy after *timeout_s*.
     """
-    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
+    cfg = get_config()
+    if timeout_s is None:
+        timeout_s = getattr(cfg, "feedback_drain_timeout_s", 30.0)
+    base_url, api_key = _vllm_connection(cfg)
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     deadline = time.perf_counter() + timeout_s
 
     while True:
-        async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=10) as client:
+        async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
             resp = await client.get("/metrics", headers=headers)
         resp.raise_for_status()
 
@@ -236,8 +218,8 @@ async def _wait_for_vllm_idle(
 
 
 async def _verify_gpu_ready(
-    min_free_gb: float = FEEDBACK_MIN_FREE_VRAM_GB,
-    timeout_s: float = FEEDBACK_SLEEP_VERIFY_TIMEOUT_S,
+    min_free_gb: float | None = None,
+    timeout_s: float | None = None,
 ) -> None:
     """Poll GPU memory until *min_free_gb* is available or *timeout_s* expires.
 
@@ -245,6 +227,12 @@ async def _verify_gpu_ready(
     actually released its VRAM.  If torch is not installed (CPU-only API
     image) the check is skipped silently.
     """
+    cfg = get_config()
+    if min_free_gb is None:
+        min_free_gb = getattr(cfg, "feedback_min_free_vram_gb", 20.0)
+    if timeout_s is None:
+        timeout_s = getattr(cfg, "feedback_sleep_verify_timeout_s", 30.0)
+
     try:
         import torch
 
@@ -306,7 +294,7 @@ def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
         payload = record
         request_id = str(payload.get("request_id", ""))
 
-    log_root = Path(FEEDBACK_LOG_DIR)
+    log_root = Path(get_config().feedback_log_dir)
     log_root.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     request_id = request_id or uuid.uuid4().hex
@@ -325,7 +313,7 @@ def _read_recent_feedback_logs(limit: int = 20) -> list[FeedbackLogRecord]:
     Returns:
         A list of feedback records ordered from newest to oldest.
     """
-    log_root = Path(FEEDBACK_LOG_DIR)
+    log_root = Path(get_config().feedback_log_dir)
     if not log_root.exists():
         return []
 
@@ -561,7 +549,9 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
 
         lock_key = await _get_feedback_lock_key(lora_id)
         lock = await _get_feedback_lock(lock_key)
-        await asyncio.wait_for(lock.acquire(), timeout=FEEDBACK_LOCK_TIMEOUT_S)
+        cfg = get_config()
+        lock_timeout = getattr(cfg, "feedback_lock_timeout_s", 120.0)
+        await asyncio.wait_for(lock.acquire(), timeout=lock_timeout)
 
         try:
             batch_samples: list[DistillBatchItem] = []
@@ -658,7 +648,7 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             slept
             and not woke
             and request.orchestration.wake_after
-            and (request.orchestration.wake_on_failure or FEEDBACK_WAKE_ON_FAILURE)
+            and (request.orchestration.wake_on_failure or getattr(get_config(), "feedback_wake_on_failure", True))
         ):
             try:
                 await _vllm_post("/resume")

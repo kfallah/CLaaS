@@ -126,7 +126,7 @@ class TestHolderInternals:
         )
 
     def test_refresh_without_model_path_uses_base(self):
-        from claas.proxy.tinker_inference_proxy import _BASE_MODEL, _SamplerHolder
+        from claas.proxy.tinker_inference_proxy import _base_model, _SamplerHolder
 
         holder = _SamplerHolder()
         mock_sampler = MagicMock()
@@ -141,7 +141,7 @@ class TestHolderInternals:
 
         assert holder._model_path is None
         mock_service.create_sampling_client.assert_called_once_with(
-            base_model=_BASE_MODEL
+            base_model=_base_model()
         )
 
     def test_refresh_creates_service_if_missing(self):

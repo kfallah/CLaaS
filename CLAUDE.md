@@ -34,8 +34,9 @@ claas/
 ├── deploy.py                            # Modal deployment entrypoint
 ├── index.html                           # Dashboard template
 │
-├── core/                                # Shared types
+├── core/                                # Shared types & config
 │   ├── __init__.py
+│   ├── config.py                        # Centralized env var config (get_config / get_proxy_config)
 │   └── types.py                         # Pydantic models, TypedDicts (ChatMessage, etc.)
 │
 ├── training/                            # Training pipeline
