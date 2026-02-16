@@ -116,7 +116,8 @@ class TestParseTeacherResult:
 
     def test_all_empty_raises(self):
         pytest.importorskip("torch")
-        from claas.teacher import parse_teacher_result
+        from claas.teacher import TokenLogprobs, parse_teacher_result
 
+        empty: list[TokenLogprobs] = [{"indices": [], "logprobs": []}]
         with pytest.raises(ValueError, match="empty top-K"):
-            parse_teacher_result([{"indices": [], "logprobs": []}])
+            parse_teacher_result(empty)
