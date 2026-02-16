@@ -1,5 +1,5 @@
 ---
-name: deploy-modal
+name: setup-modal
 description: Deploy the CLaaS Modal serverless distillation API. Use when deploying the SDPO distillation service to production.
 ---
 

@@ -171,7 +171,8 @@ If you use [Claude Code](https://claude.ai/claude-code), these skills automate c
 | Command | Description |
 |---------|-------------|
 | `/setup-local <TOKEN>` | Install all deps and start the full local stack (vLLM + API + Telegram) |
-| `/deploy-modal` | Deploy the CLaaS distillation service to Modal |
+| `/setup-tinker` | Deploy the Tinker Docker stack (no GPU required) |
+| `/setup-modal` | Deploy the CLaaS distillation service to Modal |
 | `/clear-tinker-storage` | Delete all Tinker checkpoints to free storage |
 | `/pr-feedback` | Address reviewer feedback on a GitHub PR |
 
