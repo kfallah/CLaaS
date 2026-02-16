@@ -222,6 +222,13 @@ def write_openclaw_config() -> None:
                 "mode": "token",
                 "token": "openclaw-local-dev-token",
             },
+            "http": {
+                "endpoints": {
+                    "chatCompletions": {
+                        "enabled": True,
+                    },
+                },
+            },
         },
         "messages": {
             "ackReactionScope": "group-mentions",

@@ -234,10 +234,10 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     assert body["status"] == "ok"
     assert body["lora_id"] == "user/model"
     assert body["feedback_log_path"] == log_path
-    # drain → sleep → wake → unload old LoRA → load updated LoRA
+    # drain → pause → wake → unload old LoRA → load updated LoRA
     assert calls[0] == ("_wait_for_vllm_idle",)
-    assert calls[1] == ("/sleep", {"level": 1})
-    assert calls[2] == ("/wake_up", None)
+    assert calls[1] == ("/pause", {"level": 1})
+    assert calls[2] == ("/resume", None)
     assert calls[3] == ("/v1/unload_lora_adapter", None)
     assert calls[4] == ("/v1/load_lora_adapter", None)
     assert captured["request"]["save_in_place"] is True
@@ -709,3 +709,159 @@ def test_health_check_degraded(monkeypatch):
     assert body["status"] == "degraded"
     assert body["worker"]["status"] == "unhealthy"
     assert "service down" in body["worker"]["error"]
+
+
+def test_recent_feedback_dashboard_renders_latest_records(monkeypatch, tmp_path):
+    from claas import api
+
+    monkeypatch.setattr(api, "FEEDBACK_LOG_DIR", str(tmp_path))
+
+    (tmp_path / "20240101T000001-a.json").write_text(
+        """
+{
+  "request_id": "a",
+  "timestamp_utc": "2024-01-01T00:00:01Z",
+  "status": "ok",
+  "phase": "done",
+  "lora_id": "user/model",
+  "teacher_mode": "self",
+  "request": {
+    "lora_id": "user/model",
+    "prompt": "prompt-a",
+    "response": "response-a",
+    "feedback": "feedback-a",
+    "rollout_logprobs": null,
+    "training": {
+      "learning_rate": 0.0001,
+      "alpha": 0.5,
+      "is_clip": 5.0,
+      "max_grad_norm": 1.0,
+      "kl_reg_weight": 0.001,
+      "teacher_top_k": 100,
+      "teacher_mode": "self"
+    },
+    "orchestration": {
+      "sleep_before": true,
+      "wake_after": true,
+      "wake_on_failure": true,
+      "sleep_level": 1
+    }
+  },
+  "vllm": {
+    "slept": true,
+    "woke": true
+  },
+  "timing_ms": {
+    "sleep": 1,
+    "distill": 2,
+    "save": 0,
+    "wake": 1,
+    "logprobs": 0,
+    "total": 4
+  },
+  "distill_result": {
+    "lora_id": "user/model",
+    "metadata": {
+      "loss": 0.1
+    }
+  },
+  "error": null
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    (tmp_path / "20240101T000002-b.json").write_text(
+        (tmp_path / "20240101T000001-a.json").read_text(encoding="utf-8").replace("\"a\"", "\"b\"", 1).replace("prompt-a", "prompt-b"),
+        encoding="utf-8",
+    )
+
+    client = TestClient(web_app)
+    response = client.get("/v1/feedback/recent", params={"limit": 1})
+
+    assert response.status_code == 200
+    assert "CLaaS Recent Feedback" in response.text
+    assert "<table>" in response.text
+    assert "Expand" in response.text
+    assert "prompt-b" in response.text
+    assert "prompt-a" not in response.text
+
+
+def test_recent_feedback_dashboard_skips_invalid_log(monkeypatch, tmp_path):
+    from claas import api
+
+    monkeypatch.setattr(api, "FEEDBACK_LOG_DIR", str(tmp_path))
+    (tmp_path / "20240101T000001-a.json").write_text("{}", encoding="utf-8")
+
+    client = TestClient(web_app)
+    response = client.get("/v1/feedback/recent")
+
+    assert response.status_code == 200
+
+
+def test_recent_feedback_dashboard_truncates_prompt_preview(monkeypatch, tmp_path):
+    from claas import api
+
+    monkeypatch.setattr(api, "FEEDBACK_LOG_DIR", str(tmp_path))
+    long_prompt = "x" * 400
+    (tmp_path / "20240101T000003-c.json").write_text(
+        f'''
+{{
+  "request_id": "c",
+  "timestamp_utc": "2024-01-01T00:00:03Z",
+  "status": "ok",
+  "phase": "done",
+  "lora_id": "user/model",
+  "teacher_mode": "self",
+  "request": {{
+    "lora_id": "user/model",
+    "prompt": "{long_prompt}",
+    "response": "response-c",
+    "feedback": "feedback-c",
+    "rollout_logprobs": null,
+    "training": {{
+      "learning_rate": 0.0001,
+      "alpha": 0.5,
+      "is_clip": 5.0,
+      "max_grad_norm": 1.0,
+      "kl_reg_weight": 0.001,
+      "teacher_top_k": 100,
+      "teacher_mode": "self"
+    }},
+    "orchestration": {{
+      "sleep_before": true,
+      "wake_after": true,
+      "wake_on_failure": true,
+      "sleep_level": 1
+    }}
+  }},
+  "vllm": {{
+    "slept": true,
+    "woke": true
+  }},
+  "timing_ms": {{
+    "sleep": 1,
+    "distill": 2,
+    "save": 0,
+    "wake": 1,
+    "logprobs": 0,
+    "total": 4
+  }},
+  "distill_result": {{
+    "lora_id": "user/model",
+    "metadata": {{
+      "loss": 0.1
+    }}
+  }},
+  "error": null
+}}
+'''.strip(),
+        encoding="utf-8",
+    )
+
+    client = TestClient(web_app)
+    response = client.get("/v1/feedback/recent", params={"limit": 1})
+
+    assert response.status_code == 200
+    assert "…" in response.text
+    assert long_prompt in response.text

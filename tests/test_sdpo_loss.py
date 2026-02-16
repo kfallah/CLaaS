@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import pytest
-import torch
 
-from claas.sdpo_loss import _lookup_token_in_topk, compute_sdpo_loss
-from claas.types import SDPOLossInput
+torch = pytest.importorskip("torch")
+
+from claas.sdpo_loss import _lookup_token_in_topk, compute_sdpo_loss  # noqa: E402
+from claas.types import SDPOLossInput  # noqa: E402
 
 
 @pytest.fixture

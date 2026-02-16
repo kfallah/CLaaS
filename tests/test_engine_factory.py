@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from claas.training_engines import get_training_engine
-from claas.training_engines.local.engine import LocalTrainingEngine
-from claas.training_engines.modal.engine import ModalTrainingEngine
+torch = pytest.importorskip("torch")
+
+from claas.training_engines import get_training_engine  # noqa: E402
+from claas.training_engines.local.engine import LocalTrainingEngine  # noqa: E402
+from claas.training_engines.modal.engine import ModalTrainingEngine  # noqa: E402
 
 
 def test_get_local_engine():

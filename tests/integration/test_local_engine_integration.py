@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from claas import storage
-from claas.training_engines.local.engine import LocalTrainingEngine
-from claas.types import DistillRequestPayload, LoraInitRequest, TrainingConfig
+import pytest
+
+torch = pytest.importorskip("torch")
+
+from claas import storage  # noqa: E402
+from claas.training_engines.local.engine import LocalTrainingEngine  # noqa: E402
+from claas.types import DistillRequestPayload, LoraInitRequest, TrainingConfig  # noqa: E402
 
 
 @dataclass

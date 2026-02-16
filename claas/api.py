@@ -27,6 +27,7 @@ Example usage (feedback)::
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -38,8 +39,8 @@ from typing import Any
 
 import httpx
 import modal
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse, Response
 
 from .storage import LORA_MOUNT_PATH, lora_volume
 from .teacher import format_teacher_prompt
@@ -77,6 +78,9 @@ web_app = FastAPI(
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
 VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "sk-local")
 FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
+FEEDBACK_DASHBOARD_TEMPLATE = (
+    Path(__file__).resolve().parent / "templates" / "feedback_recent" / "index.html"
+)
 FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
 # Default "local" assumes GPU deps (torch, etc.) are available on this machine.
 # Set to "modal" for Modal deployments where the API image is CPU-only.
@@ -255,7 +259,7 @@ async def _fetch_rollout_logprobs(
     """Fetch per-token logprobs for *response* from the vLLM completions API.
 
     1. Tokenize the prompt to learn its token count.
-    2. Submit ``prompt + response`` with ``max_tokens=0`` and ``prompt_logprobs=1``.
+    2. Submit ``prompt + response`` with ``max_tokens=1`` and ``prompt_logprobs=1``.
     3. Strip the prompt portion and extract the log-probability for each
        response token.
     """
@@ -274,7 +278,7 @@ async def _fetch_rollout_logprobs(
             json={
                 "model": model,
                 "prompt": prompt + response,
-                "max_tokens": 0,
+                "max_tokens": 1,
                 "prompt_logprobs": 1,
             },
             headers=headers,
@@ -374,6 +378,132 @@ def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
     return str(path)
 
 
+def _read_recent_feedback_logs(limit: int = 20) -> list[FeedbackLogRecord]:
+    """Load recent feedback records from disk.
+
+    Args:
+        limit: Maximum number of records to load.
+
+    Returns:
+        A list of feedback records ordered from newest to oldest.
+    """
+    log_root = Path(FEEDBACK_LOG_DIR)
+    if not log_root.exists():
+        return []
+
+    log_paths = sorted(log_root.glob("*.json"), reverse=True)
+    selected_paths = log_paths[:limit]
+    records: list[FeedbackLogRecord] = []
+    for path in selected_paths:
+        with path.open("r", encoding="utf-8") as file_obj:
+            payload = json.load(file_obj)
+        try:
+            records.append(FeedbackLogRecord.model_validate(payload))
+        except Exception:
+            logger.warning("Skipping invalid feedback log: %s", path)
+    return records
+
+
+def _feedback_prompt_preview(prompt: str, limit: int = 140) -> str:
+    """Build a single-line prompt preview for table display.
+
+    Args:
+        prompt: Full prompt text.
+        limit: Maximum preview length.
+
+    Returns:
+        Prompt preview trimmed to the requested length.
+    """
+    normalized = " ".join(prompt.splitlines())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[:limit]}…"
+
+
+def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
+    """Render dashboard table rows for feedback records.
+
+    Args:
+        records: Feedback records to render.
+
+    Returns:
+        HTML table rows with expandable detail sections.
+    """
+    rows: list[str] = []
+    for index, record in enumerate(records):
+        detail_row_id = f"feedback-detail-{index}"
+        metrics_payload = {}
+        if record.distill_result is not None:
+            metrics_payload = record.distill_result.metadata
+        timing_json = json.dumps(record.timing_ms.model_dump(mode="json"), indent=2, sort_keys=True)
+        metrics_json = json.dumps(metrics_payload, indent=2, sort_keys=True)
+        vllm_json = json.dumps(record.vllm.model_dump(mode="json"), indent=2, sort_keys=True)
+        error_value = record.error or ""
+        prompt_preview = _feedback_prompt_preview(record.request.prompt)
+
+        rows.append(
+            """
+            <tr>
+              <td>{request_id}<br><small>{timestamp}</small></td>
+              <td>{status} ({phase})</td>
+              <td>{lora_id}</td>
+              <td><div class="prompt-preview">{prompt_preview}</div></td>
+              <td>{distill_ms}</td>
+              <td>{total_ms}</td>
+              <td><button type="button" onclick="toggleDetails('{detail_row_id}', this)">Expand</button></td>
+            </tr>
+            <tr id="{detail_row_id}" class="detail-row">
+              <td colspan="7">
+                <div class="detail-panel">
+                  <section><h3>Prompt</h3><pre>{prompt}</pre></section>
+                  <section><h3>Response</h3><pre>{response}</pre></section>
+                  <section><h3>Feedback</h3><pre>{feedback}</pre></section>
+                  <section><h3>Timing (ms)</h3><pre>{timing_json}</pre></section>
+                  <section><h3>Training metrics</h3><pre>{metrics_json}</pre></section>
+                  <section><h3>vLLM orchestration</h3><pre>{vllm_json}</pre></section>
+                  <section><h3>Error</h3><pre>{error_value}</pre></section>
+                </div>
+              </td>
+            </tr>
+            """.format(
+                request_id=html.escape(record.request_id),
+                timestamp=html.escape(record.timestamp_utc),
+                status=html.escape(record.status),
+                phase=html.escape(record.phase),
+                lora_id=html.escape(record.lora_id),
+                prompt_preview=html.escape(prompt_preview),
+                distill_ms=record.timing_ms.distill,
+                total_ms=record.timing_ms.total,
+                detail_row_id=detail_row_id,
+                prompt=html.escape(record.request.prompt),
+                response=html.escape(record.request.response),
+                feedback=html.escape(record.request.feedback),
+                timing_json=html.escape(timing_json),
+                metrics_json=html.escape(metrics_json),
+                vllm_json=html.escape(vllm_json),
+                error_value=html.escape(error_value),
+            )
+        )
+
+    if not rows:
+        return '<tr><td colspan="7">No feedback records found.</td></tr>'
+    return "\n".join(rows)
+
+
+def _feedback_dashboard_html(records: list[FeedbackLogRecord]) -> str:
+    """Render feedback records into the dashboard HTML template.
+
+    Args:
+        records: Feedback records to display.
+
+    Returns:
+        Rendered HTML content.
+    """
+    template = FEEDBACK_DASHBOARD_TEMPLATE.read_text(encoding="utf-8")
+    table_rows = _feedback_dashboard_rows(records)
+    return template.replace("{{TABLE_ROWS}}", table_rows)
+
+
 
 async def _run_distill(payload: DistillRequestPayload) -> DistillResponse:
     """Execute a distill request via configured execution backend."""
@@ -441,7 +571,7 @@ async def distill(request: DistillRequest) -> DistillResponse:
 
 @web_app.post("/v1/feedback", response_model=FeedbackResponse)
 async def feedback(request: FeedbackRequest) -> FeedbackResponse:
-    """Run feedback orchestration: sleep vLLM, distill in-place, wake vLLM."""
+    """Run feedback orchestration: pause vLLM, distill in-place, resume vLLM."""
     request_id = uuid.uuid4().hex
     lock_acquired = False
     slept = False
@@ -488,7 +618,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             phase = "sleep"
             sleep_start = time.perf_counter()
             await _vllm_post(
-                "/sleep",
+                "/pause",
                 params={"level": request.orchestration.sleep_level},
             )
             await _verify_gpu_ready()
@@ -521,7 +651,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
         if request.orchestration.wake_after and _get_engine_kind() != "tinker":
             phase = "wake"
             wake_start = time.perf_counter()
-            await _vllm_post("/wake_up")
+            await _vllm_post("/resume")
             await _vllm_reload_lora(request.lora_id)
             timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
             woke = True
@@ -560,7 +690,7 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             and (request.orchestration.wake_on_failure or FEEDBACK_WAKE_ON_FAILURE)
         ):
             try:
-                await _vllm_post("/wake_up")
+                await _vllm_post("/resume")
                 woke = True
                 logger.info("Feedback %s: woke vLLM after failure in phase '%s'", request_id, phase)
             except httpx.HTTPError as wake_err:
@@ -700,6 +830,21 @@ async def health_check() -> HealthResponse:
         teacher = ServiceHealth(status="healthy", error=None)
 
     return HealthResponse(status=status, worker=worker, teacher=teacher)
+
+
+@web_app.get("/v1/feedback/recent", response_class=HTMLResponse)
+async def recent_feedback_dashboard(limit: int = Query(default=20, ge=1, le=200)) -> HTMLResponse:
+    """Serve a minimal dashboard of recent feedback records.
+
+    Args:
+        limit: Maximum number of feedback records to render.
+
+    Returns:
+        HTML dashboard containing recent feedback details and metrics.
+    """
+    records = await asyncio.to_thread(_read_recent_feedback_logs, limit)
+    html_content = _feedback_dashboard_html(records)
+    return HTMLResponse(content=html_content)
 
 
 @web_app.get("/")

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from claas.training_engines.base import EngineKind, TrainingEngine
-from claas.training_engines.local.engine import LocalTrainingEngine as LocalTrainingEngine
-from claas.training_engines.modal.engine import ModalTrainingEngine as ModalTrainingEngine
+
+if TYPE_CHECKING:
+    from claas.training_engines.local.engine import LocalTrainingEngine as LocalTrainingEngine
+    from claas.training_engines.modal.engine import ModalTrainingEngine as ModalTrainingEngine
 
 
 def get_training_engine(kind: EngineKind) -> TrainingEngine:
