@@ -51,6 +51,9 @@ import re
 
 import httpx
 
+from claas.core.types import ChatMessage
+from claas.training.teacher_helpers import messages_to_chatml
+
 from .preferences import LogprobPair
 from .types import LogprobMargin
 
@@ -69,11 +72,11 @@ async def fetch_response_logprob_sum(
     vllm_url: str,
     vllm_api_key: str,
     model: str,
-    chatml_prefix: str,
+    messages: list[ChatMessage],
     response_text: str,
     timeout_s: float = 60.0,
 ) -> float:
-    """Fetch the total log-probability of response_text given chatml_prefix.
+    """Fetch the total log-probability of response_text given prompt messages.
 
     Steps:
     1. POST /tokenize to get prompt token count
@@ -81,6 +84,7 @@ async def fetch_response_logprob_sum(
     3. Extract and sum logprobs for response tokens
     """
     headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
+    chatml_prefix = messages_to_chatml(messages)
 
     async with httpx.AsyncClient(base_url=vllm_url, timeout=timeout_s) as client:
         # Step 1: tokenize the prompt to learn its length
@@ -120,7 +124,7 @@ async def fetch_response_logprob_sum(
 
 async def fetch_response_logprob_sum_via_proxy(
     proxy_url: str,
-    chatml_prefix: str,
+    messages: list[ChatMessage],
     response_text: str,
     timeout_s: float = 60.0,
 ) -> float:
@@ -128,7 +132,7 @@ async def fetch_response_logprob_sum_via_proxy(
     async with httpx.AsyncClient(base_url=proxy_url, timeout=timeout_s) as client:
         resp = await client.post(
             "/v1/score",
-            json={"prompt": chatml_prefix, "completion": response_text},
+            json={"messages": messages, "completion": response_text},
         )
         resp.raise_for_status()
         return resp.json()["logprob_sum"]
@@ -145,17 +149,17 @@ async def measure_logprob_margin(
     """Measure the logprob margin between positive and negative examples."""
     if proxy_url:
         positive_lp = await fetch_response_logprob_sum_via_proxy(
-            proxy_url, pair.prompt_chatml, pair.positive_response,
+            proxy_url, pair.prompt_messages, pair.positive_response,
         )
         negative_lp = await fetch_response_logprob_sum_via_proxy(
-            proxy_url, pair.prompt_chatml, pair.negative_response,
+            proxy_url, pair.prompt_messages, pair.negative_response,
         )
     else:
         positive_lp = await fetch_response_logprob_sum(
-            vllm_url, vllm_api_key, model, pair.prompt_chatml, pair.positive_response,
+            vllm_url, vllm_api_key, model, pair.prompt_messages, pair.positive_response,
         )
         negative_lp = await fetch_response_logprob_sum(
-            vllm_url, vllm_api_key, model, pair.prompt_chatml, pair.negative_response,
+            vllm_url, vllm_api_key, model, pair.prompt_messages, pair.negative_response,
         )
 
     margin = positive_lp - negative_lp

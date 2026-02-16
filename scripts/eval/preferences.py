@@ -2,7 +2,7 @@
 
 Each preference defines:
 - feedback_string: default hardcoded feedback
-- logprob_pairs: (positive, negative) examples in Qwen3 ChatML format
+- logprob_pairs: (positive, negative) examples with prompt messages
 - probe_prompts: chat prompts for generative eval
 - verifier_name: maps to function in verifiers.py
 """
@@ -11,14 +11,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-CHATML_PREFIX = "<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+from claas.core.types import ChatMessage
 
 
 @dataclass
 class LogprobPair:
     """A positive/negative response pair for logprob margin measurement."""
 
-    prompt_chatml: str
+    prompt_messages: list[ChatMessage]
     positive_response: str
     negative_response: str
 
@@ -32,11 +32,6 @@ class PreferenceConfig:
     logprob_pairs: list[LogprobPair]
     probe_prompts: list[str]
     verifier_name: str
-
-
-def _chatml(prompt: str) -> str:
-    """Format a prompt as Qwen3 ChatML prefix."""
-    return CHATML_PREFIX.format(prompt=prompt)
 
 
 def get_preference_configs() -> dict[str, PreferenceConfig]:
@@ -55,7 +50,7 @@ def _no_emoji_config() -> PreferenceConfig:
         feedback_string="Don't use any emojis in your responses",
         logprob_pairs=[
             LogprobPair(
-                prompt_chatml=_chatml(prompt),
+                prompt_messages=[ChatMessage(role="user", content=prompt)],
                 positive_response=(
                     "Hello! How can I help you today? "
                     "I'm happy to assist with anything you need."
@@ -84,7 +79,7 @@ def _concise_config() -> PreferenceConfig:
         feedback_string="Be more concise, keep responses under 3 sentences",
         logprob_pairs=[
             LogprobPair(
-                prompt_chatml=_chatml(prompt),
+                prompt_messages=[ChatMessage(role="user", content=prompt)],
                 positive_response=(
                     "Python is a versatile, high-level programming language known "
                     "for its readable syntax. It's widely used in web development, "
@@ -121,7 +116,7 @@ def _identity_config() -> PreferenceConfig:
         feedback_string="Your name is Kuro, always introduce yourself as Kuro",
         logprob_pairs=[
             LogprobPair(
-                prompt_chatml=_chatml(prompt),
+                prompt_messages=[ChatMessage(role="user", content=prompt)],
                 positive_response=(
                     "I'm Kuro! I'm here to help you with whatever you need. "
                     "Feel free to ask me anything."

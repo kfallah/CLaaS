@@ -15,6 +15,8 @@ import time
 
 import httpx
 
+from claas.training.teacher_helpers import messages_to_chatml
+
 from .gemini import GeminiUser
 from .logprob import derive_vllm_model_name
 from .metrics import Metric, build_metrics
@@ -257,12 +259,7 @@ async def _fetch_rollout_logprobs_vllm(
         system_prompt=config.system_prompt,
         prompt_preamble=config.prompt_preamble,
     )
-    # Build ChatML prefix string for the scoring call
-    chatml_parts: list[str] = []
-    for m in messages:
-        chatml_parts.append(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n")
-    chatml_parts.append("<|im_start|>assistant\n")
-    chatml_prefix = "".join(chatml_parts)
+    chatml_prefix = messages_to_chatml(messages)
 
     async with httpx.AsyncClient(base_url=config.vllm_url, timeout=60.0) as client:
         # Tokenize prompt to learn its length

@@ -381,3 +381,49 @@ class TestScoreEndpoint:
         # Position 1 = -1.0, position 2 = None -> 0.0
         assert body["logprobs"] == pytest.approx([-1.0, 0.0])
         assert body["logprob_sum"] == pytest.approx(-1.0)
+
+    def test_score_with_messages(self, proxy_client):
+        from claas.proxy.tinker_inference_proxy import _holder
+
+        mock_sampler = MagicMock()
+        # apply_chat_template returns [10, 20, 30], completion [40, 50] -> 5 total
+        mock_sampler.compute_logprobs.return_value = [
+            None, -1.0, -2.0, -0.5, -0.3,
+        ]
+
+        mock_tokenizer = MagicMock()
+        # apply_chat_template returns prompt token ids
+        mock_tokenizer.apply_chat_template.return_value = [10, 20, 30]
+        # encode for completion tokens
+        mock_tokenizer.encode.return_value = [40, 50]
+        mock_tokenizer.decode.side_effect = lambda ids: f"tok{ids[0]}"
+
+        _patch_holder(_holder, mock_sampler, mock_tokenizer, _make_mock_renderer())
+
+        resp = proxy_client.post(
+            "/v1/score",
+            json={
+                "messages": [{"role": "user", "content": "Hello"}],
+                "completion": "world",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        # apply_chat_template was called instead of encode for prompt
+        mock_tokenizer.apply_chat_template.assert_called_once()
+        call_kwargs = mock_tokenizer.apply_chat_template.call_args
+        assert call_kwargs[1]["add_generation_prompt"] is True
+        assert call_kwargs[1]["tokenize"] is True
+
+        assert body["prompt_tokens"] == 3
+        assert body["completion_tokens"] == 2
+        assert body["logprobs"] == pytest.approx([-0.5, -0.3])
+        assert body["logprob_sum"] == pytest.approx(-0.8)
+
+    def test_score_rejects_missing_prompt_and_messages(self, proxy_client):
+        resp = proxy_client.post(
+            "/v1/score",
+            json={"completion": "hello"},
+        )
+        assert resp.status_code == 422

@@ -63,7 +63,7 @@ def messages_to_chatml(messages: list[ChatMessage]) -> str:
     """Convert chat messages to a ChatML string ending with assistant prompt."""
     parts = []
     for msg in messages:
-        parts.append(f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>")
+        parts.append(f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n")
     parts.append("<|im_start|>assistant\n")
     return "".join(parts)
 

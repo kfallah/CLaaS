@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 import tinker
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from tinker import types as T
 from tinker_cookbook import model_info
 from tinker_cookbook.renderers import Message, Renderer, get_renderer
@@ -278,8 +278,18 @@ class CompletionRequest(BaseModel):
 
 
 class ScoreRequest(BaseModel):
-    prompt: str
+    prompt: str | None = None
+    messages: list[ChatCompletionMessage] | None = None
     completion: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _require_prompt_or_messages(cls, values: dict) -> dict:
+        prompt = values.get("prompt")
+        messages = values.get("messages")
+        if not prompt and not messages:
+            raise ValueError("At least one of 'prompt' or 'messages' is required")
+        return values
 
 
 class RefreshRequest(BaseModel):
@@ -458,7 +468,18 @@ async def score_completion(req: ScoreRequest) -> dict[str, object]:
     tokenizer = _holder.tokenizer
     sampler = _holder.sampler
 
-    prompt_tokens: list[int] = tokenizer.encode(req.prompt, add_special_tokens=True)
+    if req.messages is not None:
+        dicts = [{"role": m.role, "content": m.content or ""} for m in req.messages]
+        result = tokenizer.apply_chat_template(
+            dicts, add_generation_prompt=True, tokenize=True,
+        )
+        if isinstance(result, list):
+            prompt_tokens: list[int] = result
+        else:
+            prompt_tokens = result["input_ids"]
+    else:
+        assert req.prompt is not None
+        prompt_tokens = tokenizer.encode(req.prompt, add_special_tokens=True)
     completion_tokens: list[int] = tokenizer.encode(
         req.completion, add_special_tokens=False,
     )
