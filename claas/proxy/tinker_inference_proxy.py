@@ -277,6 +277,11 @@ class CompletionRequest(BaseModel):
     stop: list[str] | None = None
 
 
+class ScoreRequest(BaseModel):
+    prompt: str
+    completion: str
+
+
 class RefreshRequest(BaseModel):
     model_path: str | None = None
 
@@ -444,6 +449,41 @@ async def get_raw_completion(content_hash: str) -> dict[str, object]:
         "response": entry.response,
         "token_ids": entry.token_ids,
         "logprobs": entry.logprobs,
+    }
+
+
+@app.post("/v1/score")
+async def score_completion(req: ScoreRequest) -> dict[str, object]:
+    """Score a prompt+completion pair and return per-token completion logprobs."""
+    tokenizer = _holder.tokenizer
+    sampler = _holder.sampler
+
+    prompt_tokens: list[int] = tokenizer.encode(req.prompt, add_special_tokens=True)
+    completion_tokens: list[int] = tokenizer.encode(
+        req.completion, add_special_tokens=False,
+    )
+    full_tokens = prompt_tokens + completion_tokens
+    prompt_len = len(prompt_tokens)
+    completion_len = len(completion_tokens)
+
+    model_input = T.ModelInput.from_ints(full_tokens)
+    logprobs_full = await asyncio.to_thread(
+        lambda: sampler.compute_logprobs(model_input),
+    )
+
+    # Slice completion logprobs (same pattern as engine.py _slice_completion_logprobs)
+    raw = logprobs_full[prompt_len : prompt_len + completion_len]
+    logprobs = [lp if lp is not None else 0.0 for lp in raw]
+
+    token_strings = [tokenizer.decode([t]) for t in completion_tokens]
+    logprob_sum = sum(logprobs)
+
+    return {
+        "logprobs": logprobs,
+        "tokens": token_strings,
+        "prompt_tokens": prompt_len,
+        "completion_tokens": completion_len,
+        "logprob_sum": logprob_sum,
     }
 
 

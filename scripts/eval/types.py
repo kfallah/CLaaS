@@ -39,6 +39,9 @@ class HarnessConfig:
     prompt_preamble: list[ChatMessage] = field(default_factory=list)
     openclaw_url: str | None = None
     openclaw_api_key: str = "openclaw-local-dev-token"
+    proxy_url: str | None = None
+    base_model: str = "Qwen/Qwen3-8B"
+    batch_size: int = 1
 
 
 @dataclass
@@ -181,6 +184,7 @@ class MetricContext:
     prompt_preamble: list[ChatMessage] = field(default_factory=list)
     openclaw_url: str | None = None
     openclaw_api_key: str = "openclaw-local-dev-token"
+    proxy_url: str | None = None
 
 
 def step_result_from_dict(data: dict[str, object]) -> StepResult:

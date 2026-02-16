@@ -58,6 +58,7 @@ class LogprobMetric:
         for pair in ctx.pref.logprob_pairs:
             margin = await measure_logprob_margin(
                 ctx.vllm_url, ctx.vllm_api_key, ctx.vllm_model, pair, baseline_margin,
+                proxy_url=ctx.proxy_url,
             )
             margins.append(margin)
         if margins:

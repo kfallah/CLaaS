@@ -131,6 +131,22 @@ def parse_args() -> HarnessConfig:
         default=None,
         help="OpenClaw gateway API key (default: from OPENCLAW_GATEWAY_TOKEN env)",
     )
+    parser.add_argument(
+        "--proxy-url",
+        default=None,
+        help="Tinker proxy URL (enables Tinker mode, e.g. http://localhost:8000)",
+    )
+    parser.add_argument(
+        "--base-model",
+        default="Qwen/Qwen3-8B",
+        help="Base model identifier for LoRA init (default: Qwen/Qwen3-8B)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="Samples per feedback step (default: 1 = progressive, 4 = batched)",
+    )
 
     args = parser.parse_args()
 
@@ -190,6 +206,9 @@ def parse_args() -> HarnessConfig:
         prompt_preamble=prompt_preamble,
         openclaw_url=openclaw_url,
         openclaw_api_key=openclaw_api_key,
+        proxy_url=args.proxy_url,
+        base_model=args.base_model,
+        batch_size=args.batch_size,
     )
 
 

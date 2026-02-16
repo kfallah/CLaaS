@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -54,7 +55,7 @@ async def _init_lora(config: HarnessConfig, lora_id: str) -> str:
     async with httpx.AsyncClient(base_url=config.claas_url, timeout=120.0) as client:
         resp = await client.post(
             "/v1/lora/init",
-            json={"lora_id": lora_id, "base_model": "Qwen/Qwen3-8B"},
+            json={"lora_id": lora_id, "base_model": config.base_model},
         )
         resp.raise_for_status()
         return resp.json()["lora_id"]
@@ -94,21 +95,28 @@ async def _load_lora_into_vllm(
 async def _submit_feedback(
     config: HarnessConfig,
     lora_id: str,
-    prompt: str,
-    response: str,
-    feedback: str,
+    samples: list[dict[str, object]],
 ) -> SDPOMetrics | None:
-    """Submit feedback via CLaaS API and return SDPO metrics."""
-    async with httpx.AsyncClient(base_url=config.claas_url, timeout=180.0) as client:
-        resp = await client.post(
-            "/v1/feedback",
-            json={
+    """Submit batched feedback via CLaaS API and return SDPO metrics.
+
+    Each sample dict must contain: prompt, response, feedback, rollout_logprobs.
+    """
+    payload: dict[str, object] = {
+        "requests": [
+            {
                 "lora_id": lora_id,
-                "prompt": prompt,
-                "response": response,
-                "feedback": feedback,
-            },
-        )
+                "prompt": s["prompt"],
+                "response": s["response"],
+                "feedback": s["feedback"],
+                "rollout_logprobs": s["rollout_logprobs"],
+                "training": {"teacher_mode": "self"},
+            }
+            for s in samples
+        ],
+        "orchestration": {"sleep_before": False, "wake_after": False},
+    }
+    async with httpx.AsyncClient(base_url=config.claas_url, timeout=180.0) as client:
+        resp = await client.post("/v1/feedback", json=payload)
         resp.raise_for_status()
         result = resp.json()
 
@@ -178,6 +186,131 @@ async def _generate_response(
         return resp.json()["choices"][0]["message"]["content"]
 
 
+_ASSISTANT_PREFIX = "<|im_start|>assistant\n"
+_IM_END = "<|im_end|>"
+
+
+async def _fetch_rollout_from_proxy_cache(
+    proxy_url: str,
+    response_content: str,
+) -> tuple[str, list[float]]:
+    """Fetch raw completion and rollout logprobs from the Tinker proxy cache.
+
+    Uses the content hash pattern from the integration tests.  Strips the
+    chat-template wrapper so the raw text can be re-tokenized correctly.
+    """
+    content_hash = hashlib.sha256(response_content.encode("utf-8")).hexdigest()
+    async with httpx.AsyncClient(base_url=proxy_url, timeout=30.0) as client:
+        resp = await client.get(
+            "/v1/completions/raw",
+            params={"content_hash": content_hash},
+        )
+        resp.raise_for_status()
+
+    data = resp.json()
+    logprobs: list[float] = data["logprobs"]
+    raw_text: str = data["response"]
+
+    # Unwrap chat-template wrapper
+    if raw_text.startswith(_ASSISTANT_PREFIX):
+        raw_text = raw_text[len(_ASSISTANT_PREFIX):]
+    if raw_text.endswith(_IM_END):
+        raw_text = raw_text[: -len(_IM_END)]
+
+    return raw_text, logprobs
+
+
+async def _generate_and_collect(
+    config: HarnessConfig,
+    prompt: str,
+) -> tuple[str, str, list[float]]:
+    """Generate via proxy, then fetch rollout logprobs from cache.
+
+    Returns (parsed_content, raw_response, rollout_logprobs).
+    """
+    assert config.proxy_url is not None
+    messages = _build_messages(
+        prompt=prompt,
+        system_prompt=config.system_prompt,
+        prompt_preamble=config.prompt_preamble,
+    )
+    async with httpx.AsyncClient(base_url=config.proxy_url, timeout=120.0) as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "",
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 2048,
+            },
+        )
+        resp.raise_for_status()
+        content: str = resp.json()["choices"][0]["message"]["content"]
+
+    raw_response, rollout_lps = await _fetch_rollout_from_proxy_cache(
+        config.proxy_url, content,
+    )
+    return content, raw_response, rollout_lps
+
+
+async def _fetch_rollout_logprobs_vllm(
+    config: HarnessConfig,
+    model: str,
+    prompt: str,
+    response_text: str,
+) -> list[float]:
+    """Score a prompt+response via vLLM and return per-token logprobs."""
+
+    # We need per-token logprobs, not just the sum. Use the vLLM tokenize+completions
+    # pattern to get them.
+    headers = {"Authorization": f"Bearer {config.vllm_api_key}"} if config.vllm_api_key else {}
+    messages = _build_messages(
+        prompt=prompt,
+        system_prompt=config.system_prompt,
+        prompt_preamble=config.prompt_preamble,
+    )
+    # Build ChatML prefix string for the scoring call
+    chatml_parts: list[str] = []
+    for m in messages:
+        chatml_parts.append(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n")
+    chatml_parts.append("<|im_start|>assistant\n")
+    chatml_prefix = "".join(chatml_parts)
+
+    async with httpx.AsyncClient(base_url=config.vllm_url, timeout=60.0) as client:
+        # Tokenize prompt to learn its length
+        tok_resp = await client.post(
+            "/tokenize",
+            json={"model": model, "prompt": chatml_prefix},
+            headers=headers,
+        )
+        tok_resp.raise_for_status()
+        prompt_token_count: int = tok_resp.json()["count"]
+
+        # Get logprobs for prompt + response
+        comp_resp = await client.post(
+            "/v1/completions",
+            json={
+                "model": model,
+                "prompt": chatml_prefix + response_text,
+                "max_tokens": 1,
+                "prompt_logprobs": 1,
+            },
+            headers=headers,
+        )
+        comp_resp.raise_for_status()
+
+    raw_logprobs = comp_resp.json()["choices"][0]["prompt_logprobs"]
+    logprobs: list[float] = []
+    for entry in raw_logprobs[prompt_token_count:]:
+        if entry is None:
+            logprobs.append(0.0)
+            continue
+        top = next(iter(entry.values()))
+        logprobs.append(top["logprob"])
+
+    return logprobs
+
+
 async def _measure_eval_metrics(
     config: HarnessConfig,
     pref: PreferenceConfig,
@@ -206,6 +339,7 @@ async def _measure_eval_metrics(
         prompt_preamble=config.prompt_preamble,
         openclaw_url=config.openclaw_url,
         openclaw_api_key=config.openclaw_api_key,
+        proxy_url=config.proxy_url,
     )
 
     for metric in enabled_metrics:
@@ -410,9 +544,10 @@ async def run_preference_experiment(
     vllm_model = derive_vllm_model_name(actual_lora_id)
     lora_path = _lora_path_on_disk(actual_lora_id)
 
-    # Load LoRA into vLLM
-    logger.info("[%s] Loading LoRA into vLLM as '%s'", pref.name, vllm_model)
-    await _load_lora_into_vllm(config, actual_lora_id, lora_path)
+    # Load LoRA into vLLM (skip for Tinker — proxy auto-refreshes)
+    if not config.proxy_url:
+        logger.info("[%s] Loading LoRA into vLLM as '%s'", pref.name, vllm_model)
+        await _load_lora_into_vllm(config, actual_lora_id, lora_path)
 
     # Write metadata
     _write_metadata(config.output_dir, pref.name, config, actual_lora_id)
@@ -464,51 +599,98 @@ async def run_preference_experiment(
     for step in range(resume_from, config.num_steps):
         step_start = time.perf_counter()
 
-        prompt = pref.probe_prompts[step % len(pref.probe_prompts)]
-        # Generate response from model when any enabled metric needs it
-        if needs_generation:
-            try:
-                response_text = await _generate_response(
-                    config, vllm_model, prompt, temperature=0,
-                )
-            except (httpx.HTTPError, KeyError, ValueError) as e:
-                logger.warning("[%s] Step %d generation failed, using canned: %s", pref.name, step, e)
-                response_text = "I'd be happy to help you with that."
-        else:
-            response_text = "I'd be happy to help you with that."
-
         # Determine feedback string
         feedback_str = pref.feedback_string
+
+        # Collect samples for this step (batch_size >= 1)
+        samples: list[dict[str, object]] = []
+        response_text: str | None = None
+
+        for i in range(config.batch_size):
+            prompt = pref.probe_prompts[
+                (step * config.batch_size + i) % len(pref.probe_prompts)
+            ]
+
+            if config.proxy_url:
+                # Tinker mode: generate via proxy, collect rollout logprobs from cache
+                try:
+                    content, raw_response, rollout_lps = await _generate_and_collect(
+                        config, prompt,
+                    )
+                    if response_text is None:
+                        response_text = content
+                    samples.append({
+                        "prompt": prompt,
+                        "response": raw_response,
+                        "feedback": feedback_str,
+                        "rollout_logprobs": rollout_lps,
+                    })
+                except (httpx.HTTPError, KeyError, ValueError) as e:
+                    logger.warning(
+                        "[%s] Step %d sample %d proxy generation failed: %s",
+                        pref.name, step, i, e,
+                    )
+            else:
+                # vLLM mode: generate, score logprobs via vLLM
+                try:
+                    gen_text = await _generate_response(
+                        config, vllm_model, prompt, temperature=0,
+                    )
+                    if response_text is None:
+                        response_text = gen_text
+                    rollout_lps = await _fetch_rollout_logprobs_vllm(
+                        config, vllm_model, prompt, gen_text,
+                    )
+                    samples.append({
+                        "prompt": prompt,
+                        "response": gen_text,
+                        "feedback": feedback_str,
+                        "rollout_logprobs": rollout_lps,
+                    })
+                except (httpx.HTTPError, KeyError, ValueError) as e:
+                    logger.warning(
+                        "[%s] Step %d sample %d vLLM generation failed: %s",
+                        pref.name, step, i, e,
+                    )
+
+        if response_text is None:
+            response_text = "I'd be happy to help you with that."
+
+        # Gemini feedback override (optional)
         if needs_generation and gemini_user:
             try:
                 gemini_result = await gemini_user.evaluate_response(response_text, prompt)
                 if gemini_result.feedback:
                     feedback_str = gemini_result.feedback
+                    # Update feedback in all samples
+                    for s in samples:
+                        s["feedback"] = feedback_str
             except (httpx.HTTPError, KeyError, ValueError, ImportError) as e:
                 logger.warning("[%s] Gemini feedback failed, using default: %s", pref.name, e)
 
-        # Submit feedback via CLaaS API.
-        # The feedback endpoint handles vLLM sleep/wake orchestration internally.
+        # Submit feedback via CLaaS API
         sdpo_metrics = None
-        try:
-            sdpo_metrics = await _submit_feedback(
-                config, actual_lora_id, prompt, response_text, feedback_str,
-            )
-        except (httpx.HTTPError, KeyError) as e:
-            logger.warning("[%s] Step %d feedback failed: %s — retrying in 5s", pref.name, step, e)
-            await asyncio.sleep(5)
+        if samples:
             try:
                 sdpo_metrics = await _submit_feedback(
-                    config, actual_lora_id, prompt, response_text, feedback_str,
+                    config, actual_lora_id, samples,
                 )
-            except (httpx.HTTPError, KeyError) as e2:
-                logger.error("[%s] Step %d feedback failed on retry: %s", pref.name, step, e2)
+            except (httpx.HTTPError, KeyError) as e:
+                logger.warning("[%s] Step %d feedback failed: %s — retrying in 5s", pref.name, step, e)
+                await asyncio.sleep(5)
+                try:
+                    sdpo_metrics = await _submit_feedback(
+                        config, actual_lora_id, samples,
+                    )
+                except (httpx.HTTPError, KeyError) as e2:
+                    logger.error("[%s] Step %d feedback failed on retry: %s", pref.name, step, e2)
 
-        # Reload LoRA into vLLM (picks up any on-disk changes from distillation)
-        try:
-            await _load_lora_into_vllm(config, actual_lora_id, lora_path)
-        except (httpx.HTTPError, KeyError) as e:
-            logger.warning("[%s] LoRA reload failed: %s", pref.name, e)
+        # Reload LoRA into vLLM (skip for Tinker — proxy auto-refreshes)
+        if not config.proxy_url:
+            try:
+                await _load_lora_into_vllm(config, actual_lora_id, lora_path)
+            except (httpx.HTTPError, KeyError) as e:
+                logger.warning("[%s] LoRA reload failed: %s", pref.name, e)
 
         # Measure eval
         try:
@@ -530,7 +712,9 @@ async def run_preference_experiment(
             feedback_given=feedback_str,
             sdpo_metrics=sdpo_metrics,
             eval=eval_metrics,
-            prompt_used=prompt,
+            prompt_used=pref.probe_prompts[
+                (step * config.batch_size) % len(pref.probe_prompts)
+            ],
             response_text=response_text if needs_generation else None,
             timing_s=timing_s,
         )
@@ -551,8 +735,8 @@ async def run_preference_experiment(
             else ""
         )
         logger.info(
-            "[%s] Step %d/%d: %s %s (%.1fs)",
-            pref.name, step, config.num_steps - 1,
+            "[%s] Step %d/%d (batch=%d): %s %s (%.1fs)",
+            pref.name, step, config.num_steps - 1, len(samples),
             margin_str, compliance_str, timing_s,
         )
 

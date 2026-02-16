@@ -315,3 +315,69 @@ class TestHelperFunctions:
         assert _bounded_float(None, default=0.5, minimum=0.0, maximum=1.0) == 0.5
         assert _bounded_float(5.0, default=0.5, minimum=0.0, maximum=1.0) == 1.0
         assert _bounded_float(-1.0, default=0.5, minimum=0.0, maximum=1.0) == 0.0
+
+
+class TestScoreEndpoint:
+    def test_score_returns_logprobs(self, proxy_client):
+        from claas.proxy.tinker_inference_proxy import _holder
+
+        # Set up mock sampler with compute_logprobs
+        mock_sampler = MagicMock()
+        # Prompt tokens [10, 20, 30] + completion tokens [40, 50] = 5 tokens total
+        # compute_logprobs returns one logprob per token (first is None = BOS)
+        mock_sampler.compute_logprobs.return_value = [
+            None, -1.0, -2.0, -0.5, -0.3,
+        ]
+
+        mock_tokenizer = MagicMock()
+        # encode("prompt text", add_special_tokens=True) -> prompt tokens
+        # encode("completion text", add_special_tokens=False) -> completion tokens
+        def _encode(text, add_special_tokens=True):
+            if add_special_tokens:
+                return [10, 20, 30]  # prompt
+            return [40, 50]  # completion
+
+        mock_tokenizer.encode.side_effect = _encode
+        mock_tokenizer.decode.side_effect = lambda ids: f"tok{ids[0]}"
+
+        mock_renderer = _make_mock_renderer()
+        _patch_holder(_holder, mock_sampler, mock_tokenizer, mock_renderer)
+
+        resp = proxy_client.post(
+            "/v1/score",
+            json={"prompt": "prompt text", "completion": "completion text"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert body["prompt_tokens"] == 3
+        assert body["completion_tokens"] == 2
+        # Logprobs at positions 3 and 4 -> [-0.5, -0.3]
+        assert body["logprobs"] == pytest.approx([-0.5, -0.3])
+        assert body["tokens"] == ["tok40", "tok50"]
+        assert body["logprob_sum"] == pytest.approx(-0.8)
+
+    def test_score_handles_none_logprobs(self, proxy_client):
+        from claas.proxy.tinker_inference_proxy import _holder
+
+        mock_sampler = MagicMock()
+        # None in completion region should become 0.0
+        mock_sampler.compute_logprobs.return_value = [None, -1.0, None]
+
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.encode.side_effect = lambda text, add_special_tokens=True: (
+            [10] if add_special_tokens else [20, 30]
+        )
+        mock_tokenizer.decode.side_effect = lambda ids: f"t{ids[0]}"
+
+        _patch_holder(_holder, mock_sampler, mock_tokenizer, _make_mock_renderer())
+
+        resp = proxy_client.post(
+            "/v1/score",
+            json={"prompt": "p", "completion": "c"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        # Position 1 = -1.0, position 2 = None -> 0.0
+        assert body["logprobs"] == pytest.approx([-1.0, 0.0])
+        assert body["logprob_sum"] == pytest.approx(-1.0)

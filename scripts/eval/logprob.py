@@ -118,20 +118,45 @@ async def fetch_response_logprob_sum(
     return logprob_sum
 
 
+async def fetch_response_logprob_sum_via_proxy(
+    proxy_url: str,
+    chatml_prefix: str,
+    response_text: str,
+    timeout_s: float = 60.0,
+) -> float:
+    """Fetch the total log-probability via the Tinker proxy /v1/score endpoint."""
+    async with httpx.AsyncClient(base_url=proxy_url, timeout=timeout_s) as client:
+        resp = await client.post(
+            "/v1/score",
+            json={"prompt": chatml_prefix, "completion": response_text},
+        )
+        resp.raise_for_status()
+        return resp.json()["logprob_sum"]
+
+
 async def measure_logprob_margin(
     vllm_url: str,
     vllm_api_key: str,
     model: str,
     pair: LogprobPair,
     baseline_margin: float | None = None,
+    proxy_url: str | None = None,
 ) -> LogprobMargin:
     """Measure the logprob margin between positive and negative examples."""
-    positive_lp = await fetch_response_logprob_sum(
-        vllm_url, vllm_api_key, model, pair.prompt_chatml, pair.positive_response,
-    )
-    negative_lp = await fetch_response_logprob_sum(
-        vllm_url, vllm_api_key, model, pair.prompt_chatml, pair.negative_response,
-    )
+    if proxy_url:
+        positive_lp = await fetch_response_logprob_sum_via_proxy(
+            proxy_url, pair.prompt_chatml, pair.positive_response,
+        )
+        negative_lp = await fetch_response_logprob_sum_via_proxy(
+            proxy_url, pair.prompt_chatml, pair.negative_response,
+        )
+    else:
+        positive_lp = await fetch_response_logprob_sum(
+            vllm_url, vllm_api_key, model, pair.prompt_chatml, pair.positive_response,
+        )
+        negative_lp = await fetch_response_logprob_sum(
+            vllm_url, vllm_api_key, model, pair.prompt_chatml, pair.negative_response,
+        )
 
     margin = positive_lp - negative_lp
     delta = margin - baseline_margin if baseline_margin is not None else 0.0
