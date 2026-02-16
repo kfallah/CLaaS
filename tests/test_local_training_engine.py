@@ -36,6 +36,7 @@ def test_local_engine_distill_ignores_cleanup_error(monkeypatch):
                         prompt="p",
                         response="r",
                         feedback="f",
+                        rollout_logprobs=[-0.1],
                     )
                 ],
             )

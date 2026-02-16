@@ -99,6 +99,7 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
                         prompt="prompt",
                         response="response",
                         feedback="feedback",
+                        rollout_logprobs=[-0.1],
                     )
                 ],
             )
@@ -137,6 +138,7 @@ def test_local_engine_cleanup_failure_is_ignored(monkeypatch):
                         prompt="prompt",
                         response="response",
                         feedback="feedback",
+                        rollout_logprobs=[-0.1],
                     )
                 ],
             )

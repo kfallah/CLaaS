@@ -63,12 +63,8 @@ def noop_vllm(monkeypatch):
     async def noop_wait():
         pass
 
-    async def noop_fetch(_prompt, _response, _model, _timeout_s=60.0):
-        return [-0.1, -0.2]
-
     monkeypatch.setattr(api, "_vllm_post", noop_post)
     monkeypatch.setattr(api, "_wait_for_vllm_idle", noop_wait)
-    monkeypatch.setattr(api, "_fetch_rollout_logprobs", noop_fetch)
 
 
 def _set_engine(monkeypatch, engine):
@@ -97,10 +93,6 @@ class _FunctionStub:
 class _RemoteCallFailure:
     async def aio(self, _request):
         raise RuntimeError("modal rpc failure")
-
-
-async def _noop_fetch_logprobs(_prompt, _response, _model, _timeout_s=60.0):
-    return [-0.1, -0.2]
 
 
 class _FunctionFailureStub:
@@ -144,6 +136,7 @@ def test_distill_404_when_lora_missing(monkeypatch):
             "prompt": "p",
             "response": "r",
             "feedback": "f",
+            "rollout_logprobs": [-0.1],
             "training": {},
         },
     )
@@ -173,6 +166,7 @@ def test_distill_success(monkeypatch):
             "prompt": "p",
             "response": "r",
             "feedback": "f",
+            "rollout_logprobs": [-0.1],
             "training": {},
         },
     )
@@ -215,7 +209,6 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
     monkeypatch.setattr(api, "_write_feedback_log", fake_write_feedback_log)
-    monkeypatch.setattr(api, "_fetch_rollout_logprobs", _noop_fetch_logprobs)
 
     client = TestClient(web_app)
     response = client.post(
@@ -227,6 +220,7 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
                     "prompt": "p",
                     "response": "r",
                     "feedback": "f",
+                    "rollout_logprobs": [-0.1],
                     "training": {"teacher_mode": "self"},
                 }
             ],
@@ -276,7 +270,6 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
     monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
     monkeypatch.setattr(api, "_write_feedback_log", fake_write_feedback_log)
-    monkeypatch.setattr(api, "_fetch_rollout_logprobs", _noop_fetch_logprobs)
 
     client = TestClient(web_app)
     response = client.post(
@@ -288,6 +281,7 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
                     "prompt": "p",
                     "response": "r",
                     "feedback": "f",
+                    "rollout_logprobs": [-0.1],
                     "training": {"teacher_mode": "self"},
                 }
             ],
@@ -329,11 +323,63 @@ def test_distill_returns_500_on_worker_failure(monkeypatch):
             "prompt": "p",
             "response": "r",
             "feedback": "f",
+            "rollout_logprobs": [-0.1],
             "training": {},
         },
     )
     assert response.status_code == 500
     assert "Distillation failed" in response.json()["detail"]
+
+
+def test_feedback_calls_drain_before_pause(monkeypatch, tmp_path):
+    """_wait_for_vllm_idle is called before /pause."""
+    from claas import api
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+    order = []
+
+    def fake_from_name(_app, fn_name):
+        if fn_name == "DistillWorker.distill":
+            return _FunctionStub(
+                {"lora_id": "user/model", "metadata": {"tokens_processed": 1}},
+            )
+        raise AssertionError(f"unexpected modal function: {fn_name}")
+
+    async def fake_wait_idle():
+        order.append("drain")
+
+    async def fake_vllm_post(path, *, params=None, json_body=None, timeout_s=30.0):
+        order.append(path)
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
+    monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
+    monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
+    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "rollout_logprobs": [-0.1],
+                    "training": {"teacher_mode": "self"},
+                }
+            ],
+            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
+        },
+    )
+
+    assert response.status_code == 200
+    # drain must come before /pause
+    assert order[0] == "drain"
+    assert order[1] == "/pause"
+
 
 
 def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
@@ -363,6 +409,7 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
                     "prompt": "p",
                     "response": "r",
                     "feedback": "f",
+                    "rollout_logprobs": [-0.1],
                     "training": {"teacher_mode": "self"},
                 }
             ],
@@ -374,8 +421,10 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
     assert "vLLM not idle" in response.json()["detail"]
 
 
-def test_feedback_fetches_rollout_logprobs(monkeypatch, tmp_path):
-    """Rollout logprobs are fetched and forwarded to the distill worker."""
+
+
+def test_feedback_forwards_required_rollout_logprobs(monkeypatch, tmp_path):
+    """Provided rollout_logprobs are forwarded to distill worker."""
     from claas import api
 
     monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
@@ -389,111 +438,12 @@ def test_feedback_fetches_rollout_logprobs(monkeypatch, tmp_path):
             )
         raise AssertionError(f"unexpected modal function: {fn_name}")
 
-    async def fake_fetch(_prompt, _response, _model, _timeout_s=60.0):
-        return [-0.5, -1.2, -0.3]
 
     monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
     monkeypatch.setattr(api, "_vllm_post", lambda *_a, **_kw: _noop_coro())
     monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
     monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
-    monkeypatch.setattr(api, "_fetch_rollout_logprobs", fake_fetch)
-
-    client = TestClient(web_app)
-    response = client.post(
-        "/v1/feedback",
-        json={
-            "requests": [
-                {
-                    "lora_id": "user/model",
-                    "prompt": "p",
-                    "response": "r",
-                    "feedback": "f",
-                    "training": {"teacher_mode": "self"},
-                }
-            ],
-            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
-        },
-    )
-
-    assert response.status_code == 200
-    assert captured["request"]["samples"][0]["rollout_logprobs"] == [-0.5, -1.2, -0.3]
-
-
-def test_feedback_logprobs_fetch_failure_continues(monkeypatch, tmp_path):
-    """A failing logprobs fetch logs a warning but returns 200."""
-    import httpx as _httpx
-
-    from claas import api
-
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
-    captured = {}
-
-    def fake_from_name(_app, fn_name):
-        if fn_name == "DistillWorker.distill":
-            return _FunctionStub(
-                {"lora_id": "user/model", "metadata": {"tokens_processed": 1}},
-                capture=captured,
-            )
-        raise AssertionError(f"unexpected modal function: {fn_name}")
-
-    async def failing_fetch(_prompt, _response, _model, _timeout_s=60.0):
-        raise _httpx.HTTPError("connection refused")
-
-    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
-    monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
-    monkeypatch.setattr(api, "_vllm_post", lambda *_a, **_kw: _noop_coro())
-    monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
-    monkeypatch.setattr(api, "_fetch_rollout_logprobs", failing_fetch)
-
-    client = TestClient(web_app)
-    response = client.post(
-        "/v1/feedback",
-        json={
-            "requests": [
-                {
-                    "lora_id": "user/model",
-                    "prompt": "p",
-                    "response": "r",
-                    "feedback": "f",
-                    "training": {"teacher_mode": "self"},
-                }
-            ],
-            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
-        },
-    )
-
-    assert response.status_code == 200
-    assert captured["request"]["samples"][0]["rollout_logprobs"] is None
-
-
-def test_feedback_skips_logprobs_when_provided(monkeypatch, tmp_path):
-    """When rollout_logprobs is already provided, the fetch is skipped."""
-    from claas import api
-
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
-    captured = {}
-    fetch_called = []
-
-    def fake_from_name(_app, fn_name):
-        if fn_name == "DistillWorker.distill":
-            return _FunctionStub(
-                {"lora_id": "user/model", "metadata": {"tokens_processed": 1}},
-                capture=captured,
-            )
-        raise AssertionError(f"unexpected modal function: {fn_name}")
-
-    async def spy_fetch(_prompt, _response, _model, _timeout_s=60.0):
-        fetch_called.append(True)
-        return [-9.9]
-
-    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
-    monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
-    monkeypatch.setattr(api, "_vllm_post", lambda *_a, **_kw: _noop_coro())
-    monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
-    monkeypatch.setattr(api, "_fetch_rollout_logprobs", spy_fetch)
 
     client = TestClient(web_app)
     response = client.post(
@@ -515,7 +465,6 @@ def test_feedback_skips_logprobs_when_provided(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert captured["request"]["samples"][0]["rollout_logprobs"] == [-0.1, -0.2]
-    assert fetch_called == []
 
 
 async def _noop_coro():
@@ -560,6 +509,7 @@ def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
                     "prompt": "p",
                     "response": "r",
                     "feedback": "f",
+                    "rollout_logprobs": [-0.1],
                     "training": {"teacher_mode": "self"},
                 }
             ],
@@ -597,6 +547,7 @@ def test_feedback_tinker_accepts_default_orchestration(monkeypatch, tmp_path):
                     "prompt": "p",
                     "response": "r",
                     "feedback": "f",
+                    "rollout_logprobs": [-0.1],
                     "training": {"teacher_mode": "self"},
                 }
             ],
@@ -801,7 +752,7 @@ def test_recent_feedback_dashboard_renders_latest_records(monkeypatch, tmp_path)
       "prompt": "prompt-a",
       "response": "response-a",
       "feedback": "feedback-a",
-      "rollout_logprobs": null,
+      "rollout_logprobs": [-0.1],
       "training": {
         "learning_rate": 0.0001,
         "alpha": 0.5,
@@ -824,7 +775,7 @@ def test_recent_feedback_dashboard_renders_latest_records(monkeypatch, tmp_path)
       "prompt": "prompt-a",
       "response": "response-a",
       "feedback": "feedback-a",
-      "rollout_logprobs": null,
+      "rollout_logprobs": [-0.1],
       "teacher_result": null
     }
   ],
@@ -900,7 +851,7 @@ def test_recent_feedback_dashboard_truncates_prompt_preview(monkeypatch, tmp_pat
       "prompt": "{long_prompt}",
       "response": "response-c",
       "feedback": "feedback-c",
-      "rollout_logprobs": null,
+      "rollout_logprobs": [-0.1],
       "training": {{
         "learning_rate": 0.0001,
         "alpha": 0.5,
@@ -923,7 +874,7 @@ def test_recent_feedback_dashboard_truncates_prompt_preview(monkeypatch, tmp_pat
       "prompt": "{long_prompt}",
       "response": "response-c",
       "feedback": "feedback-c",
-      "rollout_logprobs": null,
+      "rollout_logprobs": [-0.1],
       "teacher_result": null
     }}
   ],
@@ -957,3 +908,47 @@ def test_recent_feedback_dashboard_truncates_prompt_preview(monkeypatch, tmp_pat
     assert response.status_code == 200
     assert "…" in response.text
     assert long_prompt in response.text
+
+
+def test_feedback_requires_rollout_logprobs(monkeypatch):
+    from claas import api
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
+    client = TestClient(web_app)
+
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "training": {"teacher_mode": "self"},
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_distill_requires_rollout_logprobs(monkeypatch):
+    from claas import api
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
+    client = TestClient(web_app)
+
+    response = client.post(
+        "/v1/distill",
+        json={
+            "lora_id": "user/model",
+            "prompt": "p",
+            "response": "r",
+            "feedback": "f",
+            "training": {},
+        },
+    )
+
+    assert response.status_code == 422

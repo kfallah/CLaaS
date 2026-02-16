@@ -403,6 +403,7 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
                 prompt="Hello",
                 response="World",
                 feedback="Good job",
+                rollout_logprobs=[],
             )
         ],
     )
