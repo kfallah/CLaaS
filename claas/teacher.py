@@ -44,6 +44,7 @@ class ChatMessage(TypedDict):
     role: Literal["system", "user", "assistant"]
     content: str
 
+
 # Modal app (shared with training worker)
 app = modal.App("claas-distill")
 

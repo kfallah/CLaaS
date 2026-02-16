@@ -1,35 +1,13 @@
 services:
-  # ------------------------------------------------------------------
-  # init: one-shot container — creates LoRA adapter + OpenClaw config
-  # ------------------------------------------------------------------
-  init:
-    build:
-      context: .
-      dockerfile: Dockerfile.init
-    environment:
-      - CLAAS_STORAGE_BACKEND=local_fs
-      - CLAAS_LORA_ROOT=/loras
-      - LORA_NAME=${LORA_NAME:-openclaw/assistant}
-      - MODEL=${MODEL:-Qwen/Qwen3-8B}
-      - VLLM_BASE_URL=http://vllm:8000/v1
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - OPENCLAW_HOME=/openclaw-config
-      - CLAAS_API_URL=http://claas-api:8080
-    volumes:
-      - lora-storage:/loras
-      - openclaw-config:/openclaw-config
-      - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro
+  # ==================== LOCAL PROFILE ====================
 
-  # ------------------------------------------------------------------
-  # vllm: Qwen3-8B + LoRA serving (GPU)
-  # ------------------------------------------------------------------
   vllm:
+    profiles: [local]
     image: vllm/vllm-openai:v0.15.1
     entrypoint: ["/scripts/start_vllm_qwen3_8b.sh"]
     environment:
       - MODEL=${MODEL:-Qwen/Qwen3-8B}
       - HOST=0.0.0.0
-      # PORT deliberately unset — script defaults to 8000
       - API_KEY=sk-local
       - SERVED_MODEL_NAMES=qwen3-8b
       - MAX_MODEL_LEN=${MAX_MODEL_LEN:-32768}
@@ -63,17 +41,14 @@ services:
       start_period: 180s
       retries: 80
     depends_on:
-      init:
+      init-local:
         condition: service_completed_successfully
 
-  # ------------------------------------------------------------------
-  # claas-api: Feedback API + distill worker (GPU, shared with vLLM
-  # via sleep/wake)
-  # ------------------------------------------------------------------
   claas-api:
+    profiles: [local]
     build:
-      context: .
-      dockerfile: Dockerfile.claas-api
+      context: ..
+      dockerfile: docker/Dockerfile.claas-api
     environment:
       - CLAAS_STORAGE_BACKEND=local_fs
       - CLAAS_LORA_ROOT=/loras
@@ -100,13 +75,31 @@ services:
       vllm:
         condition: service_healthy
 
-  # ------------------------------------------------------------------
-  # openclaw: Telegram bot gateway
-  # ------------------------------------------------------------------
-  openclaw:
+  init-local:
+    profiles: [local]
     build:
-      context: .
-      dockerfile: Dockerfile.openclaw
+      context: ..
+      dockerfile: docker/Dockerfile.init
+    environment:
+      - CLAAS_STORAGE_BACKEND=local_fs
+      - CLAAS_LORA_ROOT=/loras
+      - CLAAS_DISTILL_EXECUTION_MODE=local
+      - LORA_NAME=${LORA_NAME:-openclaw/assistant}
+      - MODEL=${MODEL:-Qwen/Qwen3-8B}
+      - VLLM_BASE_URL=http://vllm:8000/v1
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - OPENCLAW_HOME=/openclaw-config
+      - CLAAS_API_URL=http://claas-api:8080
+    volumes:
+      - lora-storage:/loras
+      - openclaw-config:/openclaw-config
+      - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro
+
+  openclaw-local:
+    profiles: [local]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.openclaw
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - VLLM_BASE_URL=http://vllm:8000
@@ -117,7 +110,98 @@ services:
     depends_on:
       vllm:
         condition: service_healthy
-      init:
+      init-local:
+        condition: service_completed_successfully
+
+  # ==================== TINKER PROFILE ====================
+
+  tinker-proxy:
+    profiles: [tinker]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.tinker-proxy
+    environment:
+      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:-}
+      - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
+    ports:
+      - "${TINKER_PROXY_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      start_period: 20s
+      retries: 20
+
+  claas-api-tinker:
+    profiles: [tinker]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.tinker-claas-api
+    networks:
+      default:
+        aliases:
+          - claas-api
+    environment:
+      - CLAAS_STORAGE_BACKEND=local_fs
+      - CLAAS_DISTILL_EXECUTION_MODE=tinker
+      - CLAAS_BASE_MODEL_ID=${MODEL:-gpt-oss/GPT-OSS-120B}
+      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:-}
+      - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
+      - CLAAS_TINKER_STATE_PATH=/data/tinker_state.json
+      - FEEDBACK_LOG_DIR=/feedback-logs
+      - VLLM_BASE_URL=http://tinker-proxy:8000
+      - WAIT_FOR_BACKEND=0
+    volumes:
+      - claas-feedback-logs:/feedback-logs
+      - tinker-state:/data
+    ports:
+      - "${CLAAS_API_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 20
+
+  init-tinker:
+    profiles: [tinker]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.init
+    environment:
+      - CLAAS_DISTILL_EXECUTION_MODE=tinker
+      - LORA_NAME=${LORA_NAME:-openclaw/assistant}
+      - MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
+      - VLLM_BASE_URL=http://tinker-proxy:8000/v1
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - OPENCLAW_HOME=/openclaw-config
+      - CLAAS_API_URL=http://claas-api:8080
+    volumes:
+      - openclaw-config:/openclaw-config
+      - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro
+    depends_on:
+      tinker-proxy:
+        condition: service_healthy
+      claas-api-tinker:
+        condition: service_healthy
+
+  openclaw-tinker:
+    profiles: [tinker]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.openclaw
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - VLLM_BASE_URL=http://tinker-proxy:8000
+      - BACKEND_HEALTH_URL=http://tinker-proxy:8000/v1/models
+    volumes:
+      - openclaw-config:/home/node/.openclaw
+    ports:
+      - "${OPENCLAW_PORT:-18789}:18789"
+    depends_on:
+      tinker-proxy:
+        condition: service_healthy
+      init-tinker:
         condition: service_completed_successfully
 
 volumes:
@@ -125,3 +209,4 @@ volumes:
   lora-storage:
   openclaw-config:
   claas-feedback-logs:
+  tinker-state:

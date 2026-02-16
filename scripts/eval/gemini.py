@@ -52,7 +52,7 @@ class GeminiUser:
         """Lazily initialize the Gemini client."""
         if self._client is None:
             try:
-                from google import genai
+                from google import genai  # type: ignore[import-not-found]
 
                 self._client = genai.Client(api_key=self._api_key)
             except ImportError as err:

@@ -6,7 +6,7 @@ without a local GPU.
 
 Usage::
 
-    TINKER_API_KEY=... CLAAS_TINKER_BASE_MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507 \
+    TINKER_API_KEY=... CLAAS_TINKER_BASE_MODEL=gpt-oss/GPT-OSS-120B \
         uvicorn claas.tinker_inference_proxy:app --host 0.0.0.0 --port 8000
 """
 
@@ -27,7 +27,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from tinker import types as T
 from tinker_cookbook import model_info
-from tinker_cookbook.renderers import Renderer, get_renderer
+from tinker_cookbook.renderers import Message, Renderer, get_renderer
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
@@ -36,7 +36,7 @@ else:
 
 app = FastAPI(title="CLaaS Tinker Inference Proxy")
 
-_BASE_MODEL = os.environ.get("CLAAS_TINKER_BASE_MODEL", "Qwen/Qwen3-30B-A3B-Instruct-2507")
+_BASE_MODEL = os.environ.get("CLAAS_TINKER_BASE_MODEL", "gpt-oss/GPT-OSS-120B")
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ async def _sample_async(
     sampler: tinker.SamplingClient,
     prompt: T.ModelInput,
     sampling_params: T.SamplingParams,
-) -> T.SamplingResponse:
+) -> T.SampleResponse:
     """Run blocking sampling in a worker thread to avoid blocking the event loop."""
     return await asyncio.to_thread(
         lambda: sampler.sample(
@@ -164,7 +164,10 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
     renderer = _holder.renderer
     sampler = _holder.sampler
 
-    messages = [{"role": m.role, "content": _coerce_content(m.content)} for m in req.messages]
+    messages: list[Message] = [
+        Message(role=m.role, content=_coerce_content(m.content))
+        for m in req.messages
+    ]
     model_input = renderer.build_generation_prompt(messages)
 
     stop_seqs = req.stop or renderer.get_stop_sequences()
@@ -271,6 +274,12 @@ async def refresh_sampler(body: RefreshRequest) -> dict[str, object]:
     """Refresh the sampling client, optionally pointing at a new checkpoint."""
     _holder.refresh(model_path=body.model_path)
     return {"status": "ok", "model_path": body.model_path}
+
+
+@app.get("/v1/sampler/status")
+async def sampler_status() -> dict[str, object]:
+    """Return the currently loaded model path (null = base model only)."""
+    return {"model_path": _holder._model_path, "base_model": _BASE_MODEL}
 
 
 @app.get("/v1/models")
