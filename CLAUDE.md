@@ -21,20 +21,28 @@ Note: GPU dependencies (modal, torch, vllm, transformers, peft) are not installe
 ### Run Tests
 
 ```bash
-uv run pytest tests/ -v
+uv run pytest tests/ -v -m "not integration"
 ```
 
 ## Project Structure
 
 ```text
 claas/
-├── api.py           # FastAPI endpoints
-├── cli.py           # Command-line interface
-├── config.py        # Configuration dataclasses
-├── sdpo_loss.py     # SDPO loss computation (core algorithm)
-├── storage.py       # Modal Volume storage for LoRAs
-├── teacher.py       # vLLM teacher service (Modal)
-└── worker.py        # Training worker (Modal)
+├── api.py                    # FastAPI endpoints
+├── cli.py                    # Command-line interface
+├── config.py                 # Configuration dataclasses
+├── deploy.py                 # Modal deployment entrypoint
+├── sdpo_loss.py              # SDPO loss computation (core algorithm)
+├── storage.py                # LoRA storage (Modal Volume or local filesystem)
+├── teacher.py                # Teacher prompt building
+├── tinker_inference_proxy.py # Tinker SDK → OpenAI-compatible proxy
+├── types.py                  # Pydantic request/response models
+├── worker.py                 # Distill worker (local/Modal)
+└── training_engines/         # Pluggable training backends
+    ├── base.py               # TrainingEngine abstract interface
+    ├── local/engine.py       # Local GPU execution
+    ├── modal/engine.py       # Modal remote execution
+    └── tinker/engine.py      # Tinker SDK execution
 ```
 
 ## Modal Deployment
@@ -42,20 +50,20 @@ claas/
 Deploy to Modal:
 
 ```bash
-modal deploy claas.api
+modal deploy -m claas.deploy
 ```
 
 Run locally for development:
 
 ```bash
-modal serve claas.api
+modal serve -m claas.deploy
 ```
 
 ## Key Patterns
 
 ### Storage
 
-LoRAs are stored in Modal Volumes at `/loras/{user}/{model}`:
+LoRA storage is engine-dependent: local filesystem (`CLAAS_LORA_ROOT`), Modal Volume, or Tinker JSON state. The core functions in `storage.py` handle local and Modal paths:
 
 ```python
 from claas.storage import load_lora, save_lora, create_initial_lora
@@ -88,7 +96,7 @@ loss_dict = compute_sdpo_loss(
 
 ## Dependencies
 
-Heavy dependencies (torch, vllm, transformers) are only available inside Modal containers. Type checking will show "missing import" errors for these - this is expected.
+Heavy dependencies (torch, vllm, transformers, tinker) are not installed locally. They run inside Docker containers, Modal containers, or the Tinker cloud. `ty check` will report `unresolved-import` errors for these — this is expected.
 
 ## Architecture Rules
 

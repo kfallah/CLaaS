@@ -22,7 +22,7 @@ When this skill is invoked, perform the following steps. The user may pass a Tel
 
 ```bash
 # Install CLaaS + vLLM (from repo root)
-uv sync --extra teacher --extra dev
+uv sync --extra local --extra teacher --extra dev
 
 # Install OpenClaw
 npm install -g openclaw@latest
