@@ -625,17 +625,17 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                 await _vllm_reload_lora(lora_id)
                 timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
                 woke = True
+
+            if _get_engine_kind() == "tinker" and distill_result is not None:
+                sampler_path = (distill_result.metadata or {}).get("sampler_weights_path")
+                if sampler_path:
+                    phase = "wake"
+                    wake_start = time.perf_counter()
+                    await _tinker_proxy_refresh(str(sampler_path))
+                    timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
+                    woke = True
         finally:
             lock.release()
-
-        if _get_engine_kind() == "tinker" and distill_result is not None:
-            sampler_path = (distill_result.metadata or {}).get("sampler_weights_path")
-            if sampler_path:
-                phase = "wake"
-                wake_start = time.perf_counter()
-                await _tinker_proxy_refresh(str(sampler_path))
-                timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
-                woke = True
 
         timing_ms.total = int((time.perf_counter() - started_total) * 1000)
     except asyncio.TimeoutError:

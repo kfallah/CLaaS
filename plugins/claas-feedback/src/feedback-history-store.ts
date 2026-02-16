@@ -12,6 +12,7 @@ export interface FeedbackHistoryEntry {
 const historyBySession = new Map<string, FeedbackHistoryEntry[]>();
 const pendingBySession = new Map<string, FeedbackHistoryEntry[]>();
 const MAX_HISTORY_PER_SESSION = 200;
+const MAX_PENDING_PER_SESSION = 200;
 
 /**
  * Append one feedback item and return pending-buffer stats.
@@ -38,6 +39,9 @@ export function appendFeedback(
 
   const pending = pendingBySession.get(sessionKey) ?? [];
   pending.push(entry);
+  if (pending.length > MAX_PENDING_PER_SESSION) {
+    pending.splice(0, pending.length - MAX_PENDING_PER_SESSION);
+  }
   pendingBySession.set(sessionKey, pending);
 
   return { pendingSize: pending.length };
@@ -47,6 +51,9 @@ export function appendFeedback(
  * Remove and return the oldest pending entries for a session.
  */
 export function takePendingBatch(sessionKey: string, batchSize: number): FeedbackHistoryEntry[] {
+  if (batchSize <= 0) {
+    return [];
+  }
   const pending = pendingBySession.get(sessionKey) ?? [];
   const batch = pending.slice(0, batchSize);
   pendingBySession.set(sessionKey, pending.slice(batchSize));
@@ -62,7 +69,8 @@ export function requeuePendingBatch(sessionKey: string, batch: FeedbackHistoryEn
     return;
   }
   const pending = pendingBySession.get(sessionKey) ?? [];
-  pendingBySession.set(sessionKey, [...batch, ...pending]);
+  const merged = [...batch, ...pending];
+  pendingBySession.set(sessionKey, merged.slice(0, MAX_PENDING_PER_SESSION));
 }
 
 /**

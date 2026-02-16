@@ -116,7 +116,19 @@ export async function fetchRawCompletion(
   contentHash: string,
 ): Promise<RawCompletion> {
   const url = `${proxyUrl.replace(/\/+$/, "")}/v1/completions/raw?content_hash=${encodeURIComponent(contentHash)}`;
-  const res = await fetch(url, { method: "GET" });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10_000);
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "GET", signal: controller.signal });
+  } catch (err: unknown) {
+    clearTimeout(timeoutId);
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`Raw completion fetch timed out after 10s (hash=${contentHash.slice(0, 12)})`);
+    }
+    throw err;
+  }
+  clearTimeout(timeoutId);
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(

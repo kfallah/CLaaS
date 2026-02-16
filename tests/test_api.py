@@ -521,7 +521,7 @@ def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
     assert captured["key"] == "user-model-v1"
 
 
-def test_feedback_tinker_accepts_default_orchestration(monkeypatch, tmp_path):
+def test_feedback_tinker_accepts_explicit_orchestration(monkeypatch, tmp_path):
     from claas import api
 
     monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
