@@ -186,18 +186,15 @@ async def _generate_response(
         return resp.json()["choices"][0]["message"]["content"]
 
 
-_ASSISTANT_PREFIX = "<|im_start|>assistant\n"
-_IM_END = "<|im_end|>"
-
-
 async def _fetch_rollout_from_proxy_cache(
     proxy_url: str,
     response_content: str,
 ) -> tuple[str, list[float]]:
     """Fetch raw completion and rollout logprobs from the Tinker proxy cache.
 
-    Uses the content hash pattern from the integration tests.  Strips the
-    chat-template wrapper so the raw text can be re-tokenized correctly.
+    Uses the content hash pattern from the integration tests.  Returns the
+    raw response text and logprobs as-is — they come from the same
+    ``seq.tokens`` / ``seq.logprobs`` and are already aligned.
     """
     content_hash = hashlib.sha256(response_content.encode("utf-8")).hexdigest()
     async with httpx.AsyncClient(base_url=proxy_url, timeout=30.0) as client:
@@ -208,16 +205,7 @@ async def _fetch_rollout_from_proxy_cache(
         resp.raise_for_status()
 
     data = resp.json()
-    logprobs: list[float] = data["logprobs"]
-    raw_text: str = data["response"]
-
-    # Unwrap chat-template wrapper
-    if raw_text.startswith(_ASSISTANT_PREFIX):
-        raw_text = raw_text[len(_ASSISTANT_PREFIX):]
-    if raw_text.endswith(_IM_END):
-        raw_text = raw_text[: -len(_IM_END)]
-
-    return raw_text, logprobs
+    return data["response"], data["logprobs"]
 
 
 async def _generate_and_collect(
