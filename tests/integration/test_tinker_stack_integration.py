@@ -25,20 +25,25 @@ pytestmark = pytest.mark.integration
 logger = logging.getLogger(__name__)
 
 
+_ASSISTANT_PREFIX = "<|im_start|>assistant\n"
+_IM_END = "<|im_end|>"
+
+
 def _fetch_raw_completion(
     client: httpx.Client,
     proxy_url: str,
     response_content: str,
 ) -> tuple[str, list[float]]:
-    """Fetch raw response and rollout logprobs from the proxy cache.
+    """Fetch raw completion text and rollout logprobs from the proxy cache.
 
     Mirrors the OpenClaw feedback plugin: hash the parsed content, hit
-    ``/v1/completions/raw``, and return ``(raw_response, logprobs)``.
+    ``/v1/completions/raw``, and return ``(raw_text, logprobs)``.
 
-    The *raw_response* includes the chat template tokens
-    (``<|im_start|>assistant\\n…<|im_end|>``) so that its token count
-    matches the logprobs length — the Tinker engine tokenizes the
-    response with ``add_special_tokens=False`` and compares lengths.
+    The proxy stores the response wrapped in a chat template
+    (``<|im_start|>assistant\\n…<|im_end|>``).  We strip that wrapper so
+    the raw text — when re-tokenized by the Tinker engine with
+    ``add_special_tokens=False`` — reproduces exactly the generated
+    token sequence whose logprobs we're returning.
     """
     content_hash = hashlib.sha256(response_content.encode("utf-8")).hexdigest()
     resp = client.get(
@@ -52,7 +57,15 @@ def _fetch_raw_completion(
     data = resp.json()
     logprobs = data["logprobs"]
     assert logprobs is not None, "Proxy returned null logprobs"
-    return data["response"], logprobs
+
+    # Unwrap the chat-template wrapper added by the proxy.
+    raw_text: str = data["response"]
+    if raw_text.startswith(_ASSISTANT_PREFIX):
+        raw_text = raw_text[len(_ASSISTANT_PREFIX) :]
+    if raw_text.endswith(_IM_END):
+        raw_text = raw_text[: -len(_IM_END)]
+
+    return raw_text, logprobs
 
 
 # ---------------------------------------------------------------------------
