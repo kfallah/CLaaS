@@ -34,10 +34,9 @@ claas/
 ├── deploy.py                            # Modal deployment entrypoint
 ├── index.html                           # Dashboard template
 │
-├── core/                                # Shared types & config
+├── core/                                # Shared types
 │   ├── __init__.py
-│   ├── types.py                         # Pydantic models, TypedDicts (ChatMessage, etc.)
-│   └── config.py                        # Configuration dataclasses
+│   └── types.py                         # Pydantic models, TypedDicts (ChatMessage, etc.)
 │
 ├── training/                            # Training pipeline
 │   ├── __init__.py

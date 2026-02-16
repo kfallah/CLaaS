@@ -26,46 +26,6 @@ def api_client():
     return TestClient(web_app)
 
 
-@pytest.fixture()
-def tinker_mode(monkeypatch):
-    """Set the distill execution mode to tinker (skips vLLM orchestration)."""
-    from claas import api
-
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
-
-
-@pytest.fixture()
-def modal_mode(monkeypatch):
-    """Set the distill execution mode to modal."""
-    from claas import api
-
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
-
-
-@pytest.fixture()
-def noop_feedback_log(monkeypatch, tmp_path):
-    """Stub out feedback log writing."""
-    from claas import api
-
-    log_path = str(tmp_path / "feedback-log.json")
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: log_path)
-    return log_path
-
-
-@pytest.fixture()
-def noop_vllm(monkeypatch):
-    """Stub out all vLLM interactions."""
-    from claas import api
-
-    async def noop_post(_path, *, params=None, json_body=None, timeout_s=30.0):
-        pass
-
-    async def noop_wait():
-        pass
-
-    monkeypatch.setattr(api, "_vllm_post", noop_post)
-    monkeypatch.setattr(api, "_wait_for_vllm_idle", noop_wait)
-
 
 def _set_engine(monkeypatch, engine):
     """Wire a mock engine into the API."""
