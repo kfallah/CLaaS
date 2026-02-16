@@ -28,6 +28,7 @@ VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://vllm:8000/v1")
 API_KEY = os.environ.get("API_KEY", "sk-local")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CLAAS_API_URL = os.environ.get("CLAAS_API_URL", "http://claas-api:8080")
+FEEDBACK_BATCH_SIZE = int(os.environ.get("FEEDBACK_BATCH_SIZE", "4"))
 
 # Ensure claas picks up local_fs mode and our lora root
 os.environ["CLAAS_STORAGE_BACKEND"] = "local_fs"
@@ -241,6 +242,7 @@ def write_openclaw_config() -> None:
                     "config": {
                         "claasApiUrl": CLAAS_API_URL,
                         "loraId": f"{LORA_NAME}-latest",
+                        "feedbackBatchSize": FEEDBACK_BATCH_SIZE,
                     },
                 },
             },

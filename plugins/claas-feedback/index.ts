@@ -48,7 +48,7 @@ export default function register(api: OpenClawPluginApi) {
     "http://claas-api:8080";
   const loraId = config.loraId ?? "openclaw/assistant-latest";
   const debugEnabled = config.debug === true || process.env.CLAAS_FEEDBACK_DEBUG === "true";
-  const feedbackBatchSize = config.feedbackBatchSize ?? 16;
+  const feedbackBatchSize = config.feedbackBatchSize ?? 4;
   const logDebug = (message: string): void => {
     if (debugEnabled) {
       console.debug(message);

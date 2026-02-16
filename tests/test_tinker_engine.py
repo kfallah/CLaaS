@@ -416,6 +416,7 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
     assert result.metadata["step"] == 1
     assert result.metadata["tinker_path"] == "tinker://checkpoints/step-1"
     assert result.metadata["sampler_weights_path"] == "tinker://weights/step-1-sampler"
+    assert result.metadata["batch_size"] == 1
     assert result.metadata["completion_len"] == len("World")
     assert "effective_kl_coef" in result.metadata
     assert "kl_mean" in result.metadata
@@ -489,6 +490,100 @@ def test_engine_distill_uses_provided_rollout_logprobs(tinker_engine, mock_train
 
     # Student sampling client was NOT used
     mock_training_client.save_weights_and_get_sampling_client_async.assert_not_called()
+
+
+def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_client):
+    """Batched distill: 3 samples processed concurrently, single train step.
+
+    Mixes samples with provided and missing rollout_logprobs to verify that
+    the student sampling client is created at most once.
+    """
+    engine, mock_service = tinker_engine
+
+    set_tinker_path("test/lora", "tinker://init-ckpt", "gpt-oss/GPT-OSS-120B", 32, step=0)
+
+    mock_service.create_training_client_from_state_async = AsyncMock(
+        return_value=mock_training_client
+    )
+
+    teacher_sampler = MagicMock()
+    teacher_sampler.compute_logprobs_async = AsyncMock(
+        return_value=[-0.2] * 100
+    )
+    mock_service.create_sampling_client_async = AsyncMock(
+        return_value=teacher_sampler
+    )
+
+    samples = [
+        # Sample 1: no rollout_logprobs → needs student sampling
+        DistillBatchItem(
+            prompt="Hello",
+            response="World",
+            feedback="Good",
+            rollout_logprobs=[],
+        ),
+        # Sample 2: valid rollout_logprobs → skips student sampling
+        DistillBatchItem(
+            prompt="Hi",
+            response="There",
+            feedback="Nice",
+            rollout_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+        ),
+        # Sample 3: no rollout_logprobs → needs student sampling
+        DistillBatchItem(
+            prompt="Hey",
+            response="You",
+            feedback="Great",
+            rollout_logprobs=None,
+        ),
+    ]
+
+    payload = DistillBatchRequestPayload(
+        lora_id="test/lora",
+        training=TrainingConfig(),
+        samples=samples,
+    )
+
+    result = asyncio.run(engine.distill(payload))
+
+    # Verify response structure
+    assert isinstance(result, DistillResponse)
+    assert result.lora_id == "test/lora"
+    assert result.metadata["batch_size"] == 3
+    assert result.metadata["step"] == 1
+
+    # completion_len is summed across all samples
+    expected_total_len = len("World") + len("There") + len("You")
+    assert result.metadata["completion_len"] == expected_total_len
+
+    # Averaged metrics are present
+    assert "adv_mean" in result.metadata
+    assert "adv_abs_mean" in result.metadata
+    assert "kl_mean" in result.metadata
+    assert "effective_kl_coef" in result.metadata
+    assert "kl_gain" in result.metadata
+    assert "adv_abs_mean_raw" in result.metadata
+
+    # forward_backward called once with 3 datums
+    mock_training_client.forward_backward_async.assert_called_once()
+    call_args = mock_training_client.forward_backward_async.call_args
+    assert len(call_args[0][0]) == 3  # 3 datums in the list
+
+    # optim_step called once
+    mock_training_client.optim_step_async.assert_called_once()
+
+    # save_state called once
+    mock_training_client.save_state_async.assert_called_once_with("step-1")
+
+    # Student sampling client created at most once
+    mock_training_client.save_weights_and_get_sampling_client_async.assert_called_once_with(
+        "current"
+    )
+
+    # Teacher sampling client created once
+    mock_service.create_sampling_client_async.assert_called_once_with(
+        base_model="gpt-oss/GPT-OSS-120B"
+    )
 
 
 # ── Helper function tests ────────────────────────────────────────────
