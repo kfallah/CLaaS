@@ -15,8 +15,7 @@ from __future__ import annotations
 import importlib
 import os
 import warnings
-from typing import TYPE_CHECKING
-from typing import Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 import modal
 
@@ -44,6 +43,7 @@ class ChatMessage(TypedDict):
 
     role: Literal["system", "user", "assistant"]
     content: str
+
 
 # Modal app (shared with training worker)
 app = modal.App("claas-distill")

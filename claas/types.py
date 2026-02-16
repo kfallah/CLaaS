@@ -313,6 +313,12 @@ class LoraListResponse(BaseModel):
     )
 
 
+class LoraDeleteResponse(BaseModel):
+    """Response from LoRA deletion."""
+
+    deleted: bool
+
+
 class ServiceHealth(BaseModel):
     """Health status for a backing service (worker or teacher)."""
 

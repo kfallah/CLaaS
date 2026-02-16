@@ -213,9 +213,21 @@ def write_openclaw_config() -> None:
             "port": 18789,
             "mode": "local",
             "bind": "loopback",
+            "http": {
+                "endpoints": {
+                    "chatCompletions": {"enabled": True},
+                },
+            },
             "auth": {
                 "mode": "token",
                 "token": "openclaw-local-dev-token",
+            },
+            "http": {
+                "endpoints": {
+                    "chatCompletions": {
+                        "enabled": True,
+                    },
+                },
             },
         },
         "messages": {

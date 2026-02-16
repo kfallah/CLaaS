@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
-from claas.training_engines.local.engine import LocalTrainingEngine
-from claas.types import DistillRequestPayload
+import pytest
+
+torch = pytest.importorskip("torch")
+
+from claas.training_engines.local.engine import LocalTrainingEngine  # noqa: E402
+from claas.types import DistillBatchItem, DistillBatchRequestPayload, TrainingConfig  # noqa: E402
 
 
 class _Worker:
@@ -24,12 +28,16 @@ def test_local_engine_distill_ignores_cleanup_error(monkeypatch):
 
     result = asyncio.run(
         LocalTrainingEngine().distill(
-            DistillRequestPayload(
+            DistillBatchRequestPayload(
                 lora_id="user/model",
-                prompt="p",
-                response="r",
-                feedback="f",
-                training={},
+                training=TrainingConfig(),
+                samples=[
+                    DistillBatchItem(
+                        prompt="p",
+                        response="r",
+                        feedback="f",
+                    )
+                ],
             )
         )
     )

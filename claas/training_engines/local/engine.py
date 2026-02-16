@@ -8,6 +8,7 @@ import re
 
 from claas.storage import (
     create_initial_lora,
+    delete_lora,
     export_lora_zip_bytes,
     get_lora_path,
     list_loras,
@@ -18,6 +19,7 @@ from claas.training_engines.base import TrainingEngine
 from claas.types import (
     DistillBatchRequestPayload,
     DistillResponse,
+    LoraDeleteResponse,
     LoraExistsPayload,
     LoraExportPayload,
     LoraInitRequest,
@@ -75,6 +77,10 @@ class LocalTrainingEngine(TrainingEngine):
             target_modules=request.target_modules,
         )
         return LoraInitResponse(lora_id=lora_id)
+
+    async def delete_lora(self, lora_id: str) -> LoraDeleteResponse:
+        deleted = await asyncio.to_thread(delete_lora, lora_id)
+        return LoraDeleteResponse(deleted=deleted)
 
     async def list_loras(self, prefix: str) -> LoraListResponse:
         """List local LoRA identifiers.

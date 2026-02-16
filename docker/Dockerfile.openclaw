@@ -6,6 +6,6 @@ USER node
 
 EXPOSE 18789
 
-COPY --chown=node:node scripts/openclaw-entrypoint.sh /app/entrypoint.sh
+COPY --chown=node:node docker/scripts/openclaw-entrypoint.sh /app/entrypoint.sh
 
 ENTRYPOINT ["/app/entrypoint.sh"]

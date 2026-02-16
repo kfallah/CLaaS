@@ -4,9 +4,78 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from fastapi.testclient import TestClient
 
 from claas.api import web_app
+from claas.types import (
+    DistillResponse,
+    LoraDeleteResponse,
+    LoraExistsPayload,
+    LoraExportPayload,
+    LoraInitResponse,
+    LoraListResponse,
+    LoraRuntimeRef,
+    ServiceHealth,
+)
+
+
+@pytest.fixture()
+def api_client():
+    """FastAPI TestClient for the web_app."""
+    return TestClient(web_app)
+
+
+@pytest.fixture()
+def tinker_mode(monkeypatch):
+    """Set the distill execution mode to tinker (skips vLLM orchestration)."""
+    from claas import api
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+
+
+@pytest.fixture()
+def modal_mode(monkeypatch):
+    """Set the distill execution mode to modal."""
+    from claas import api
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+
+
+@pytest.fixture()
+def noop_feedback_log(monkeypatch, tmp_path):
+    """Stub out feedback log writing."""
+    from claas import api
+
+    log_path = str(tmp_path / "feedback-log.json")
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: log_path)
+    return log_path
+
+
+@pytest.fixture()
+def noop_vllm(monkeypatch):
+    """Stub out all vLLM interactions."""
+    from claas import api
+
+    async def noop_post(_path, *, params=None, json_body=None, timeout_s=30.0):
+        pass
+
+    async def noop_wait():
+        pass
+
+    async def noop_fetch(_prompt, _response, _model, _timeout_s=60.0):
+        return [-0.1, -0.2]
+
+    monkeypatch.setattr(api, "_vllm_post", noop_post)
+    monkeypatch.setattr(api, "_wait_for_vllm_idle", noop_wait)
+    monkeypatch.setattr(api, "_fetch_rollout_logprobs", noop_fetch)
+
+
+def _set_engine(monkeypatch, engine):
+    """Wire a mock engine into the API."""
+    from claas import api
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: engine)
 
 
 class _RemoteCall:
@@ -46,19 +115,16 @@ class _EngineStub:
         self._exists = exists
 
     async def lora_exists(self, _lora_id):
-        from claas.types import LoraExistsPayload
 
         return LoraExistsPayload(exists=self._exists)
 
     async def lora_runtime_ref(self, lora_id):
-        from claas.types import LoraRuntimeRef
 
         return LoraRuntimeRef(vllm_name=lora_id, lora_path=f"/loras/{lora_id}")
 
     async def distill(self, payload):
         import modal
 
-        from claas.types import DistillResponse
 
         distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
         result = await distill_fn.remote.aio(payload.model_dump())
@@ -173,10 +239,10 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     assert body["status"] == "ok"
     assert body["lora_id"] == "user/model"
     assert body["feedback_log_path"] == log_path
-    # drain → sleep → wake → unload old LoRA → load updated LoRA
+    # drain → pause → wake → unload old LoRA → load updated LoRA
     assert calls[0] == ("_wait_for_vllm_idle",)
-    assert calls[1] == ("/sleep", {"level": 1})
-    assert calls[2] == ("/wake_up", None)
+    assert calls[1] == ("/pause", {"level": 1})
+    assert calls[2] == ("/resume", None)
     assert calls[3] == ("/v1/unload_lora_adapter", None)
     assert calls[4] == ("/v1/load_lora_adapter", None)
     assert captured["request"]["save_in_place"] is True
@@ -268,56 +334,6 @@ def test_distill_returns_500_on_worker_failure(monkeypatch):
     )
     assert response.status_code == 500
     assert "Distillation failed" in response.json()["detail"]
-
-
-def test_feedback_calls_drain_before_sleep(monkeypatch, tmp_path):
-    """_wait_for_vllm_idle is called before /sleep."""
-    from claas import api
-
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
-    order = []
-
-    def fake_from_name(_app, fn_name):
-        if fn_name == "DistillWorker.distill":
-            return _FunctionStub(
-                {"lora_id": "user/model", "metadata": {"tokens_processed": 1}},
-            )
-        raise AssertionError(f"unexpected modal function: {fn_name}")
-
-    async def fake_wait_idle():
-        order.append("drain")
-
-    async def fake_vllm_post(path, *, params=None, json_body=None, timeout_s=30.0):
-        order.append(path)
-
-    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
-    monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
-    monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
-    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
-    monkeypatch.setattr(api, "_fetch_rollout_logprobs", _noop_fetch_logprobs)
-
-    client = TestClient(web_app)
-    response = client.post(
-        "/v1/feedback",
-        json={
-            "requests": [
-                {
-                    "lora_id": "user/model",
-                    "prompt": "p",
-                    "response": "r",
-                    "feedback": "f",
-                    "training": {"teacher_mode": "self"},
-                }
-            ],
-            "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
-        },
-    )
-
-    assert response.status_code == 200
-    # drain must come before /sleep
-    assert order[0] == "drain"
-    assert order[1] == "/sleep"
 
 
 def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
@@ -509,7 +525,6 @@ async def _noop_coro():
 
 def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
     from claas import api
-    from claas.types import DistillResponse, LoraExistsPayload
 
     monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
 
@@ -558,7 +573,6 @@ def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
 
 def test_feedback_tinker_accepts_default_orchestration(monkeypatch, tmp_path):
     from claas import api
-    from claas.types import DistillResponse, LoraExistsPayload
 
     monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
 
@@ -591,3 +605,355 @@ def test_feedback_tinker_accepts_default_orchestration(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Additional endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def test_root_endpoint():
+    client = TestClient(web_app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "CLaaS API"
+    assert "docs" in body
+
+
+def test_init_lora_success(monkeypatch):
+    from claas import api
+
+    class _InitEngine:
+        async def init_lora(self, request):
+            return LoraInitResponse(lora_id=request.lora_id)
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _InitEngine())
+
+    client = TestClient(web_app)
+    resp = client.post(
+        "/v1/lora/init",
+        json={"lora_id": "test/new-lora", "base_model": "meta-llama/Llama-3.2-1B"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["lora_id"] == "test/new-lora"
+
+
+def test_init_lora_rejects_disallowed_base_model(monkeypatch):
+    from claas import api
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "local")
+    monkeypatch.setattr(api, "ALLOWED_INIT_BASE_MODELS", {"Qwen/Qwen3-8B"})
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
+
+    client = TestClient(web_app)
+    resp = client.post(
+        "/v1/lora/init",
+        json={"lora_id": "test/x", "base_model": "evil/model"},
+    )
+    assert resp.status_code == 403
+    assert "not allowed" in resp.json()["detail"]
+
+
+def test_list_lora_success(monkeypatch):
+    from claas import api
+
+    class _ListEngine:
+        async def list_loras(self, prefix):
+            return LoraListResponse(loras=["a/lora-1", "a/lora-2"])
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _ListEngine())
+
+    client = TestClient(web_app)
+    resp = client.get("/v1/lora", params={"prefix": "a/"})
+    assert resp.status_code == 200
+    assert resp.json()["loras"] == ["a/lora-1", "a/lora-2"]
+
+
+def test_delete_lora_success(monkeypatch):
+    from claas import api
+
+    class _DeleteEngine:
+        async def delete_lora(self, lora_id):
+            return LoraDeleteResponse(deleted=True)
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _DeleteEngine())
+
+    client = TestClient(web_app)
+    resp = client.delete("/v1/lora", params={"lora_id": "test/x"})
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] is True
+
+
+def test_list_lora_error(monkeypatch):
+    from claas import api
+
+    class _FailEngine:
+        async def list_loras(self, prefix):
+            raise ValueError("storage error")
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _FailEngine())
+
+    client = TestClient(web_app)
+    resp = client.get("/v1/lora")
+    assert resp.status_code == 500
+    assert "Failed to list" in resp.json()["detail"]
+
+
+def test_init_lora_error(monkeypatch):
+    from claas import api
+
+    class _FailEngine:
+        async def init_lora(self, request):
+            raise RuntimeError("init failed")
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _FailEngine())
+
+    client = TestClient(web_app)
+    resp = client.post(
+        "/v1/lora/init",
+        json={"lora_id": "test/x", "base_model": "m"},
+    )
+    assert resp.status_code == 500
+    assert "initialization failed" in resp.json()["detail"]
+
+
+def test_export_lora_success(monkeypatch):
+    from claas import api
+
+    class _ExportEngine:
+        async def lora_exists(self, lora_id):
+            return LoraExistsPayload(exists=True)
+
+        async def export_lora(self, lora_id):
+            return LoraExportPayload(filename="test.zip", content=b"PK\x03\x04fake")
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _ExportEngine())
+
+    client = TestClient(web_app)
+    resp = client.get("/v1/lora/export", params={"lora_id": "test/x"})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert b"PK" in resp.content
+
+
+def test_health_check_healthy(monkeypatch):
+    """Health endpoint returns healthy when engine responds."""
+    from claas import api
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+
+    class _HealthyEngine:
+        async def health(self):
+            return ServiceHealth(status="healthy", error=None)
+
+    monkeypatch.setattr(api, "get_training_engine", lambda _kind: _HealthyEngine())
+
+    client = TestClient(web_app)
+    resp = client.get("/v1/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "healthy"
+    assert body["worker"]["status"] == "healthy"
+    assert body["teacher"]["status"] == "healthy"
+
+
+def test_health_check_degraded(monkeypatch):
+    """Health endpoint returns degraded when engine health fails."""
+    from claas import api
+
+    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+
+    class _UnhealthyEngine:
+        async def health(self):
+            raise ConnectionError("service down")
+
+    monkeypatch.setattr(api, "get_training_engine", lambda _kind: _UnhealthyEngine())
+
+    client = TestClient(web_app)
+    resp = client.get("/v1/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert body["worker"]["status"] == "unhealthy"
+    assert "service down" in body["worker"]["error"]
+
+
+def test_recent_feedback_dashboard_renders_latest_records(monkeypatch, tmp_path):
+    from claas import api
+
+    monkeypatch.setattr(api, "FEEDBACK_LOG_DIR", str(tmp_path))
+
+    (tmp_path / "20240101T000001-a.json").write_text(
+        """
+{
+  "request_id": "a",
+  "timestamp_utc": "2024-01-01T00:00:01Z",
+  "status": "ok",
+  "phase": "done",
+  "lora_id": "user/model",
+  "teacher_mode": "self",
+  "requests": [
+    {
+      "lora_id": "user/model",
+      "prompt": "prompt-a",
+      "response": "response-a",
+      "feedback": "feedback-a",
+      "rollout_logprobs": null,
+      "training": {
+        "learning_rate": 0.0001,
+        "alpha": 0.5,
+        "is_clip": 5.0,
+        "max_grad_norm": 1.0,
+        "kl_reg_weight": 0.001,
+        "teacher_top_k": 100,
+        "teacher_mode": "self"
+      },
+      "orchestration": {
+        "sleep_before": true,
+        "wake_after": true,
+        "wake_on_failure": true,
+        "sleep_level": 1
+      }
+    }
+  ],
+  "batch_samples": [
+    {
+      "prompt": "prompt-a",
+      "response": "response-a",
+      "feedback": "feedback-a",
+      "rollout_logprobs": null,
+      "teacher_result": null
+    }
+  ],
+  "vllm": {
+    "slept": true,
+    "woke": true
+  },
+  "timing_ms": {
+    "sleep": 1,
+    "distill": 2,
+    "save": 0,
+    "wake": 1,
+    "logprobs": 0,
+    "total": 4
+  },
+  "distill_result": {
+    "lora_id": "user/model",
+    "metadata": {
+      "loss": 0.1
+    }
+  },
+  "error": null
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    (tmp_path / "20240101T000002-b.json").write_text(
+        (tmp_path / "20240101T000001-a.json").read_text(encoding="utf-8").replace("\"a\"", "\"b\"", 1).replace("prompt-a", "prompt-b"),
+        encoding="utf-8",
+    )
+
+    client = TestClient(web_app)
+    response = client.get("/v1/feedback/recent", params={"limit": 1})
+
+    assert response.status_code == 200
+    assert "CLaaS Recent Feedback" in response.text
+    assert "<table>" in response.text
+    assert "Expand" in response.text
+    assert "prompt-b" in response.text
+    assert "prompt-a" not in response.text
+
+
+def test_recent_feedback_dashboard_skips_invalid_log(monkeypatch, tmp_path):
+    from claas import api
+
+    monkeypatch.setattr(api, "FEEDBACK_LOG_DIR", str(tmp_path))
+    (tmp_path / "20240101T000001-a.json").write_text("{}", encoding="utf-8")
+
+    client = TestClient(web_app)
+    response = client.get("/v1/feedback/recent")
+
+    assert response.status_code == 200
+
+
+def test_recent_feedback_dashboard_truncates_prompt_preview(monkeypatch, tmp_path):
+    from claas import api
+
+    monkeypatch.setattr(api, "FEEDBACK_LOG_DIR", str(tmp_path))
+    long_prompt = "x" * 400
+    (tmp_path / "20240101T000003-c.json").write_text(
+        f'''
+{{
+  "request_id": "c",
+  "timestamp_utc": "2024-01-01T00:00:03Z",
+  "status": "ok",
+  "phase": "done",
+  "lora_id": "user/model",
+  "teacher_mode": "self",
+  "requests": [
+    {{
+      "lora_id": "user/model",
+      "prompt": "{long_prompt}",
+      "response": "response-c",
+      "feedback": "feedback-c",
+      "rollout_logprobs": null,
+      "training": {{
+        "learning_rate": 0.0001,
+        "alpha": 0.5,
+        "is_clip": 5.0,
+        "max_grad_norm": 1.0,
+        "kl_reg_weight": 0.001,
+        "teacher_top_k": 100,
+        "teacher_mode": "self"
+      }},
+      "orchestration": {{
+        "sleep_before": true,
+        "wake_after": true,
+        "wake_on_failure": true,
+        "sleep_level": 1
+      }}
+    }}
+  ],
+  "batch_samples": [
+    {{
+      "prompt": "{long_prompt}",
+      "response": "response-c",
+      "feedback": "feedback-c",
+      "rollout_logprobs": null,
+      "teacher_result": null
+    }}
+  ],
+  "vllm": {{
+    "slept": true,
+    "woke": true
+  }},
+  "timing_ms": {{
+    "sleep": 1,
+    "distill": 2,
+    "save": 0,
+    "wake": 1,
+    "logprobs": 0,
+    "total": 4
+  }},
+  "distill_result": {{
+    "lora_id": "user/model",
+    "metadata": {{
+      "loss": 0.1
+    }}
+  }},
+  "error": null
+}}
+'''.strip(),
+        encoding="utf-8",
+    )
+
+    client = TestClient(web_app)
+    response = client.get("/v1/feedback/recent", params={"limit": 1})
+
+    assert response.status_code == 200
+    assert "…" in response.text
+    assert long_prompt in response.text

@@ -115,7 +115,7 @@ Set `CLAAS_DISTILL_EXECUTION_MODE` to control which training engine implementati
 
 - **`local`** (default) — Runs on the same machine. Requires a GPU with enough VRAM for Qwen3-8B + LoRA training.
 - **`modal`** — Runs the distill step remotely on Modal (L40S) and keeps teacher scoring on Modal.
-- **`tinker`** — Uses the Tinker SDK for distillation **and** LoRA lifecycle operations (`/v1/lora/init`, `/v1/lora`, `/v1/lora/export`) with hosted models such as `Qwen/Qwen3-30B-A3B-Instruct-2507`. Requires `CLAAS_TINKER_API_KEY`; model selection is controlled by `CLAAS_TINKER_BASE_MODEL` (or `MODEL` in Docker compose).
+- **`tinker`** — Uses the Tinker SDK for distillation **and** LoRA lifecycle operations (`/v1/lora/init`, `/v1/lora`, `/v1/lora/export`) with hosted models such as `gpt-oss/GPT-OSS-120B`. Requires `CLAAS_TINKER_API_KEY`; model selection is controlled by `CLAAS_TINKER_BASE_MODEL` (or `MODEL` in Docker compose).
 
 ## Storage
 
@@ -132,7 +132,7 @@ The fastest way to get the full stack running — vLLM, CLaaS API, and OpenClaw 
 cd docker
 cp .env.example .env
 # Edit .env — set TELEGRAM_BOT_TOKEN (from @BotFather)
-docker compose up --build
+docker compose --profile local up --build
 ```
 
 This brings up four services: an init container (creates the LoRA + config), vLLM with Qwen3-8B and LoRA serving, the CLaaS feedback API, and OpenClaw's Telegram gateway. See [`docker/README.md`](docker/README.md) for details.
@@ -164,15 +164,16 @@ uv run modal deploy -m claas.deploy
 
 The deployed app exposes the same API at `https://your-app--claas-distill-fastapi-app.modal.run`. LoRAs are stored in the `claas-loras` Modal Volume.
 
-## Claude Code Setup
+## Claude Code
 
-If you use [Claude Code](https://claude.ai/claude-code), you can set up the full local stack automatically:
+If you use [Claude Code](https://claude.ai/claude-code), these skills automate common workflows:
 
-```
-/setup-local <TELEGRAM_BOT_TOKEN>
-```
-
-This skill installs all dependencies (CLaaS, vLLM, OpenClaw), initializes the LoRA adapter, and starts the full stack (vLLM + CLaaS API + Telegram gateway). See [`.claude/skills/setup-local/SKILL.md`](.claude/skills/setup-local/SKILL.md) for what it does under the hood.
+| Command | Description |
+|---------|-------------|
+| `/setup-local <TOKEN>` | Install all deps and start the full local stack (vLLM + API + Telegram) |
+| `/deploy-modal` | Deploy the CLaaS distillation service to Modal |
+| `/clear-tinker-storage` | Delete all Tinker checkpoints to free storage |
+| `/pr-feedback` | Address reviewer feedback on a GitHub PR |
 
 ## Development
 
@@ -180,7 +181,7 @@ This skill installs all dependencies (CLaaS, vLLM, OpenClaw), initializes the Lo
 uv sync --extra dev --extra local
 uv run ruff check claas/ tests/
 uv run ty check
-uv run pytest -q
+uv run pytest -q -m "not integration"
 ```
 
 ## References
