@@ -1,13 +1,13 @@
 # CLaaS: Continual Learning as a Service
 
-Continual learning via self-distillation for OpenClaw. Personalize the model weights of your OpenClaw assistant using text feedback.
+Continual learning as-a-service (CLaaS) via self-distillation for OpenClaw. Personalize the model weights of your OpenClaw assistant using text feedback without model collapse.
 
 ## Hybrid engine
 
 The locally hosted request path is driven by a hybrid engine that switches between:
 
 - **Serving mode**: route request traffic through vLLM (local or remote) for low-latency generation.
-- **Update mode**: run a single SDPO LoRA step using the provided feedback to adapt the adapter.
+- **Update mode**: run a single self-distillation LoRA step using the provided feedback to adapt the adapter.
 
 In practice, the flow is: request is answered by vLLM, then the engine performs (or schedules) the training step, and subsequent requests can use the updated adapter. The engine can prefer local or remote teacher inference depending on `teacher_mode`.
 
