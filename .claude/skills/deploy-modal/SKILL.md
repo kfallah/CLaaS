@@ -13,7 +13,7 @@ When this skill is invoked, perform the following steps:
 
 1. **Deploy the Modal app**:
    ```bash
-   modal deploy claas.api
+   modal deploy -m claas.deploy
    ```
 
 2. **Extract the endpoint URL** from the deployment output (look for the line with the FastAPI endpoint URL)

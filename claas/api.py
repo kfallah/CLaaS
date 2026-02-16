@@ -56,6 +56,7 @@ from .types import (
     FeedbackResponse,
     FeedbackTimingMs,
     HealthResponse,
+    LoraDeleteResponse,
     LoraInitRequest,
     LoraInitResponse,
     LoraListResponse,
@@ -88,9 +89,13 @@ DISTILL_EXECUTION_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local")
 
 def _get_engine_kind() -> EngineKind:
     """Validate and return the configured engine kind."""
-    if DISTILL_EXECUTION_MODE not in {"local", "modal", "tinker"}:
-        raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {DISTILL_EXECUTION_MODE}")
-    return DISTILL_EXECUTION_MODE
+    if DISTILL_EXECUTION_MODE == "local":
+        return "local"
+    if DISTILL_EXECUTION_MODE == "modal":
+        return "modal"
+    if DISTILL_EXECUTION_MODE == "tinker":
+        return "tinker"
+    raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {DISTILL_EXECUTION_MODE}")
 
 def _uses_modal_teacher() -> bool:
     """Return whether API should fetch teacher scores from Modal TeacherService."""
@@ -179,6 +184,15 @@ async def _vllm_post(
     async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
         resp = await client.post(path, params=params, json=json_body, headers=headers)
     resp.raise_for_status()
+
+
+async def _tinker_proxy_refresh(model_path: str) -> None:
+    """Tell the Tinker inference proxy to reload with the latest checkpoint."""
+    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
+    async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=30) as client:
+        resp = await client.post("/v1/sampler/refresh", json={"model_path": model_path}, headers=headers)
+    resp.raise_for_status()
+    logger.info("Tinker proxy refreshed to checkpoint: %s", model_path)
 
 
 async def _wait_for_vllm_idle(
@@ -384,7 +398,10 @@ def _read_recent_feedback_logs(limit: int = 20) -> list[FeedbackLogRecord]:
     for path in selected_paths:
         with path.open("r", encoding="utf-8") as file_obj:
             payload = json.load(file_obj)
-        records.append(FeedbackLogRecord.model_validate(payload))
+        try:
+            records.append(FeedbackLogRecord.model_validate(payload))
+        except Exception:
+            logger.warning("Skipping invalid feedback log: %s", path)
     return records
 
 
@@ -640,6 +657,15 @@ async def feedback(request: FeedbackRequest) -> FeedbackResponse:
             timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
             woke = True
 
+        if _get_engine_kind() == "tinker" and distill_result is not None:
+            sampler_path = (distill_result.metadata or {}).get("sampler_weights_path")
+            if sampler_path:
+                phase = "wake"
+                wake_start = time.perf_counter()
+                await _tinker_proxy_refresh(str(sampler_path))
+                timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
+                woke = True
+
         timing_ms.total = int((time.perf_counter() - started_total) * 1000)
     except asyncio.TimeoutError:
         phase = "lock"
@@ -741,6 +767,21 @@ async def list_lora_adapters(prefix: str = "") -> LoraListResponse:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to list LoRAs: {str(e)}",
+        ) from e
+
+
+@web_app.delete("/v1/lora", response_model=LoraDeleteResponse)
+async def delete_lora_adapter(lora_id: str) -> LoraDeleteResponse:
+    """Delete a LoRA adapter.
+
+    Returns {"deleted": false} if not found (idempotent, no 404).
+    """
+    try:
+        return await _get_training_engine().delete_lora(lora_id)
+    except (ValueError, RuntimeError, OSError, httpx.HTTPError) as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"LoRA deletion failed: {str(e)}",
         ) from e
 
 

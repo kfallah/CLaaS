@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra local --extra tinker
+
+      - name: Ruff check
+        run: uv run ruff check claas/ tests/
+
+      - name: Ty check
+        run: uv run ty check
+
+      - name: Run tests
+        run: uv run pytest tests/ -q -m "not integration"
+
+  integration:
+    runs-on: ubuntu-latest
+    environment: CI
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra tinker
+
+      - name: Run integration tests
+        env:
+          TINKER_API_KEY: ${{ secrets.TINKER_API_KEY }}
+          MODEL: meta-llama/Llama-3.2-1B
+        run: ./scripts/run_integration_tests.sh
+
+      - name: Dump docker logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.yml --profile tinker logs --tail=200

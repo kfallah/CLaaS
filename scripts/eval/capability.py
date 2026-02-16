@@ -123,9 +123,9 @@ def verify_coding(response: str, timeout_s: float = 5.0) -> CodingResult:
             fn = namespace.get("fibonacci")
             if callable(fn):
                 correct = (
-                    fn(0) == 0 and
-                    fn(1) == 1 and
-                    fn(10) == 55
+                    fn(0) == 0 and  # type: ignore[call-arg]
+                    fn(1) == 1 and  # type: ignore[call-arg]
+                    fn(10) == 55  # type: ignore[call-arg]
                 )
             else:
                 correct = False

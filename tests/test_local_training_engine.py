@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
-from claas.training_engines.local.engine import LocalTrainingEngine
-from claas.types import DistillRequestPayload, TrainingConfig
+import pytest
+
+torch = pytest.importorskip("torch")
+
+from claas.training_engines.local.engine import LocalTrainingEngine  # noqa: E402
+from claas.types import DistillRequestPayload, TrainingConfig  # noqa: E402
 
 
 class _Worker:

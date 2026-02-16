@@ -26,6 +26,8 @@ from claas.teacher import build_teacher_messages, teacher_messages_to_chat_templ
 from claas.training_engines.base import TrainingEngine
 from claas.training_engines.tinker.state import (
     LoraEntry,
+    all_checkpoint_paths,
+    delete_entry,
     get_entry,
     list_loras as state_list_loras,
     lora_exists as state_lora_exists,
@@ -34,6 +36,7 @@ from claas.training_engines.tinker.state import (
 from claas.types import (
     DistillRequestPayload,
     DistillResponse,
+    LoraDeleteResponse,
     LoraExistsPayload,
     LoraExportPayload,
     LoraInitRequest,
@@ -48,7 +51,7 @@ logger = logging.getLogger(__name__)
 # Default model for the Tinker engine.
 _DEFAULT_BASE_MODEL = os.environ.get(
     "CLAAS_TINKER_BASE_MODEL",
-    "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "gpt-oss/GPT-OSS-120B",
 )
 
 # Adaptive KL scaling defaults (from continualcode reference).
@@ -96,6 +99,25 @@ class TinkerTrainingEngine(TrainingEngine):
     async def list_loras(self, prefix: str) -> LoraListResponse:
         loras = state_list_loras(prefix)
         return LoraListResponse(loras=loras)
+
+    async def delete_lora(self, lora_id: str) -> LoraDeleteResponse:
+        """Delete a LoRA adapter and its Tinker checkpoints.
+
+        Removes all tracked checkpoint paths from the Tinker service,
+        then deletes the local state entry.  Returns ``deleted=False``
+        if the LoRA was not found (idempotent).
+        """
+        entry = get_entry(lora_id)
+        if entry is None:
+            return LoraDeleteResponse(deleted=False)
+        rest = self.service.create_rest_client()
+        for ckpt_path in all_checkpoint_paths(entry):
+            try:
+                await rest.delete_checkpoint_from_tinker_path_async(ckpt_path)
+            except Exception:
+                logger.warning("Failed to delete checkpoint %s", ckpt_path, exc_info=True)
+        delete_entry(lora_id)
+        return LoraDeleteResponse(deleted=True)
 
     async def lora_exists(self, lora_id: str) -> LoraExistsPayload:
         return LoraExistsPayload(exists=state_lora_exists(lora_id))
@@ -184,7 +206,7 @@ class TinkerTrainingEngine(TrainingEngine):
         # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
         teacher_messages = build_teacher_messages(payload.prompt, payload.feedback)
         template_messages = teacher_messages_to_chat_template(teacher_messages)
-        teacher_prompt_text: str = tokenizer.apply_chat_template(
+        teacher_prompt_text = tokenizer.apply_chat_template(
             template_messages,
             add_generation_prompt=True,
             tokenize=False,
@@ -262,12 +284,19 @@ class TinkerTrainingEngine(TrainingEngine):
         checkpoint_name = f"step-{new_step}"
         save_result = await _await_api_future(await training_client.save_state_async(checkpoint_name))
 
+        # Save sampler-compatible weights for the inference proxy.
+        sampler_save = await _await_api_future(
+            await training_client.save_weights_for_sampler_async(checkpoint_name)
+        )
+        sampler_weights_path = sampler_save.path
+
         set_tinker_path(
             lora_id=payload.lora_id,
             tinker_path=save_result.path,
             base_model=base_model,
             rank=entry.rank,
             step=new_step,
+            sampler_weights_path=sampler_weights_path,
         )
 
         # ── Return metrics ──
@@ -278,6 +307,7 @@ class TinkerTrainingEngine(TrainingEngine):
         metadata: dict[str, object] = {
             "step": new_step,
             "tinker_path": save_result.path,
+            "sampler_weights_path": sampler_weights_path,
             "completion_len": completion_len,
             "effective_kl_coef": effective_kl_coef,
             "kl_gain": gain,
