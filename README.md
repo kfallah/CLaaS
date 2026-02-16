@@ -118,53 +118,13 @@ For the full supervised local stack (vLLM + gateway + auto-restart, multi-LoRA, 
 
 ## Configuration
 
-All configuration is via environment variables. Docker Compose users set these in `.env` / `.env.tinker`; manual installs export them directly.
-
-### Core
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CLAAS_DISTILL_EXECUTION_MODE` | `local` | Training engine: `local`, `modal`, or `tinker` |
-| `CLAAS_BASE_MODEL_ID` | `Qwen/Qwen3-8B` | Base model for LoRA training |
-| `CLAAS_LORA_ROOT` | `/loras` | Root directory for LoRA adapter storage |
-| `CLAAS_STORAGE_BACKEND` | `modal_volume` | Storage backend: `local_fs`, `modal_volume`, or `tinker_json` |
-| `CLAAS_ALLOWED_INIT_BASE_MODELS` | `Qwen/Qwen3-8B` | Comma-separated allowlist of base models for `/v1/lora/init` |
-| `HF_TOKEN` | | Hugging Face token (required for gated models) |
-| `FEEDBACK_LOG_DIR` | `./feedback_logs` | Directory for structured feedback JSON logs |
-
-### vLLM (local mode)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VLLM_BASE_URL` | `http://127.0.0.1:8000` | vLLM server URL |
-| `VLLM_API_KEY` | `sk-local` | API key for vLLM |
-| `CLAAS_ATTN_IMPLEMENTATION` | `sdpa` | Attention backend (`sdpa`, `flash_attention_2`) |
-| `FEEDBACK_LOCK_TIMEOUT_S` | `120` | Per-LoRA lock timeout (seconds) |
-| `FEEDBACK_WAKE_ON_FAILURE` | `true` | Wake vLLM if the distill step fails |
-| `FEEDBACK_MIN_FREE_VRAM_GB` | `20` | Minimum free VRAM before training |
-| `FEEDBACK_SLEEP_VERIFY_TIMEOUT_S` | `30` | Timeout waiting for vLLM to sleep |
-| `FEEDBACK_DRAIN_TIMEOUT_S` | `30` | Timeout draining vLLM queue before sleep |
-
-### Tinker mode
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CLAAS_TINKER_API_KEY` | | Tinker SDK API key (required) |
-| `CLAAS_TINKER_BASE_MODEL` | `gpt-oss/GPT-OSS-120B` | Hosted model for distillation |
-| `CLAAS_TINKER_STATE_PATH` | `~/.claas/tinker_state.json` | Local path for Tinker LoRA state |
-| `CLAAS_COMPLETION_CACHE_SIZE` | `100` | Inference proxy completion cache size |
-
-### Modal mode
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CLAAS_HF_SECRET_NAME` | | Name of Modal Secret containing HF credentials |
+All configuration is via environment variables. See [`docker/README.md`](docker/README.md#configuration) for the full reference.
 
 ## Dashboard
 
 The CLaaS API serves a built-in dashboard at `/v1/dashboard` showing recent feedback batches, training metrics, and timing breakdowns. Each row is a batch — expand it to see individual samples and detailed metrics.
 
-![CLaaS Dashboard](docs/dashboard.png)
+![CLaaS Dashboard](assets/dashboard.png)
 
 ## References
 

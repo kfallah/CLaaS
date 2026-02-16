@@ -129,7 +129,9 @@ Send a DM to your Telegram bot — it should respond using the `openclaw-assista
 
 ## Configuration
 
-Settings live in `.env` (local profile) and `.env.tinker` (tinker stack):
+Settings live in `.env` (local profile) and `.env.tinker` (tinker stack).
+
+### Docker Compose variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -143,18 +145,50 @@ Settings live in `.env` (local profile) and `.env.tinker` (tinker stack):
 | `CLAAS_API_PORT` | `8080` | Host port for CLaaS API |
 | `OPENCLAW_PORT` | `18789` | Host port for OpenClaw gateway |
 | `TINKER_PROXY_PORT` | `8000` | Host port for Tinker proxy (tinker only) |
+| `FEEDBACK_BATCH_SIZE` | `4` | Samples per feedback batch before triggering distill |
 
-For `.env.tinker`, key variables are:
+### CLaaS API environment variables
+
+These are set inside the containers (via `docker-compose.yml`) and generally don't need to be changed, but can be overridden for advanced use.
+
+#### Core
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TELEGRAM_BOT_TOKEN` | *(required)* | Bot token from @BotFather |
-| `TINKER_API_KEY` | *(required)* | API key for Tinker SDK calls |
-| `MODEL` | `gpt-oss/GPT-OSS-120B` | Hosted base model for proxy and distillation |
-| `LORA_NAME` | `openclaw/assistant` | LoRA adapter identity |
-| `TINKER_PROXY_PORT` | `8000` | Host port for the local OpenAI-compatible proxy |
-| `CLAAS_API_PORT` | `8080` | Host port for CLaaS API |
-| `OPENCLAW_PORT` | `18789` | Host port for OpenClaw gateway |
+| `CLAAS_DISTILL_EXECUTION_MODE` | `local` | Training engine: `local`, `modal`, or `tinker` |
+| `CLAAS_BASE_MODEL_ID` | `Qwen/Qwen3-8B` | Base model for LoRA training |
+| `CLAAS_LORA_ROOT` | `/loras` | Root directory for LoRA adapter storage |
+| `CLAAS_STORAGE_BACKEND` | `modal_volume` | Storage backend: `local_fs`, `modal_volume`, or `tinker_json` |
+| `CLAAS_ALLOWED_INIT_BASE_MODELS` | `Qwen/Qwen3-8B` | Comma-separated allowlist of base models for `/v1/lora/init` |
+| `FEEDBACK_LOG_DIR` | `./feedback_logs` | Directory for structured feedback JSON logs |
+
+#### vLLM (local mode)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VLLM_BASE_URL` | `http://127.0.0.1:8000` | vLLM server URL |
+| `VLLM_API_KEY` | `sk-local` | API key for vLLM |
+| `CLAAS_ATTN_IMPLEMENTATION` | `sdpa` | Attention backend (`sdpa`, `flash_attention_2`) |
+| `FEEDBACK_LOCK_TIMEOUT_S` | `120` | Per-LoRA lock timeout (seconds) |
+| `FEEDBACK_WAKE_ON_FAILURE` | `true` | Wake vLLM if the distill step fails |
+| `FEEDBACK_MIN_FREE_VRAM_GB` | `20` | Minimum free VRAM before training |
+| `FEEDBACK_SLEEP_VERIFY_TIMEOUT_S` | `30` | Timeout waiting for vLLM to sleep |
+| `FEEDBACK_DRAIN_TIMEOUT_S` | `30` | Timeout draining vLLM queue before sleep |
+
+#### Tinker mode
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAAS_TINKER_API_KEY` | | Tinker SDK API key (required) |
+| `CLAAS_TINKER_BASE_MODEL` | `gpt-oss/GPT-OSS-120B` | Hosted model for distillation |
+| `CLAAS_TINKER_STATE_PATH` | `~/.claas/tinker_state.json` | Local path for Tinker LoRA state |
+| `CLAAS_COMPLETION_CACHE_SIZE` | `100` | Inference proxy completion cache size |
+
+#### Modal mode
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAAS_HF_SECRET_NAME` | | Name of Modal Secret containing HF credentials |
 
 ## How the Feedback Loop Works
 
