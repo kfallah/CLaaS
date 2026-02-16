@@ -1,25 +1,10 @@
 # CLaaS: Continual Learning as a Service
 
-SDPO-style continual distillation API for per-request model adaptation. Runs locally on a single GPU with optional Modal remote backend.
-
-## Overview
-
-CLaaS turns every user interaction into an online learning step via Self-Distillation Policy Optimization (SDPO). Each call:
-
-1. Loads a user's LoRA adapter from local storage (or Modal Volume)
-2. Runs the student model forward pass (Qwen3-8B + LoRA)
-3. Gets teacher logprobs:
-   - `self` (default): frozen base model conditioned on feedback
-   - `remote`: 30B teacher model via vLLM on Modal
-4. Computes SDPO loss (Generalized JSD + KL regularization)
-5. Updates the LoRA parameters
-6. Saves the adapter back to storage
-
-This enables real-time model personalization where the model learns from each interaction.
+Continual learning via self-distillation for OpenClaw. Personalize the model weights of your OpenClaw assistant using text feedback.
 
 ## Hybrid engine
 
-The request path is driven by a hybrid engine that switches between:
+The locally hosted request path is driven by a hybrid engine that switches between:
 
 - **Serving mode**: route request traffic through vLLM (local or remote) for low-latency generation.
 - **Update mode**: run a single SDPO LoRA step using the provided feedback to adapt the adapter.
@@ -30,21 +15,47 @@ In practice, the flow is: request is answered by vLLM, then the engine performs 
 
 ## Installation
 
-**Prerequisites:** Python 3.11+ and `uv`.
+**Prerequisites:** Python 3.11+, `uv`, and [Docker](https://docs.docker.com/get-docker/).
 
 ### Local (GPU)
 
-Requires a CUDA GPU with enough VRAM for Qwen3-8B + LoRA training.
+Requires an NVIDIA GPU with >= 24 GB VRAM (L40S, A100, RTX 4090, etc.) and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
+
+**Docker Compose (recommended):**
+
+```bash
+cd docker
+cp .env.example .env
+# Edit .env — set TELEGRAM_BOT_TOKEN (from @BotFather)
+docker compose --profile local up --build
+```
+
+This brings up vLLM with Qwen3-8B, the CLaaS feedback API, and OpenClaw's Telegram gateway. See [`docker/README.md`](docker/README.md) for details.
+
+**Manual install:**
 
 ```bash
 uv sync --extra local
 ```
 
-If you use [Claude Code](https://claude.ai/claude-code), `/setup-local <TELEGRAM_BOT_TOKEN>` installs all deps and starts the full local stack (vLLM + API + Telegram).
+Then start vLLM and the API yourself. See [Quick Start](#quick-start) and [`scripts/openclaw-local/README.md`](scripts/openclaw-local/README.md) for the full supervised local stack.
+
+If you use [Claude Code](https://claude.ai/claude-code), `/setup-local <TELEGRAM_BOT_TOKEN>` installs all deps and starts the full local stack automatically.
 
 ### Tinker (no GPU)
 
 Uses the Tinker SDK for hosted distillation and inference. Requires a `TINKER_API_KEY`.
+
+**Docker Compose (recommended):**
+
+```bash
+cd docker
+cp .env.tinker.example .env.tinker
+# Edit .env.tinker — set TELEGRAM_BOT_TOKEN and TINKER_API_KEY
+docker compose -f docker-compose.tinker.yml --env-file .env.tinker up --build
+```
+
+**Manual install:**
 
 ```bash
 uv sync --extra tinker
@@ -62,9 +73,22 @@ uv sync --extra local
 uv run modal token new
 ```
 
+Deploy:
+
+```bash
+# Set HF_TOKEN if using gated models
+export HF_TOKEN=...
+export CLAAS_BASE_MODEL_ID=Qwen/Qwen3-8B
+uv run modal deploy -m claas.deploy
+```
+
+The deployed app exposes the same API at `https://your-app--claas-distill-fastapi-app.modal.run`. LoRAs are stored in the `claas-loras` Modal Volume.
+
 If you use [Claude Code](https://claude.ai/claude-code), `/setup-modal` deploys the CLaaS distillation service to Modal.
 
 ## Quick Start
+
+For manual (non-Docker) local setup:
 
 ```bash
 # 1. Start vLLM with LoRA support
@@ -90,121 +114,51 @@ curl -X POST http://localhost:8080/v1/feedback \
   }'
 ```
 
-For the full local stack (vLLM + gateway + auto-restart), see [Local vLLM + OpenClaw](#local-vllm--openclaw).
+For the full supervised local stack (vLLM + gateway + auto-restart, multi-LoRA, Telegram), see [`scripts/openclaw-local/README.md`](scripts/openclaw-local/README.md).
 
-## POST /v1/feedback
+## Configuration
 
-The primary endpoint. Runs one online update transaction for a served adapter.
+All configuration is via environment variables. Docker Compose users set these in `.env` / `.env.tinker`; manual installs export them directly.
 
-**Orchestration lifecycle:**
+### Core
 
-1. Acquire per-LoRA lock (prevents concurrent updates)
-2. `POST /sleep?level=1` to local vLLM (frees GPU memory)
-3. Distill one SDPO step in-place via CLaaS worker
-4. `POST /wake_up` to local vLLM (reloads adapter)
-5. Write structured JSON log to `FEEDBACK_LOG_DIR`
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAAS_DISTILL_EXECUTION_MODE` | `local` | Training engine: `local`, `modal`, or `tinker` |
+| `CLAAS_BASE_MODEL_ID` | `Qwen/Qwen3-8B` | Base model for LoRA training |
+| `CLAAS_LORA_ROOT` | `/loras` | Root directory for LoRA adapter storage |
+| `CLAAS_STORAGE_BACKEND` | `modal_volume` | Storage backend: `local_fs`, `modal_volume`, or `tinker_json` |
+| `CLAAS_ALLOWED_INIT_BASE_MODELS` | `Qwen/Qwen3-8B` | Comma-separated allowlist of base models for `/v1/lora/init` |
+| `HF_TOKEN` | | Hugging Face token (required for gated models) |
+| `FEEDBACK_LOG_DIR` | `./feedback_logs` | Directory for structured feedback JSON logs |
 
-**Request body:**
+### vLLM (local mode)
 
-```json
-{
-  "lora_id": "user/my-lora-init",
-  "prompt": "User prompt text",
-  "response": "Model response to learn from",
-  "feedback": "Feedback about response quality",
-  "rollout_logprobs": [-0.5, -1.2, -0.8],
-  "training": { "learning_rate": 1e-4, "alpha": 0.5, "teacher_mode": "self" },
-  "orchestration": { "sleep_before": true, "wake_after": true, "sleep_level": 1 }
-}
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VLLM_BASE_URL` | `http://127.0.0.1:8000` | vLLM server URL |
+| `VLLM_API_KEY` | `sk-local` | API key for vLLM |
+| `CLAAS_ATTN_IMPLEMENTATION` | `sdpa` | Attention backend (`sdpa`, `flash_attention_2`) |
+| `FEEDBACK_LOCK_TIMEOUT_S` | `120` | Per-LoRA lock timeout (seconds) |
+| `FEEDBACK_WAKE_ON_FAILURE` | `true` | Wake vLLM if the distill step fails |
+| `FEEDBACK_MIN_FREE_VRAM_GB` | `20` | Minimum free VRAM before training |
+| `FEEDBACK_SLEEP_VERIFY_TIMEOUT_S` | `30` | Timeout waiting for vLLM to sleep |
+| `FEEDBACK_DRAIN_TIMEOUT_S` | `30` | Timeout draining vLLM queue before sleep |
 
-`rollout_logprobs` is optional; when provided, enables proper off-policy IS correction. `training` and `orchestration` have sensible defaults.
+### Tinker mode
 
-**Response:** returns `status`, `request_id`, updated `lora_id`, `distill_result` (loss metrics), `vllm` state, and `timing_ms`. See `/docs` for full schema.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAAS_TINKER_API_KEY` | | Tinker SDK API key (required) |
+| `CLAAS_TINKER_BASE_MODEL` | `gpt-oss/GPT-OSS-120B` | Hosted model for distillation |
+| `CLAAS_TINKER_STATE_PATH` | `~/.claas/tinker_state.json` | Local path for Tinker LoRA state |
+| `CLAAS_COMPLETION_CACHE_SIZE` | `100` | Inference proxy completion cache size |
 
-## Other Endpoints
+### Modal mode
 
-- **POST /v1/distill** — Run a single SDPO distillation step (low-level; returns versioned `lora_id` and training metrics).
-- **POST /v1/lora/init** — Initialize a new LoRA adapter (`lora_id`, optional `base_model`, `lora_r`, `lora_alpha`, `target_modules`).
-- **GET /v1/lora** — List all LoRA adapters and aliases (optional `prefix` query param).
-- **GET /v1/lora/export** — Download a LoRA as a zip archive (`?lora_id=...`).
-- **GET /v1/health** — Health check for the API and backing services.
-
-## Execution Modes
-
-Set `CLAAS_DISTILL_EXECUTION_MODE` to control which training engine implementation handles distillation:
-
-- **`local`** (default) — Runs on the same machine. Requires a GPU with enough VRAM for Qwen3-8B + LoRA training.
-- **`modal`** — Runs the distill step remotely on Modal (L40S) and keeps teacher scoring on Modal.
-- **`tinker`** — Uses the Tinker SDK for distillation **and** LoRA lifecycle operations (`/v1/lora/init`, `/v1/lora`, `/v1/lora/export`) with hosted models such as `gpt-oss/GPT-OSS-120B`. Requires `CLAAS_TINKER_API_KEY`; model selection is controlled by `CLAAS_TINKER_BASE_MODEL` (or `MODEL` in Docker compose).
-
-## Storage
-
-- **Local** (default): adapters are stored under `CLAAS_LORA_ROOT` (default `/loras`). Path format: `/loras/{user}/{model}`.
-- **Remote**: Modal Volume `claas-loras`, same path layout. Used automatically when `CLAAS_DISTILL_EXECUTION_MODE=modal`.
-
-`/v1/feedback` updates adapters in-place (same `lora_id`). `/v1/distill` creates versioned checkpoints with timestamps.
-
-## Docker Compose (Recommended)
-
-The fastest way to get the full stack running — vLLM, CLaaS API, and OpenClaw with Telegram:
-
-```bash
-cd docker
-cp .env.example .env
-# Edit .env — set TELEGRAM_BOT_TOKEN (from @BotFather)
-docker compose --profile local up --build
-```
-
-This brings up four services: an init container (creates the LoRA + config), vLLM with Qwen3-8B and LoRA serving, the CLaaS feedback API, and OpenClaw's Telegram gateway. See [`docker/README.md`](docker/README.md) for details.
-
-For hosted Tinker instead of local vLLM, use the dedicated compose file:
-
-```bash
-cd docker
-cp .env.tinker.example .env.tinker
-# Edit .env.tinker (set TELEGRAM_BOT_TOKEN + TINKER_API_KEY)
-docker compose -f docker-compose.tinker.yml --env-file .env.tinker up --build
-```
-
-## Local vLLM + OpenClaw
-
-See [`scripts/openclaw-local/README.md`](scripts/openclaw-local/README.md) for the full supervised local stack (vLLM + gateway + auto-restart, multi-LoRA, Telegram integration).
-
-## Modal Deployment
-
-To deploy the service on Modal instead of running locally:
-
-```bash
-# Set HF_TOKEN if using gated models (e.g. Qwen/Qwen3-Coder-Next-8B)
-export HF_TOKEN=...
-export CLAAS_BASE_MODEL_ID=Qwen/Qwen3-8B
-
-uv run modal deploy -m claas.deploy
-```
-
-The deployed app exposes the same API at `https://your-app--claas-distill-fastapi-app.modal.run`. LoRAs are stored in the `claas-loras` Modal Volume.
-
-## Claude Code
-
-If you use [Claude Code](https://claude.ai/claude-code), these skills automate common workflows:
-
-| Command | Description |
-|---------|-------------|
-| `/setup-local <TOKEN>` | Install all deps and start the full local stack (vLLM + API + Telegram) |
-| `/setup-tinker` | Deploy the Tinker Docker stack (no GPU required) |
-| `/setup-modal` | Deploy the CLaaS distillation service to Modal |
-| `/clear-tinker-storage` | Delete all Tinker checkpoints to free storage |
-| `/pr-feedback` | Address reviewer feedback on a GitHub PR |
-
-## Development
-
-```bash
-uv sync --extra dev --extra local
-uv run ruff check claas/ tests/
-uv run ty check
-uv run pytest -q -m "not integration"
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAAS_HF_SECRET_NAME` | | Name of Modal Secret containing HF credentials |
 
 ## References
 
