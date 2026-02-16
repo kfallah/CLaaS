@@ -17,7 +17,7 @@ from claas.storage import (
 )
 from claas.training_engines.base import TrainingEngine
 from claas.types import (
-    DistillRequestPayload,
+    DistillBatchRequestPayload,
     DistillResponse,
     LoraDeleteResponse,
     LoraExistsPayload,
@@ -34,7 +34,10 @@ from claas.worker import DistillWorker
 class LocalTrainingEngine(TrainingEngine):
     """Executes training and LoRA operations on local infrastructure."""
 
-    async def distill(self, payload: DistillRequestPayload) -> DistillResponse:
+    async def distill(
+        self,
+        payload: DistillBatchRequestPayload,
+    ) -> DistillResponse:
         """Run distillation against the local worker implementation.
 
         Args:

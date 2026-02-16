@@ -18,7 +18,8 @@ from claas.training_engines.tinker.state import (
     set_tinker_path,
 )
 from claas.types import (
-    DistillRequestPayload,
+    DistillBatchItem,
+    DistillBatchRequestPayload,
     DistillResponse,
     LoraDeleteResponse,
     LoraExistsPayload,
@@ -394,12 +395,17 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
         return_value=teacher_sampler
     )
 
-    payload = DistillRequestPayload(
+    payload = DistillBatchRequestPayload(
         lora_id="test/lora",
-        prompt="Hello",
-        response="World",
-        feedback="Good job",
         training=TrainingConfig(),
+        samples=[
+            DistillBatchItem(
+                prompt="Hello",
+                response="World",
+                feedback="Good job",
+                rollout_logprobs=[],
+            )
+        ],
     )
 
     result = asyncio.run(engine.distill(payload))
@@ -463,13 +469,17 @@ def test_engine_distill_uses_provided_rollout_logprobs(tinker_engine, mock_train
     mock_service.create_sampling_client_async = AsyncMock(return_value=teacher_sampler)
 
     # Provide rollout_logprobs matching the response length (5 chars = 5 tokens)
-    payload = DistillRequestPayload(
+    payload = DistillBatchRequestPayload(
         lora_id="test/lora",
-        prompt="Hello",
-        response="World",
-        feedback="Nice",
-        rollout_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
         training=TrainingConfig(),
+        samples=[
+            DistillBatchItem(
+                prompt="Hello",
+                response="World",
+                feedback="Nice",
+                rollout_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+            )
+        ],
     )
 
     result = asyncio.run(engine.distill(payload))

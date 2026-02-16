@@ -18,7 +18,7 @@ from claas.storage import (
 )
 from claas.training_engines.base import TrainingEngine
 from claas.types import (
-    DistillRequestPayload,
+    DistillBatchRequestPayload,
     DistillResponse,
     LoraDeleteResponse,
     LoraExistsPayload,
@@ -34,7 +34,10 @@ from claas.types import (
 class ModalTrainingEngine(TrainingEngine):
     """Executes training on Modal while using shared LoRA storage."""
 
-    async def distill(self, payload: DistillRequestPayload) -> DistillResponse:
+    async def distill(
+        self,
+        payload: DistillBatchRequestPayload,
+    ) -> DistillResponse:
         """Run distillation using Modal RPC.
 
         Args:

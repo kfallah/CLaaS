@@ -34,7 +34,7 @@ from claas.training_engines.tinker.state import (
     set_tinker_path,
 )
 from claas.types import (
-    DistillRequestPayload,
+    DistillBatchRequestPayload,
     DistillResponse,
     LoraDeleteResponse,
     LoraExistsPayload,
@@ -156,7 +156,10 @@ class TinkerTrainingEngine(TrainingEngine):
     # Distillation
     # ------------------------------------------------------------------
 
-    async def distill(self, payload: DistillRequestPayload) -> DistillResponse:
+    async def distill(
+        self,
+        payload: DistillBatchRequestPayload,
+    ) -> DistillResponse:
         """Run one SDPO distillation step entirely through the Tinker SDK.
 
         Follows the local worker implementation path:
@@ -170,6 +173,10 @@ class TinkerTrainingEngine(TrainingEngine):
         8. optim_step with AdamW
         9. Save checkpoint and update state
         """
+        if len(payload.samples) != 1:
+            raise ValueError("tinker engine requires batch size 1")
+        sample = payload.samples[0]
+
         entry = _require_entry(payload.lora_id)
 
         base_model = entry.base_model
@@ -183,8 +190,8 @@ class TinkerTrainingEngine(TrainingEngine):
         tokenizer = training_client.get_tokenizer()
 
         # ── Tokenize prompt + response directly (matching local worker) ──
-        prompt_tokens: list[int] = tokenizer.encode(payload.prompt, add_special_tokens=True)
-        response_tokens: list[int] = tokenizer.encode(payload.response, add_special_tokens=False)
+        prompt_tokens: list[int] = tokenizer.encode(sample.prompt, add_special_tokens=True)
+        response_tokens: list[int] = tokenizer.encode(sample.response, add_special_tokens=False)
         full_tokens = prompt_tokens + response_tokens
         prompt_len = len(prompt_tokens)
         completion_len = len(response_tokens)
@@ -192,8 +199,8 @@ class TinkerTrainingEngine(TrainingEngine):
         student_full = T.ModelInput.from_ints(full_tokens)
 
         # ── Compute student (rollout) logprobs ──
-        if payload.rollout_logprobs is not None and len(payload.rollout_logprobs) == completion_len:
-            student_logprobs = list(payload.rollout_logprobs)
+        if sample.rollout_logprobs is not None and len(sample.rollout_logprobs) == completion_len:
+            student_logprobs = list(sample.rollout_logprobs)
         else:
             sampling_client = await training_client.save_weights_and_get_sampling_client_async(
                 "current"
@@ -204,7 +211,7 @@ class TinkerTrainingEngine(TrainingEngine):
             )
 
         # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
-        teacher_messages = build_teacher_messages(payload.prompt, payload.feedback)
+        teacher_messages = build_teacher_messages(sample.prompt, sample.feedback)
         template_messages = teacher_messages_to_chat_template(teacher_messages)
         teacher_prompt_text = tokenizer.apply_chat_template(
             template_messages,

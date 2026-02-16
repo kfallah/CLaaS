@@ -40,7 +40,7 @@ from .teacher import (
     parse_teacher_result,
     teacher_messages_to_chat_template,
 )
-from .types import SDPOLossInput, TrainingConfig
+from .types import DistillBatchRequestPayload, SDPOLossInput
 
 if TYPE_CHECKING:
     import torch
@@ -269,53 +269,34 @@ class DistillWorker:
 
     @modal.method()
     def distill(self, request: dict) -> dict:
-        """Run a single SDPO distillation step.
+        """Run one SDPO distillation update on a batch of feedback samples.
 
         Args:
-            request: Distillation request with:
-                - lora_id: LoRA identifier (e.g., "user123/coder-v1")
-                - prompt: User prompt
-                - response: Student's response to learn from
-                - feedback: Feedback about the response quality
-                - training: Training config (learning_rate, alpha, clip_eps, etc.)
+            request: Distillation request payload containing ``lora_id``,
+                ``training``, and ``samples``.
 
         Returns:
-            dict with:
-                - lora_id: Updated LoRA identifier
-                - metadata: Training metrics
+            Dictionary containing the updated LoRA ID and training metadata.
         """
         import torch
 
-        F = self.F  # Use pre-imported functional module
+        F = self.F
         torch.cuda.empty_cache()
 
-        # Ensure base model is on GPU (may have been offloaded to CPU after
-        # the previous distill step to free VRAM for vLLM).
         if next(self.base_model.parameters()).device.type != "cuda":
             torch.nn.Module.to(self.base_model, self.device)
 
-        # Validate request
-        if "lora_id" not in request:
-            raise ValueError("Missing required field: lora_id")
-        if "prompt" not in request:
-            raise ValueError("Missing required field: prompt")
-        if "response" not in request:
-            raise ValueError("Missing required field: response")
-        if "feedback" not in request:
-            raise ValueError("Missing required field: feedback")
+        payload = DistillBatchRequestPayload.model_validate(request)
+        config = payload.training
 
-        # Parse training config with typed defaults
-        config = TrainingConfig.model_validate(request.get("training", {}))
+        if len(payload.samples) == 0:
+            raise ValueError("samples must contain at least one item")
 
-        # 1. Load LoRA from Modal Volume
-        lora_local_path = load_lora(request["lora_id"])
+        lora_local_path = load_lora(payload.lora_id)
 
         try:
             model = self._load_or_create_lora(lora_local_path)
             model.train()
-            # Gradient checkpointing: recompute activations during backward
-            # instead of storing them all.  Trades ~30% more compute for
-            # significantly lower peak VRAM on the student forward/backward.
             model.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": False},
             )
@@ -323,11 +304,9 @@ class DistillWorker:
             cleanup_local_lora(lora_local_path)
             raise RuntimeError(f"Failed to load LoRA: {e}") from e
         except ValueError as e:
-            # PEFT config validation errors
             cleanup_local_lora(lora_local_path)
             raise RuntimeError(f"Invalid LoRA configuration: {e}") from e
 
-        # Set up optimizer on LoRA params only
         lora_params = [p for p in model.parameters() if p.requires_grad]
         optimizer = self.optimizer_cls(
             lora_params,
@@ -336,159 +315,134 @@ class DistillWorker:
             weight_decay=0.01,
         )
 
-        # 2. Tokenize
-        prompt_ids = self.tokenizer.encode(
-            request["prompt"],
-            add_special_tokens=True,
-            return_tensors="pt",
-        ).to(self.device)
+        batch_loss_tensors: list[torch.Tensor] = []
+        batch_distill_loss: list[float] = []
+        batch_kl_reg: list[float] = []
+        batch_mean_is_ratio: list[float] = []
+        batch_clip_fraction: list[float] = []
+        tokens_processed = 0
+        teacher_mode = config.teacher_mode
 
-        response_ids = self.tokenizer.encode(
-            request["response"],
-            add_special_tokens=False,
-            return_tensors="pt",
-        ).to(self.device)
+        for sample in payload.samples:
+            prompt_ids = self.tokenizer.encode(
+                sample.prompt,
+                add_special_tokens=True,
+                return_tensors="pt",
+            ).to(self.device)
+            response_ids = self.tokenizer.encode(
+                sample.response,
+                add_special_tokens=False,
+                return_tensors="pt",
+            ).to(self.device)
 
-        full_ids = torch.cat([prompt_ids, response_ids], dim=-1)
-        response_start = prompt_ids.shape[-1]
-        T_resp = response_ids.shape[-1]
+            full_ids = torch.cat([prompt_ids, response_ids], dim=-1)
+            response_start = prompt_ids.shape[-1]
+            t_resp = response_ids.shape[-1]
+            tokens_processed += int(t_resp)
 
-        # Response mask
-        response_mask = torch.zeros(1, full_ids.shape[-1], device=self.device)
-        response_mask[:, response_start:] = 1.0
+            response_mask = torch.zeros(1, full_ids.shape[-1], device=self.device)
+            response_mask[:, response_start:] = 1.0
 
-        # 3. Base model forward pass (for KL regularization, no grad)
-        with torch.no_grad():
-            base_output = self.base_model(input_ids=full_ids)
-            base_logits = base_output.logits[:, response_start - 1 : -1, :]  # (1, T_resp, V)
-            base_logprobs = F.log_softmax(base_logits, dim=-1).gather(
-                -1, response_ids[:, :T_resp].unsqueeze(-1)
-            ).squeeze(-1)  # (1, T_resp)
+            with torch.no_grad():
+                base_output = self.base_model(input_ids=full_ids)
+                base_logits = base_output.logits[:, response_start - 1 : -1, :]
+                base_logprobs = F.log_softmax(base_logits, dim=-1).gather(
+                    -1, response_ids[:, :t_resp].unsqueeze(-1)
+                ).squeeze(-1)
 
-        del base_output, base_logits
-        torch.cuda.empty_cache()
+            del base_output, base_logits
+            torch.cuda.empty_cache()
 
-        # 4. Student forward pass (with gradient)
-        student_output = model(input_ids=full_ids)
-        # Logits at positions [response_start-1, ..., end-1] predict tokens at [response_start, ..., end]
-        student_logits = student_output.logits[:, response_start - 1 : -1, :].contiguous()
-        del student_output  # free the CausalLMOutput shell immediately
+            student_output = model(input_ids=full_ids)
+            student_logits = student_output.logits[:, response_start - 1 : -1, :].contiguous()
+            del student_output
 
-        # Old logprobs for importance sampling ratio
-        # These should come from the inference server that generated the rollout
-        rollout_logprobs = request.get("rollout_logprobs")
-        if rollout_logprobs is not None:
+            if sample.rollout_logprobs is None:
+                raise ValueError(
+                    "rollout_logprobs is required for local/modal distill"
+                )
             old_student_logprobs = torch.tensor(
-                rollout_logprobs,
+                sample.rollout_logprobs,
                 dtype=torch.float32,
                 device=self.device,
-            ).unsqueeze(0)  # Add batch dimension
-            # Truncate/pad to match response length
-            if old_student_logprobs.shape[1] > T_resp:
-                old_student_logprobs = old_student_logprobs[:, :T_resp]
-            elif old_student_logprobs.shape[1] < T_resp:
-                # Pad with zeros (log(1) = 0, neutral for IS ratio)
-                pad_size = T_resp - old_student_logprobs.shape[1]
-                old_student_logprobs = F.pad(old_student_logprobs, (0, pad_size), value=0.0)
-        else:
-            # Fallback: compute from current model (incorrect for off-policy)
-            logger.warning(
-                "rollout_logprobs not provided; computing from current model. "
-                "For proper off-policy learning, pass logprobs from the inference server."
-            )
-            with torch.no_grad():
-                old_student_logprobs = F.log_softmax(
-                    student_logits.detach(), dim=-1
-                ).gather(-1, response_ids[:, :T_resp].unsqueeze(-1)).squeeze(-1)
+            ).unsqueeze(0)
+            if old_student_logprobs.shape[1] > t_resp:
+                old_student_logprobs = old_student_logprobs[:, :t_resp]
+            elif old_student_logprobs.shape[1] < t_resp:
+                raise ValueError(
+                    "rollout_logprobs length must match response token length"
+                )
 
-        # 5. Build/parse teacher logprobs
-        requested_teacher_mode = str(request.get("training", {}).get("teacher_mode", "self"))
-        teacher_result = request.get("teacher_result")
-        if requested_teacher_mode == "remote":
-            if not teacher_result:
-                raise ValueError("teacher_mode='remote' requires non-empty teacher_result")
-            teacher_logprobs, teacher_indices = parse_teacher_result(
-                teacher_result, str(self.device)
-            )
-            teacher_mode = "remote"
-        else:
-            # "self" teacher: base model conditioned on feedback.
-            # Forward pass through frozen base model with feedback in
-            # the prompt creates a distribution that reflects the feedback
-            # signal (SDPO paper, Section 3).
-            teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
-                request["prompt"],
-                request["feedback"],
-                response_ids,
-                config.teacher_top_k,
-            )
-            teacher_mode = "self"
-
-        # Ensure dimensions match
-        if teacher_logprobs.shape[0] != T_resp:
-            # Truncate or pad to match
-            if teacher_logprobs.shape[0] > T_resp:
-                teacher_logprobs = teacher_logprobs[:T_resp]
-                teacher_indices = teacher_indices[:T_resp]
+            if config.teacher_mode == "remote":
+                if sample.teacher_result is None:
+                    raise ValueError("teacher_mode='remote' requires teacher_result")
+                teacher_logprobs, teacher_indices = parse_teacher_result(
+                    sample.teacher_result,
+                    str(self.device),
+                )
             else:
-                # Pad with zeros (shouldn't happen normally)
-                pad_size = T_resp - teacher_logprobs.shape[0]
-                teacher_logprobs = F.pad(teacher_logprobs, (0, 0, 0, pad_size), value=-100.0)
-                teacher_indices = F.pad(teacher_indices, (0, 0, 0, pad_size), value=0)
+                teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
+                    sample.prompt,
+                    sample.feedback,
+                    response_ids,
+                    config.teacher_top_k,
+                )
 
-        # Add batch dimension
-        teacher_logprobs = teacher_logprobs.unsqueeze(0)
-        teacher_indices = teacher_indices.unsqueeze(0)
+            if teacher_logprobs.shape[0] != t_resp:
+                raise ValueError("teacher logprob sequence length must match response length")
 
-        # 6. Compute SDPO loss
-        loss_input = SDPOLossInput(
-            student_logits=student_logits,
-            teacher_logprobs=teacher_logprobs,
-            teacher_indices=teacher_indices,
-            base_logprobs=base_logprobs,
-            response_mask=response_mask[:, response_start:],
-            old_student_logprobs=old_student_logprobs,
-            response_ids=response_ids[:, :T_resp],
-            alpha=config.alpha,
-            is_clip=config.is_clip,
-            kl_reg_weight=config.kl_reg_weight,
-        )
-        loss_dict = compute_sdpo_loss(loss_input)
+            loss_input = SDPOLossInput(
+                student_logits=student_logits,
+                teacher_logprobs=teacher_logprobs.unsqueeze(0),
+                teacher_indices=teacher_indices.unsqueeze(0),
+                base_logprobs=base_logprobs,
+                response_mask=response_mask[:, response_start:],
+                old_student_logprobs=old_student_logprobs,
+                response_ids=response_ids[:, :t_resp],
+                alpha=config.alpha,
+                is_clip=config.is_clip,
+                kl_reg_weight=config.kl_reg_weight,
+            )
+            loss_dict = compute_sdpo_loss(loss_input)
+            batch_loss_tensors.append(loss_dict["loss"])
+            batch_distill_loss.append(loss_dict["distill_loss"])
+            batch_kl_reg.append(loss_dict["kl_reg"])
+            batch_mean_is_ratio.append(loss_dict["mean_is_ratio"])
+            batch_clip_fraction.append(loss_dict["clip_fraction"])
 
-        # 7. Backward + clip + step
-        loss_dict["loss"].backward()
+            del full_ids, prompt_ids, response_ids, response_mask
+            del student_logits, base_logprobs, old_student_logprobs
+            del teacher_logprobs, teacher_indices, loss_input
+
+        mean_loss = torch.stack(batch_loss_tensors).mean()
+        mean_loss.backward()
 
         grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, config.max_grad_norm)
         optimizer.step()
         optimizer.zero_grad()
 
-        # Disable gradient checkpointing before save to avoid serialisation issues.
         model.gradient_checkpointing_disable()
 
-        # 8. Save LoRA to Modal Volume
         save_dir = tempfile.mkdtemp(prefix="lora_updated_")
         try:
             model.save_pretrained(save_dir)
-            if request.get("save_in_place", False):
-                new_lora_id = save_lora_inplace(save_dir, request["lora_id"])
+            if payload.save_in_place:
+                new_lora_id = save_lora_inplace(save_dir, payload.lora_id)
             else:
-                new_lora_id = save_lora(save_dir, request["lora_id"])
+                new_lora_id = save_lora(save_dir, payload.lora_id)
         finally:
             cleanup_local_lora(save_dir)
 
-        # 9. Cleanup
-        total_loss = loss_dict["loss"].item()
-        distill_loss = loss_dict["distill_loss"]
-        kl_reg = loss_dict["kl_reg"]
-        mean_is_ratio = loss_dict["mean_is_ratio"]
-        clip_fraction = loss_dict["clip_fraction"]
+        total_loss = mean_loss.item()
+        distill_loss = sum(batch_distill_loss) / len(batch_distill_loss)
+        kl_reg = sum(batch_kl_reg) / len(batch_kl_reg)
+        mean_is_ratio = sum(batch_mean_is_ratio) / len(batch_mean_is_ratio)
+        clip_fraction = sum(batch_clip_fraction) / len(batch_clip_fraction)
         grad_norm_val = grad_norm.item() if hasattr(grad_norm, "item") else grad_norm
 
-        del model, optimizer, loss_dict, loss_input
-        del student_logits, base_logprobs, old_student_logprobs
-        del teacher_logprobs, teacher_indices
-        del full_ids, prompt_ids, response_ids, response_mask
+        del model, optimizer, batch_loss_tensors
         cleanup_local_lora(lora_local_path)
+        torch.cuda.empty_cache()
 
         self._offload_base_model()
 
@@ -501,8 +455,9 @@ class DistillWorker:
                 "mean_is_ratio": mean_is_ratio,
                 "clip_fraction": clip_fraction,
                 "grad_norm": grad_norm_val,
-                "tokens_processed": T_resp,
+                "tokens_processed": tokens_processed,
                 "teacher_mode": teacher_mode,
+                "batch_size": len(payload.samples),
             },
         }
 
