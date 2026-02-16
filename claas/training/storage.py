@@ -32,7 +32,9 @@ ALIASES_FILE_NAME = ".aliases.json"
 
 def _storage_backend() -> str:
     """Return configured storage backend."""
-    return os.environ.get("CLAAS_STORAGE_BACKEND", "modal_volume").strip().lower()
+    from claas.core.config import get_config
+
+    return get_config().storage_backend.lower()
 
 
 def _commit_storage() -> None:

@@ -14,6 +14,13 @@ if TYPE_CHECKING:
     import torch
 
 
+class ChatMessage(TypedDict):
+    """Typed chat message invariant for teacher prompt formatting."""
+
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+
 class TrainingConfig(BaseModel):
     """Training configuration for distillation."""
 

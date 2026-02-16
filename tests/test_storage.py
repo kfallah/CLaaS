@@ -12,21 +12,21 @@ class TestGetLoraPath:
 
     def test_simple_path(self):
         """Returns correct path for simple ID."""
-        from claas.storage import LORA_MOUNT_PATH, get_lora_path
+        from claas.training.storage import LORA_MOUNT_PATH, get_lora_path
 
         result = get_lora_path("user123/coder-v1")
         assert result == f"{LORA_MOUNT_PATH}/user123/coder-v1"
 
     def test_strips_slashes(self):
         """Strips leading/trailing slashes."""
-        from claas.storage import LORA_MOUNT_PATH, get_lora_path
+        from claas.training.storage import LORA_MOUNT_PATH, get_lora_path
 
         result = get_lora_path("/user123/coder-v1/")
         assert result == f"{LORA_MOUNT_PATH}/user123/coder-v1"
 
     def test_nested_path(self):
         """Handles nested paths."""
-        from claas.storage import LORA_MOUNT_PATH, get_lora_path
+        from claas.training.storage import LORA_MOUNT_PATH, get_lora_path
 
         result = get_lora_path("org/team/project/model-v1")
         assert result == f"{LORA_MOUNT_PATH}/org/team/project/model-v1"
@@ -37,7 +37,7 @@ class TestLoraExists:
 
     def test_exists_when_config_present(self, tmp_path, monkeypatch):
         """Returns True when adapter_config.json exists."""
-        from claas import storage
+        from claas.training import storage
 
         # Create mock LoRA directory
         lora_dir = tmp_path / "test-user" / "test-model"
@@ -51,7 +51,7 @@ class TestLoraExists:
 
     def test_not_exists_when_no_config(self, tmp_path, monkeypatch):
         """Returns False when adapter_config.json is missing."""
-        from claas import storage
+        from claas.training import storage
 
         # Create empty directory
         lora_dir = tmp_path / "test-user" / "test-model"
@@ -63,7 +63,7 @@ class TestLoraExists:
 
     def test_not_exists_when_no_directory(self, tmp_path, monkeypatch):
         """Returns False when directory doesn't exist."""
-        from claas import storage
+        from claas.training import storage
 
         monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
 
@@ -75,7 +75,7 @@ class TestLoadLora:
 
     def test_copies_files_to_local(self, tmp_path, monkeypatch):
         """Copies all files from volume to local directory."""
-        from claas import storage
+        from claas.training import storage
 
         # Create mock LoRA in "volume"
         volume_path = tmp_path / "volume"
@@ -97,7 +97,7 @@ class TestLoadLora:
 
     def test_raises_when_not_found(self, tmp_path, monkeypatch):
         """Raises FileNotFoundError when LoRA doesn't exist."""
-        from claas import storage
+        from claas.training import storage
 
         monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
 
@@ -110,7 +110,7 @@ class TestSaveLora:
 
     def test_copies_files_to_volume(self, tmp_path, monkeypatch):
         """Copies files from local to volume with version suffix."""
-        from claas import storage
+        from claas.training import storage
 
         # Mock volume commit
         class MockVolume:
@@ -135,7 +135,7 @@ class TestSaveLora:
 
     def test_auto_generates_timestamp(self, tmp_path, monkeypatch):
         """Auto-generates timestamp suffix when not provided."""
-        from claas import storage
+        from claas.training import storage
 
         class MockVolume:
             def commit(self):
@@ -159,7 +159,7 @@ class TestSaveLora:
 
     def test_inplace_overwrites_fixed_path(self, tmp_path, monkeypatch):
         """In-place save keeps a stable lora_id and replaces adapter files."""
-        from claas import storage
+        from claas.training import storage
 
         class MockVolume:
             def commit(self):
@@ -196,7 +196,7 @@ class TestCreateInitialLora:
     def test_creates_config_file(self, tmp_path, monkeypatch):
         """Creates adapter_config.json with correct content."""
         pytest.importorskip("transformers")
-        from claas import storage
+        from claas.training import storage
 
         class MockVolume:
             def commit(self):
@@ -246,7 +246,7 @@ class TestListLoras:
 
     def test_finds_all_loras(self, tmp_path, monkeypatch):
         """Finds all directories with adapter_config.json."""
-        from claas import storage
+        from claas.training import storage
 
         monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
 
@@ -265,7 +265,7 @@ class TestListLoras:
 
     def test_filters_by_prefix(self, tmp_path, monkeypatch):
         """Filters results by prefix."""
-        from claas import storage
+        from claas.training import storage
 
         monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
 
@@ -281,7 +281,7 @@ class TestListLoras:
 
     def test_returns_empty_when_no_loras(self, tmp_path, monkeypatch):
         """Returns empty list when no LoRAs exist."""
-        from claas import storage
+        from claas.training import storage
 
         monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
 
@@ -294,7 +294,7 @@ class TestCleanupLocalLora:
 
     def test_removes_directory(self, tmp_path):
         """Removes the specified directory."""
-        from claas.storage import cleanup_local_lora
+        from claas.training.storage import cleanup_local_lora
 
         local_dir = tmp_path / "lora"
         local_dir.mkdir()
@@ -306,7 +306,7 @@ class TestCleanupLocalLora:
 
     def test_no_error_when_missing(self, tmp_path):
         """Doesn't raise when directory doesn't exist."""
-        from claas.storage import cleanup_local_lora
+        from claas.training.storage import cleanup_local_lora
 
         # Should not raise
         cleanup_local_lora(str(tmp_path / "nonexistent"))
@@ -317,7 +317,7 @@ class TestLoraAliases:
 
     def test_save_lora_creates_latest_alias(self, tmp_path, monkeypatch):
         """Saving a LoRA should create/update a latest alias."""
-        from claas import storage
+        from claas.training import storage
 
         class MockVolume:
             def commit(self):
@@ -338,7 +338,7 @@ class TestLoraAliases:
 
     def test_alias_resolves_for_exists_and_export(self, tmp_path, monkeypatch):
         """Alias IDs should resolve for existence and export operations."""
-        from claas import storage
+        from claas.training import storage
 
         class MockVolume:
             def commit(self):
@@ -360,7 +360,7 @@ class TestLoraAliases:
 
     def test_delete_lora_alias_only_removes_mapping(self, tmp_path, monkeypatch):
         """Deleting an alias should not delete target LoRA files."""
-        from claas import storage
+        from claas.training import storage
 
         class MockVolume:
             def commit(self):

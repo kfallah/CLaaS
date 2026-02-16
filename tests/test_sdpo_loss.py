@@ -6,8 +6,8 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from claas.sdpo_loss import _lookup_token_in_topk, compute_sdpo_loss  # noqa: E402
-from claas.types import SDPOLossInput  # noqa: E402
+from claas.core.types import SDPOLossInput  # noqa: E402
+from claas.training.sdpo_loss import _lookup_token_in_topk, compute_sdpo_loss  # noqa: E402
 
 
 @pytest.fixture

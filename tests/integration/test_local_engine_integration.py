@@ -9,14 +9,14 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from claas import storage  # noqa: E402
-from claas.training_engines.local.engine import LocalTrainingEngine  # noqa: E402
-from claas.types import (  # noqa: E402
+from claas.core.types import (  # noqa: E402
     DistillBatchItem,
     DistillBatchRequestPayload,
     LoraInitRequest,
     TrainingConfig,
 )
+from claas.training import storage  # noqa: E402
+from claas.training.engine.local.engine import LocalTrainingEngine  # noqa: E402
 
 
 @dataclass
@@ -66,7 +66,7 @@ class _WorkerWithCleanupFailure(_WorkerStub):
 
 def test_local_engine_integration_paths(monkeypatch, tmp_path):
     """Exercise the full local engine API surface against local storage."""
-    from claas.training_engines.local import engine as engine_module
+    from claas.training.engine.local import engine as engine_module
 
     monkeypatch.setenv("CLAAS_LORA_ROOT", str(tmp_path))
     monkeypatch.setenv("CLAAS_STORAGE_BACKEND", "local_fs")
@@ -119,7 +119,7 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
 
 def test_local_engine_cleanup_failure_is_ignored(monkeypatch):
     """Cleanup errors do not fail distillation requests."""
-    from claas.training_engines.local import engine as engine_module
+    from claas.training.engine.local import engine as engine_module
 
     state = WorkerState()
     monkeypatch.setattr(

@@ -89,7 +89,7 @@ def create_lora() -> None:
             print(f"LoRA alias '{alias_key}' already exists → {target}, skipping creation.")
             return
 
-    from claas.storage import create_initial_lora
+    from claas.training.storage import create_initial_lora
 
     full_id = create_initial_lora(LORA_NAME, base_model_name=BASE_MODEL)
     print(f"Created initial LoRA: {full_id}")

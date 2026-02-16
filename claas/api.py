@@ -30,7 +30,6 @@ import asyncio
 import html
 import json
 import logging
-import os
 import re
 import time
 import uuid
@@ -42,11 +41,8 @@ import modal
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 
-from .storage import LORA_MOUNT_PATH, lora_volume
-from .teacher import format_teacher_prompt
-from .training_engines import get_training_engine
-from .training_engines.base import EngineKind, TrainingEngine
-from .types import (
+from .core.config import CLaaSConfig, get_config
+from .core.types import (
     DistillBatchItem,
     DistillBatchRequestPayload,
     DistillRequest,
@@ -64,6 +60,10 @@ from .types import (
     LoraListResponse,
     ServiceHealth,
 )
+from .training.engine import get_training_engine
+from .training.engine.base import EngineKind, TrainingEngine
+from .training.storage import LORA_MOUNT_PATH, lora_volume
+from .training.teacher_helpers import format_teacher_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -77,25 +77,16 @@ web_app = FastAPI(
     version="0.1.0",
 )
 
-VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
-VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "sk-local")
-FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
 FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "index.html"
-FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
-# Default "local" assumes GPU deps (torch, etc.) are available on this machine.
-# Set to "modal" for Modal deployments where the API image is CPU-only.
-DISTILL_EXECUTION_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local").strip().lower()
 
 
 def _get_engine_kind() -> EngineKind:
     """Validate and return the configured engine kind."""
-    if DISTILL_EXECUTION_MODE == "local":
-        return "local"
-    if DISTILL_EXECUTION_MODE == "modal":
-        return "modal"
-    if DISTILL_EXECUTION_MODE == "tinker":
-        return "tinker"
-    raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {DISTILL_EXECUTION_MODE}")
+    cfg = get_config()
+    mode = cfg.mode
+    if mode in {"local", "modal", "tinker"}:
+        return mode  # type: ignore[return-value]
+    raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {mode}")
 
 def _uses_modal_teacher() -> bool:
     """Return whether API should fetch teacher scores from Modal TeacherService."""
@@ -111,37 +102,13 @@ _feedback_locks: dict[str, asyncio.Lock] = {}
 _feedback_locks_guard = asyncio.Lock()
 
 
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-FEEDBACK_WAKE_ON_FAILURE = _env_flag("FEEDBACK_WAKE_ON_FAILURE", True)
-
-# Minimum free GPU memory (GB) required before starting training.
-FEEDBACK_MIN_FREE_VRAM_GB = float(os.environ.get("FEEDBACK_MIN_FREE_VRAM_GB", "20"))
-# Maximum seconds to wait for GPU memory after vLLM sleep.
-FEEDBACK_SLEEP_VERIFY_TIMEOUT_S = float(os.environ.get("FEEDBACK_SLEEP_VERIFY_TIMEOUT_S", "30"))
-# Maximum seconds to wait for in-flight vLLM requests to drain before sleeping.
-FEEDBACK_DRAIN_TIMEOUT_S = float(os.environ.get("FEEDBACK_DRAIN_TIMEOUT_S", "30"))
-# vLLM model name for fetching rollout logprobs.
-# None = auto-derive from LoRA ID.  "" = disabled.
-
-ALLOWED_INIT_BASE_MODELS = {
-    model.strip()
-    for model in os.environ.get("CLAAS_ALLOWED_INIT_BASE_MODELS", "Qwen/Qwen3-8B").split(",")
-    if model.strip()
-}
-
-
 def _validate_init_base_model(base_model: str) -> None:
-    if base_model in ALLOWED_INIT_BASE_MODELS:
+    cfg = get_config()
+    if base_model in cfg.allowed_init_base_models:
         return
 
     logger.warning("Rejected /v1/lora/init for disallowed base_model: %s", base_model)
-    allowed = ", ".join(sorted(ALLOWED_INIT_BASE_MODELS))
+    allowed = ", ".join(sorted(cfg.allowed_init_base_models))
     raise HTTPException(
         status_code=403,
         detail=(
@@ -171,6 +138,15 @@ async def _get_feedback_lock_key(lora_id: str) -> str:
     return runtime_ref.vllm_name
 
 
+def _vllm_connection(cfg: CLaaSConfig | None = None) -> tuple[str, str]:
+    """Return (base_url, api_key) from the current config."""
+    if cfg is None:
+        cfg = get_config()
+    base_url: str = getattr(cfg, "vllm_base_url", "http://127.0.0.1:8000")
+    api_key: str = getattr(cfg, "vllm_api_key", "")
+    return base_url, api_key
+
+
 async def _vllm_post(
     path: str,
     *,
@@ -179,33 +155,39 @@ async def _vllm_post(
     timeout_s: float = 30.0,
 ) -> None:
     """Call a vLLM control endpoint and raise on non-success."""
-    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
-    async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=timeout_s) as client:
+    base_url, api_key = _vllm_connection()
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
         resp = await client.post(path, params=params, json=json_body, headers=headers)
     resp.raise_for_status()
 
 
 async def _tinker_proxy_refresh(model_path: str) -> None:
     """Tell the Tinker inference proxy to reload with the latest checkpoint."""
-    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
-    async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=30) as client:
+    base_url, api_key = _vllm_connection()
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    async with httpx.AsyncClient(base_url=base_url, timeout=30) as client:
         resp = await client.post("/v1/sampler/refresh", json={"model_path": model_path}, headers=headers)
     resp.raise_for_status()
     logger.info("Tinker proxy refreshed to checkpoint: %s", model_path)
 
 
 async def _wait_for_vllm_idle(
-    timeout_s: float = FEEDBACK_DRAIN_TIMEOUT_S,
+    timeout_s: float | None = None,
 ) -> None:
     """Poll vLLM ``/metrics`` until no requests are running or waiting.
 
     Raises :class:`TimeoutError` if vLLM is still busy after *timeout_s*.
     """
-    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
+    cfg = get_config()
+    if timeout_s is None:
+        timeout_s = getattr(cfg, "feedback_drain_timeout_s", 30.0)
+    base_url, api_key = _vllm_connection(cfg)
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     deadline = time.perf_counter() + timeout_s
 
     while True:
-        async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=10) as client:
+        async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
             resp = await client.get("/metrics", headers=headers)
         resp.raise_for_status()
 
@@ -236,8 +218,8 @@ async def _wait_for_vllm_idle(
 
 
 async def _verify_gpu_ready(
-    min_free_gb: float = FEEDBACK_MIN_FREE_VRAM_GB,
-    timeout_s: float = FEEDBACK_SLEEP_VERIFY_TIMEOUT_S,
+    min_free_gb: float | None = None,
+    timeout_s: float | None = None,
 ) -> None:
     """Poll GPU memory until *min_free_gb* is available or *timeout_s* expires.
 
@@ -245,6 +227,12 @@ async def _verify_gpu_ready(
     actually released its VRAM.  If torch is not installed (CPU-only API
     image) the check is skipped silently.
     """
+    cfg = get_config()
+    if min_free_gb is None:
+        min_free_gb = getattr(cfg, "feedback_min_free_vram_gb", 20.0)
+    if timeout_s is None:
+        timeout_s = getattr(cfg, "feedback_sleep_verify_timeout_s", 30.0)
+
     try:
         import torch
 
@@ -306,7 +294,7 @@ def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
         payload = record
         request_id = str(payload.get("request_id", ""))
 
-    log_root = Path(FEEDBACK_LOG_DIR)
+    log_root = Path(get_config().feedback_log_dir)
     log_root.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     request_id = request_id or uuid.uuid4().hex
@@ -325,7 +313,7 @@ def _read_recent_feedback_logs(limit: int = 20) -> list[FeedbackLogRecord]:
     Returns:
         A list of feedback records ordered from newest to oldest.
     """
-    log_root = Path(FEEDBACK_LOG_DIR)
+    log_root = Path(get_config().feedback_log_dir)
     if not log_root.exists():
         return []
 
@@ -359,17 +347,15 @@ def _feedback_prompt_preview(prompt: str, limit: int = 140) -> str:
 
 
 def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
-    """Render dashboard table rows for feedback records.
+    """Render dashboard table rows for feedback records, grouped by batch.
 
-    Args:
-        records: Feedback records to render.
-
-    Returns:
-        HTML table rows with expandable detail sections.
+    Each batch gets a single summary row.  Expanding it reveals per-sample
+    details (prompt / response / feedback) plus the batch-level timing,
+    training metrics, and orchestration info.
     """
     rows: list[str] = []
-    for record_index, record in enumerate(records):
-        metrics_payload = {}
+    for idx, record in enumerate(records):
+        metrics_payload: dict[str, object] = {}
         if record.distill_result is not None:
             metrics_payload = record.distill_result.metadata
         timing_json = json.dumps(record.timing_ms.model_dump(mode="json"), indent=2, sort_keys=True)
@@ -377,60 +363,83 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
         vllm_json = json.dumps(record.vllm.model_dump(mode="json"), indent=2, sort_keys=True)
         error_value = record.error or ""
         batch_size = len(record.requests)
-        for item_index, req in enumerate(record.requests):
-            detail_row_id = f"feedback-detail-{record_index}-{item_index}"
-            prompt_preview = _feedback_prompt_preview(req.prompt)
+        detail_row_id = f"feedback-detail-{idx}"
 
-            rows.append(
+        # -- Batch summary row --
+        rows.append(
+            """
+            <tr>
+              <td>{request_id}<br><small>{timestamp}</small></td>
+              <td>{status} ({phase})</td>
+              <td>{lora_id}</td>
+              <td>{batch_size} sample{plural}</td>
+              <td>{distill_ms}</td>
+              <td>{total_ms}</td>
+              <td><button type="button" onclick="toggleDetails('{detail_row_id}', this)">Expand</button></td>
+            </tr>
+            """.format(
+                request_id=html.escape(record.request_id),
+                timestamp=html.escape(record.timestamp_utc),
+                status=html.escape(record.status),
+                phase=html.escape(record.phase),
+                lora_id=html.escape(record.lora_id),
+                batch_size=batch_size,
+                plural="s" if batch_size != 1 else "",
+                distill_ms=record.timing_ms.distill,
+                total_ms=record.timing_ms.total,
+                detail_row_id=detail_row_id,
+            )
+        )
+
+        # -- Expandable detail row --
+        sample_sections: list[str] = []
+        for item_index, req in enumerate(record.requests):
+            sample_sections.append(
                 """
-                <tr>
-                  <td>{request_id}<br><small>{timestamp}</small></td>
-                  <td>{item_number}/{batch_size}</td>
-                  <td>{status} ({phase})</td>
-                  <td>{lora_id}</td>
-                  <td><div class="prompt-preview">{prompt_preview}</div></td>
-                  <td>{distill_ms}</td>
-                  <td>{total_ms}</td>
-                  <td><button type="button" onclick="toggleDetails('{detail_row_id}', this)">Expand</button></td>
-                </tr>
-                <tr id="{detail_row_id}" class="detail-row">
-                  <td colspan="8">
-                    <div class="detail-panel">
-                      <section><h3>Batch Item</h3><pre>{item_number}/{batch_size}</pre></section>
-                      <section><h3>Prompt</h3><pre>{prompt}</pre></section>
-                      <section><h3>Response</h3><pre>{response}</pre></section>
-                      <section><h3>Feedback</h3><pre>{feedback}</pre></section>
-                      <section><h3>Timing (ms)</h3><pre>{timing_json}</pre></section>
-                      <section><h3>Training metrics</h3><pre>{metrics_json}</pre></section>
-                      <section><h3>vLLM orchestration</h3><pre>{vllm_json}</pre></section>
-                      <section><h3>Error</h3><pre>{error_value}</pre></section>
-                    </div>
-                  </td>
-                </tr>
+                <details{open_attr}>
+                  <summary>Sample {item_number}/{batch_size} &mdash; {prompt_preview}</summary>
+                  <div class="detail-panel">
+                    <section><h3>Prompt</h3><pre>{prompt}</pre></section>
+                    <section><h3>Response</h3><pre>{response}</pre></section>
+                    <section><h3>Feedback</h3><pre>{feedback}</pre></section>
+                  </div>
+                </details>
                 """.format(
-                    request_id=html.escape(record.request_id),
-                    timestamp=html.escape(record.timestamp_utc),
+                    open_attr=" open" if batch_size == 1 else "",
                     item_number=item_index + 1,
                     batch_size=batch_size,
-                    status=html.escape(record.status),
-                    phase=html.escape(record.phase),
-                    lora_id=html.escape(record.lora_id),
-                    prompt_preview=html.escape(prompt_preview),
-                    distill_ms=record.timing_ms.distill,
-                    total_ms=record.timing_ms.total,
-                    detail_row_id=detail_row_id,
+                    prompt_preview=html.escape(_feedback_prompt_preview(req.prompt, limit=80)),
                     prompt=html.escape(req.prompt),
                     response=html.escape(req.response),
                     feedback=html.escape(req.feedback),
-                    timing_json=html.escape(timing_json),
-                    metrics_json=html.escape(metrics_json),
-                    vllm_json=html.escape(vllm_json),
-                    error_value=html.escape(error_value),
                 )
             )
 
+        rows.append(
+            """
+            <tr id="{detail_row_id}" class="detail-row">
+              <td colspan="7">
+                {samples}
+                <div class="detail-panel" style="margin-top: 0.75rem">
+                  <section><h3>Timing (ms)</h3><pre>{timing_json}</pre></section>
+                  <section><h3>Training metrics</h3><pre>{metrics_json}</pre></section>
+                  <section><h3>vLLM orchestration</h3><pre>{vllm_json}</pre></section>
+                  <section><h3>Error</h3><pre>{error_value}</pre></section>
+                </div>
+              </td>
+            </tr>
+            """.format(
+                detail_row_id=detail_row_id,
+                samples="\n".join(sample_sections),
+                timing_json=html.escape(timing_json),
+                metrics_json=html.escape(metrics_json),
+                vllm_json=html.escape(vllm_json),
+                error_value=html.escape(error_value),
+            )
+        )
+
     if not rows:
-        return '<tr><td colspan="8">No feedback records found.</td></tr>'
+        return '<tr><td colspan="7">No feedback records found.</td></tr>'
     return "\n".join(rows)
 
 
@@ -561,7 +570,9 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
 
         lock_key = await _get_feedback_lock_key(lora_id)
         lock = await _get_feedback_lock(lock_key)
-        await asyncio.wait_for(lock.acquire(), timeout=FEEDBACK_LOCK_TIMEOUT_S)
+        cfg = get_config()
+        lock_timeout = getattr(cfg, "feedback_lock_timeout_s", 120.0)
+        await asyncio.wait_for(lock.acquire(), timeout=lock_timeout)
 
         try:
             batch_samples: list[DistillBatchItem] = []
@@ -658,7 +669,7 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             slept
             and not woke
             and request.orchestration.wake_after
-            and (request.orchestration.wake_on_failure or FEEDBACK_WAKE_ON_FAILURE)
+            and (request.orchestration.wake_on_failure or getattr(get_config(), "feedback_wake_on_failure", True))
         ):
             try:
                 await _vllm_post("/resume")

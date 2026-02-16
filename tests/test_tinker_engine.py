@@ -8,16 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from claas.training_engines.tinker.state import (
-    all_checkpoint_paths,
-    delete_entry,
-    get_entry,
-    get_tinker_path,
-    list_loras,
-    lora_exists,
-    set_tinker_path,
-)
-from claas.types import (
+from claas.core.types import (
     DistillBatchItem,
     DistillBatchRequestPayload,
     DistillResponse,
@@ -28,6 +19,15 @@ from claas.types import (
     LoraListResponse,
     ServiceHealth,
     TrainingConfig,
+)
+from claas.training.engine.tinker.state import (
+    all_checkpoint_paths,
+    delete_entry,
+    get_entry,
+    get_tinker_path,
+    list_loras,
+    lora_exists,
+    set_tinker_path,
 )
 
 # ── Fixtures ────────────────────────────────────────────────────────
@@ -43,11 +43,11 @@ def state_file(tmp_path):
 def tinker_env(state_file):
     """Point all tinker state operations at a temp file for the test duration.
 
-    Patches ``_DEFAULT_STATE_PATH`` so every call to ``get_entry``,
+    Patches ``_state_path()`` so every call to ``get_entry``,
     ``set_tinker_path``, etc. (even without an explicit ``path=``)
     reads/writes the temp file.
     """
-    with patch("claas.training_engines.tinker.state._DEFAULT_STATE_PATH", state_file):
+    with patch("claas.training.engine.tinker.state._state_path", return_value=state_file):
         yield state_file
 
 
@@ -59,8 +59,18 @@ def tinker_engine(tinker_env):
     routed to the temp state file via ``tinker_env``.
     """
     pytest.importorskip("tinker")
-    with patch.dict(os.environ, {"CLAAS_TINKER_API_KEY": "fake-key"}):
-        from claas.training_engines.tinker.engine import TinkerTrainingEngine
+    from claas.core.config import TinkerConfig
+
+    fake_cfg = TinkerConfig(
+        mode="tinker",
+        tinker_api_key="fake-key",
+        tinker_base_model="gpt-oss/GPT-OSS-120B",
+        tinker_state_path=tinker_env,
+        vllm_base_url="http://127.0.0.1:8000",
+        vllm_api_key="sk-local",
+    )
+    with patch("claas.training.engine.tinker.engine.get_config", return_value=fake_cfg):
+        from claas.training.engine.tinker.engine import TinkerTrainingEngine
 
         engine = TinkerTrainingEngine()
     mock_service = MagicMock()
@@ -588,7 +598,7 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
 def test_require_entry(tinker_env):
     """_require_entry raises for missing and returns entry for existing LoRA."""
     pytest.importorskip("tinker")
-    from claas.training_engines.tinker.engine import _require_entry
+    from claas.training.engine.tinker.engine import _require_entry
 
     with pytest.raises(FileNotFoundError, match="not found"):
         _require_entry("nonexistent/lora")
@@ -602,7 +612,7 @@ def test_require_entry(tinker_env):
 def test_slice_completion_logprobs():
     """_slice_completion_logprobs extracts the completion portion, replacing None."""
     pytest.importorskip("tinker")
-    from claas.training_engines.tinker.engine import _slice_completion_logprobs
+    from claas.training.engine.tinker.engine import _slice_completion_logprobs
 
     logprobs_full = [None, -1.0, -2.0, -3.0, -4.0, -5.0]
     # prompt_len=2, completion_len=3 → slice [2:5] = [-2.0, -3.0, -4.0]
@@ -618,7 +628,7 @@ def test_slice_completion_logprobs():
 def test_await_api_future():
     """_await_api_future: result_async → result() → passthrough."""
     pytest.importorskip("tinker")
-    from claas.training_engines.tinker.engine import _await_api_future
+    from claas.training.engine.tinker.engine import _await_api_future
 
     # Branch 1: has result_async
     obj_async = MagicMock()

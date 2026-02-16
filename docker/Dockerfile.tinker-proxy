@@ -20,4 +20,4 @@ USER tinker
 
 EXPOSE 8000
 
-ENTRYPOINT ["uvicorn", "claas.tinker_inference_proxy:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["uvicorn", "claas.proxy.tinker_inference_proxy:app", "--host", "0.0.0.0", "--port", "8000"]

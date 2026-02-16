@@ -8,7 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from claas.api import web_app
-from claas.types import (
+from claas.core.config import LocalConfig, ModalConfig, TinkerConfig
+from claas.core.types import (
     DistillResponse,
     LoraDeleteResponse,
     LoraExistsPayload,
@@ -20,51 +21,63 @@ from claas.types import (
 )
 
 
+def _mock_config(monkeypatch, mode: str, **overrides):
+    """Patch get_config() to return a config for the given mode."""
+    from claas import api
+
+    log_dir = str(overrides.get("feedback_log_dir", "./feedback_logs"))
+    hf = str(overrides.get("hf_token", ""))
+    root = str(overrides.get("lora_root", "/loras"))
+    backend = str(overrides.get("storage_backend", "modal_volume"))
+    allowed = overrides.get("allowed_init_base_models", frozenset({"Qwen/Qwen3-8B"}))
+    if not isinstance(allowed, frozenset):
+        allowed = frozenset(allowed)
+
+    if mode == "modal":
+        cfg = ModalConfig(
+            mode="modal",
+            feedback_log_dir=log_dir,
+            hf_token=hf,
+            lora_root=root,
+            storage_backend=backend,
+            allowed_init_base_models=allowed,
+            vllm_base_url="http://127.0.0.1:8000",
+            vllm_api_key="sk-local",
+        )
+    elif mode == "tinker":
+        cfg = TinkerConfig(
+            mode="tinker",
+            feedback_log_dir=log_dir,
+            hf_token=hf,
+            lora_root=root,
+            storage_backend=backend,
+            allowed_init_base_models=allowed,
+            tinker_api_key="",
+            tinker_base_model="gpt-oss/GPT-OSS-120B",
+            tinker_state_path="",
+            vllm_base_url="http://127.0.0.1:8000",
+            vllm_api_key="sk-local",
+        )
+    else:
+        cfg = LocalConfig(
+            mode="local",
+            feedback_log_dir=log_dir,
+            hf_token=hf,
+            lora_root=root,
+            storage_backend=backend,
+            allowed_init_base_models=allowed,
+            vllm_base_url="http://127.0.0.1:8000",
+            vllm_api_key="sk-local",
+        )
+
+    monkeypatch.setattr(api, "get_config", lambda: cfg)
+
+
 @pytest.fixture()
 def api_client():
     """FastAPI TestClient for the web_app."""
     return TestClient(web_app)
 
-
-@pytest.fixture()
-def tinker_mode(monkeypatch):
-    """Set the distill execution mode to tinker (skips vLLM orchestration)."""
-    from claas import api
-
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
-
-
-@pytest.fixture()
-def modal_mode(monkeypatch):
-    """Set the distill execution mode to modal."""
-    from claas import api
-
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
-
-
-@pytest.fixture()
-def noop_feedback_log(monkeypatch, tmp_path):
-    """Stub out feedback log writing."""
-    from claas import api
-
-    log_path = str(tmp_path / "feedback-log.json")
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: log_path)
-    return log_path
-
-
-@pytest.fixture()
-def noop_vllm(monkeypatch):
-    """Stub out all vLLM interactions."""
-    from claas import api
-
-    async def noop_post(_path, *, params=None, json_body=None, timeout_s=30.0):
-        pass
-
-    async def noop_wait():
-        pass
-
-    monkeypatch.setattr(api, "_vllm_post", noop_post)
-    monkeypatch.setattr(api, "_wait_for_vllm_idle", noop_wait)
 
 
 def _set_engine(monkeypatch, engine):
@@ -148,7 +161,7 @@ def test_distill_404_when_lora_missing(monkeypatch):
 def test_distill_success(monkeypatch):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+    _mock_config(monkeypatch, "modal")
     monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(
         api.modal.Function,
@@ -180,7 +193,7 @@ def test_distill_success(monkeypatch):
 def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+    _mock_config(monkeypatch, "modal")
     calls = []
     captured = {}
     log_records = []
@@ -246,7 +259,7 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
 def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+    _mock_config(monkeypatch, "modal")
     log_records = []
     log_path = str(tmp_path / "feedback-log.json")
 
@@ -307,7 +320,7 @@ def test_export_404_when_missing(monkeypatch):
 def test_distill_returns_500_on_worker_failure(monkeypatch):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+    _mock_config(monkeypatch, "modal")
     monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(
         api.modal.Function,
@@ -335,7 +348,7 @@ def test_feedback_calls_drain_before_pause(monkeypatch, tmp_path):
     """_wait_for_vllm_idle is called before /pause."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+    _mock_config(monkeypatch, "modal")
     order = []
 
     def fake_from_name(_app, fn_name):
@@ -386,7 +399,7 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
     """A drain timeout produces a 503 response."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+    _mock_config(monkeypatch, "modal")
 
     async def fake_wait_idle():
         raise TimeoutError("still busy")
@@ -427,7 +440,7 @@ def test_feedback_forwards_required_rollout_logprobs(monkeypatch, tmp_path):
     """Provided rollout_logprobs are forwarded to distill worker."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+    _mock_config(monkeypatch, "modal")
     captured = {}
 
     def fake_from_name(_app, fn_name):
@@ -475,7 +488,7 @@ async def _noop_coro():
 def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "modal")
+    _mock_config(monkeypatch, "modal")
 
     class _Engine:
         async def lora_exists(self, _lora_id):
@@ -524,7 +537,7 @@ def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
 def test_feedback_tinker_accepts_explicit_orchestration(monkeypatch, tmp_path):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+    _mock_config(monkeypatch, "tinker")
 
     class _Engine:
         async def lora_exists(self, _lora_id):
@@ -579,7 +592,7 @@ def test_init_lora_success(monkeypatch):
         async def init_lora(self, request):
             return LoraInitResponse(lora_id=request.lora_id)
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+    _mock_config(monkeypatch, "tinker")
     monkeypatch.setattr(api, "_get_training_engine", lambda: _InitEngine())
 
     client = TestClient(web_app)
@@ -594,8 +607,7 @@ def test_init_lora_success(monkeypatch):
 def test_init_lora_rejects_disallowed_base_model(monkeypatch):
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "local")
-    monkeypatch.setattr(api, "ALLOWED_INIT_BASE_MODELS", {"Qwen/Qwen3-8B"})
+    _mock_config(monkeypatch, "local", allowed_init_base_models=frozenset({"Qwen/Qwen3-8B"}))
     monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
 
     client = TestClient(web_app)
@@ -659,7 +671,7 @@ def test_init_lora_error(monkeypatch):
         async def init_lora(self, request):
             raise RuntimeError("init failed")
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+    _mock_config(monkeypatch, "tinker")
     monkeypatch.setattr(api, "_get_training_engine", lambda: _FailEngine())
 
     client = TestClient(web_app)
@@ -694,7 +706,7 @@ def test_health_check_healthy(monkeypatch):
     """Health endpoint returns healthy when engine responds."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+    _mock_config(monkeypatch, "tinker")
 
     class _HealthyEngine:
         async def health(self):
@@ -715,7 +727,7 @@ def test_health_check_degraded(monkeypatch):
     """Health endpoint returns degraded when engine health fails."""
     from claas import api
 
-    monkeypatch.setattr(api, "DISTILL_EXECUTION_MODE", "tinker")
+    _mock_config(monkeypatch, "tinker")
 
     class _UnhealthyEngine:
         async def health(self):
@@ -733,9 +745,8 @@ def test_health_check_degraded(monkeypatch):
 
 
 def test_dashboard_renders_latest_records(monkeypatch, tmp_path):
-    from claas import api
 
-    monkeypatch.setattr(api, "FEEDBACK_LOG_DIR", str(tmp_path))
+    _mock_config(monkeypatch, "local", feedback_log_dir=str(tmp_path))
 
     (tmp_path / "20240101T000001-a.json").write_text(
         """
@@ -820,9 +831,8 @@ def test_dashboard_renders_latest_records(monkeypatch, tmp_path):
 
 
 def test_dashboard_skips_invalid_log(monkeypatch, tmp_path):
-    from claas import api
 
-    monkeypatch.setattr(api, "FEEDBACK_LOG_DIR", str(tmp_path))
+    _mock_config(monkeypatch, "local", feedback_log_dir=str(tmp_path))
     (tmp_path / "20240101T000001-a.json").write_text("{}", encoding="utf-8")
 
     client = TestClient(web_app)
@@ -832,9 +842,8 @@ def test_dashboard_skips_invalid_log(monkeypatch, tmp_path):
 
 
 def test_dashboard_truncates_prompt_preview(monkeypatch, tmp_path):
-    from claas import api
 
-    monkeypatch.setattr(api, "FEEDBACK_LOG_DIR", str(tmp_path))
+    _mock_config(monkeypatch, "local", feedback_log_dir=str(tmp_path))
     long_prompt = "x" * 400
     (tmp_path / "20240101T000003-c.json").write_text(
         f'''
@@ -911,9 +920,8 @@ def test_dashboard_truncates_prompt_preview(monkeypatch, tmp_path):
 
 
 def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
-    from claas import api
 
-    monkeypatch.setattr(api, "FEEDBACK_LOG_DIR", str(tmp_path))
+    _mock_config(monkeypatch, "local", feedback_log_dir=str(tmp_path))
     (tmp_path / "20240101T000004-d.json").write_text(
         """
 {
@@ -1015,9 +1023,11 @@ def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert "prompt-d1" in response.text
     assert "prompt-d2" in response.text
-    assert ">1/2<" in response.text
-    assert ">2/2<" in response.text
-    assert response.text.count('id="feedback-detail-0-') == 2
+    # Batch is rendered as a single row with samples inside <details>
+    assert "Sample 1/2" in response.text
+    assert "Sample 2/2" in response.text
+    assert 'id="feedback-detail-0"' in response.text
+    assert "2 samples" in response.text
 
 
 def test_feedback_recent_route_is_removed():

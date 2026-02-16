@@ -7,7 +7,7 @@ without a local GPU.
 Usage::
 
     TINKER_API_KEY=... CLAAS_TINKER_BASE_MODEL=gpt-oss/GPT-OSS-120B \
-        uvicorn claas.tinker_inference_proxy:app --host 0.0.0.0 --port 8000
+        uvicorn claas.proxy.tinker_inference_proxy:app --host 0.0.0.0 --port 8000
 """
 
 from __future__ import annotations
@@ -33,6 +33,8 @@ from tinker import types as T
 from tinker_cookbook import model_info
 from tinker_cookbook.renderers import Message, Renderer, get_renderer
 
+from claas.core.config import get_proxy_config
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -42,7 +44,9 @@ else:
 
 app = FastAPI(title="CLaaS Tinker Inference Proxy")
 
-_BASE_MODEL = os.environ.get("CLAAS_TINKER_BASE_MODEL", "gpt-oss/GPT-OSS-120B")
+
+def _base_model() -> str:
+    return get_proxy_config().tinker_base_model
 
 
 # ---------------------------------------------------------------------------
@@ -117,14 +121,16 @@ class _SamplerHolder:
         with self._lock:
             if self._sampler is not None:
                 return
-            api_key = os.environ.get("CLAAS_TINKER_API_KEY", "")
+            proxy_cfg = get_proxy_config()
+            api_key = proxy_cfg.tinker_api_key
             if api_key:
                 os.environ["TINKER_API_KEY"] = api_key
+            base_model = proxy_cfg.tinker_base_model
             self._service = tinker.ServiceClient()
-            self._sampler = self._service.create_sampling_client(base_model=_BASE_MODEL)
+            self._sampler = self._service.create_sampling_client(base_model=base_model)
             self._tokenizer = self._sampler.get_tokenizer()
 
-            self._renderer = _make_renderer(_BASE_MODEL, self._tokenizer)
+            self._renderer = _make_renderer(base_model, self._tokenizer)
 
     @property
     def sampler(self) -> tinker.SamplingClient:
@@ -147,17 +153,19 @@ class _SamplerHolder:
     def refresh(self, model_path: str | None = None) -> None:
         """Refresh the sampling client (e.g. after a distillation step)."""
         with self._lock:
+            proxy_cfg = get_proxy_config()
+            base_model = proxy_cfg.tinker_base_model
             if self._service is None:
-                api_key = os.environ.get("CLAAS_TINKER_API_KEY", "")
+                api_key = proxy_cfg.tinker_api_key
                 if api_key:
                     os.environ["TINKER_API_KEY"] = api_key
                 self._service = tinker.ServiceClient()
             if model_path:
                 self._sampler = self._service.create_sampling_client(model_path=model_path)
             else:
-                self._sampler = self._service.create_sampling_client(base_model=_BASE_MODEL)
+                self._sampler = self._service.create_sampling_client(base_model=base_model)
             self._tokenizer = self._sampler.get_tokenizer()
-            self._renderer = _make_renderer(_BASE_MODEL, self._tokenizer)
+            self._renderer = _make_renderer(base_model, self._tokenizer)
             self._model_path = model_path
 
 
@@ -168,7 +176,6 @@ _holder = _SamplerHolder()
 # Raw completion cache
 # ---------------------------------------------------------------------------
 
-_CACHE_MAX_SIZE = int(os.environ.get("CLAAS_COMPLETION_CACHE_SIZE", "100"))
 _CACHE_TTL_SECS = 3600  # 1 hour
 
 
@@ -195,7 +202,9 @@ class _CompletionCacheEntry:
 class _CompletionCache:
     """FIFO cache keyed by SHA-256 of parsed content text."""
 
-    def __init__(self, max_size: int = _CACHE_MAX_SIZE) -> None:
+    def __init__(self, max_size: int | None = None) -> None:
+        if max_size is None:
+            max_size = get_proxy_config().completion_cache_size
         self._store: OrderedDict[str, _CompletionCacheEntry] = OrderedDict()
         self._max_size = max_size
         self._lock = threading.Lock()
@@ -243,14 +252,14 @@ async def _sample_async(
 # Request / Response models
 # ---------------------------------------------------------------------------
 
-class ChatMessage(BaseModel):
+class ChatCompletionMessage(BaseModel):
     role: str
     content: Any = ""
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str = _BASE_MODEL
-    messages: list[ChatMessage]
+    model: str = ""
+    messages: list[ChatCompletionMessage]
     max_tokens: int | None = None
     temperature: float | None = None
     top_p: float | None = None
@@ -259,7 +268,7 @@ class ChatCompletionRequest(BaseModel):
 
 
 class CompletionRequest(BaseModel):
-    model: str = _BASE_MODEL
+    model: str = ""
     prompt: str
     max_tokens: int | None = None
     temperature: float | None = None
@@ -278,6 +287,8 @@ class RefreshRequest(BaseModel):
 
 @app.post("/v1/chat/completions", response_model=None)
 async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | StreamingResponse:
+    if not req.model:
+        req.model = _base_model()
     renderer = _holder.renderer
     sampler = _holder.sampler
 
@@ -352,6 +363,8 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
 
 @app.post("/v1/completions", response_model=None)
 async def completions(req: CompletionRequest) -> dict[str, object] | StreamingResponse:
+    if not req.model:
+        req.model = _base_model()
     tokenizer = _holder.tokenizer
     sampler = _holder.sampler
 
@@ -412,7 +425,7 @@ async def refresh_sampler(body: RefreshRequest) -> dict[str, object]:
 @app.get("/v1/sampler/status")
 async def sampler_status() -> dict[str, object]:
     """Return the currently loaded model path (null = base model only)."""
-    return {"model_path": _holder._model_path, "base_model": _BASE_MODEL}
+    return {"model_path": _holder._model_path, "base_model": _base_model()}
 
 
 @app.get("/v1/completions/raw")
@@ -440,7 +453,7 @@ async def list_models() -> dict[str, object]:
         "object": "list",
         "data": [
             {
-                "id": _BASE_MODEL,
+                "id": _base_model(),
                 "object": "model",
                 "owned_by": "tinker",
             }

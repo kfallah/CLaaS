@@ -28,21 +28,34 @@ uv run pytest tests/ -v -m "not integration"
 
 ```text
 claas/
-├── api.py                    # FastAPI endpoints
-├── cli.py                    # Command-line interface
-├── config.py                 # Configuration dataclasses
-├── deploy.py                 # Modal deployment entrypoint
-├── sdpo_loss.py              # SDPO loss computation (core algorithm)
-├── storage.py                # LoRA storage (Modal Volume or local filesystem)
-├── teacher.py                # Teacher prompt building
-├── tinker_inference_proxy.py # Tinker SDK → OpenAI-compatible proxy
-├── types.py                  # Pydantic request/response models
-├── worker.py                 # Distill worker (local/Modal)
-└── training_engines/         # Pluggable training backends
-    ├── base.py               # TrainingEngine abstract interface
-    ├── local/engine.py       # Local GPU execution
-    ├── modal/engine.py       # Modal remote execution
-    └── tinker/engine.py      # Tinker SDK execution
+├── __init__.py
+├── api.py                               # FastAPI endpoints (entrypoint)
+├── cli.py                               # Command-line interface (entrypoint)
+├── deploy.py                            # Modal deployment entrypoint
+├── index.html                           # Dashboard template
+│
+├── core/                                # Shared types & config
+│   ├── __init__.py
+│   ├── config.py                        # Centralized env var config (get_config / get_proxy_config)
+│   └── types.py                         # Pydantic models, TypedDicts (ChatMessage, etc.)
+│
+├── training/                            # Training pipeline
+│   ├── __init__.py
+│   ├── sdpo_loss.py                     # SDPO loss computation (core algorithm)
+│   ├── worker.py                        # Distill worker (local/Modal)
+│   ├── storage.py                       # LoRA storage (Modal Volume or local fs)
+│   ├── teacher_helpers.py               # Pure teacher prompt functions
+│   ├── teacher_service.py               # Modal TeacherService class
+│   └── engine/                          # Pluggable training backends
+│       ├── __init__.py                  # get_training_engine() factory
+│       ├── base.py                      # TrainingEngine abstract interface
+│       ├── local/engine.py              # Local GPU execution
+│       ├── modal/engine.py              # Modal remote execution
+│       └── tinker/engine.py, state.py   # Tinker SDK execution
+│
+└── proxy/                               # Inference proxy
+    ├── __init__.py
+    └── tinker_inference_proxy.py         # Tinker SDK -> OpenAI-compatible proxy
 ```
 
 ## Modal Deployment
@@ -63,10 +76,10 @@ modal serve -m claas.deploy
 
 ### Storage
 
-LoRA storage is engine-dependent: local filesystem (`CLAAS_LORA_ROOT`), Modal Volume, or Tinker JSON state. The core functions in `storage.py` handle local and Modal paths:
+LoRA storage is engine-dependent: local filesystem (`CLAAS_LORA_ROOT`), Modal Volume, or Tinker JSON state. The core functions in `training/storage.py` handle local and Modal paths:
 
 ```python
-from claas.storage import load_lora, save_lora, create_initial_lora
+from claas.training.storage import load_lora, save_lora, create_initial_lora
 
 # Initialize new LoRA
 lora_id = create_initial_lora("user/model", base_model_name="...")
@@ -81,7 +94,7 @@ new_id = save_lora(local_path, "user/model")
 The core algorithm uses JSD-based policy gradient:
 
 ```python
-from claas.sdpo_loss import compute_sdpo_loss
+from claas.training.sdpo_loss import compute_sdpo_loss
 
 loss_dict = compute_sdpo_loss(
     student_logits=...,

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 @pytest.fixture(autouse=True)
 def _reset_holder():
     """Reset the proxy singleton between tests."""
-    from claas.tinker_inference_proxy import _holder
+    from claas.proxy.tinker_inference_proxy import _holder
 
     _holder._service = None
     _holder._sampler = None
@@ -36,7 +36,7 @@ def _reset_holder():
 @pytest.fixture()
 def proxy_client():
     """TestClient for the proxy FastAPI app."""
-    from claas.tinker_inference_proxy import app
+    from claas.proxy.tinker_inference_proxy import app
 
     return TestClient(app)
 
@@ -60,7 +60,7 @@ class TestSamplerStatus:
         assert "base_model" in body
 
     def test_status_after_manual_set(self, proxy_client):
-        from claas.tinker_inference_proxy import _holder
+        from claas.proxy.tinker_inference_proxy import _holder
 
         _holder._model_path = "tinker://run-123/weights/step-1"
         resp = proxy_client.get("/v1/sampler/status")
@@ -70,7 +70,7 @@ class TestSamplerStatus:
 
 class TestSamplerRefresh:
     def test_refresh_calls_holder(self, proxy_client):
-        from claas.tinker_inference_proxy import _holder
+        from claas.proxy.tinker_inference_proxy import _holder
 
         with patch.object(_holder, "refresh") as mock_refresh:
             resp = proxy_client.post(
@@ -85,7 +85,7 @@ class TestHolderInternals:
     """Test _ensure() and refresh() with mocked Tinker SDK."""
 
     def test_ensure_initializes_once(self):
-        from claas.tinker_inference_proxy import _SamplerHolder
+        from claas.proxy.tinker_inference_proxy import _SamplerHolder
 
         holder = _SamplerHolder()
         mock_sampler = MagicMock()
@@ -93,9 +93,9 @@ class TestHolderInternals:
         mock_service = MagicMock()
         mock_service.create_sampling_client.return_value = mock_sampler
 
-        with patch("claas.tinker_inference_proxy.tinker.ServiceClient", return_value=mock_service), \
-             patch("claas.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
-             patch("claas.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
+        with patch("claas.proxy.tinker_inference_proxy.tinker.ServiceClient", return_value=mock_service), \
+             patch("claas.proxy.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
+             patch("claas.proxy.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
             # First call initializes
             holder._ensure()
             assert holder._sampler is mock_sampler
@@ -107,7 +107,7 @@ class TestHolderInternals:
             mock_service.create_sampling_client.assert_not_called()
 
     def test_refresh_with_model_path(self):
-        from claas.tinker_inference_proxy import _SamplerHolder
+        from claas.proxy.tinker_inference_proxy import _SamplerHolder
 
         holder = _SamplerHolder()
         mock_sampler = MagicMock()
@@ -116,8 +116,8 @@ class TestHolderInternals:
         mock_service.create_sampling_client.return_value = mock_sampler
         holder._service = mock_service
 
-        with patch("claas.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
-             patch("claas.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
+        with patch("claas.proxy.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
+             patch("claas.proxy.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
             holder.refresh(model_path="tinker://run-1/weights/step-1")
 
         assert holder._model_path == "tinker://run-1/weights/step-1"
@@ -126,7 +126,7 @@ class TestHolderInternals:
         )
 
     def test_refresh_without_model_path_uses_base(self):
-        from claas.tinker_inference_proxy import _BASE_MODEL, _SamplerHolder
+        from claas.proxy.tinker_inference_proxy import _base_model, _SamplerHolder
 
         holder = _SamplerHolder()
         mock_sampler = MagicMock()
@@ -135,17 +135,17 @@ class TestHolderInternals:
         mock_service.create_sampling_client.return_value = mock_sampler
         holder._service = mock_service
 
-        with patch("claas.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
-             patch("claas.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
+        with patch("claas.proxy.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
+             patch("claas.proxy.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
             holder.refresh(model_path=None)
 
         assert holder._model_path is None
         mock_service.create_sampling_client.assert_called_once_with(
-            base_model=_BASE_MODEL
+            base_model=_base_model()
         )
 
     def test_refresh_creates_service_if_missing(self):
-        from claas.tinker_inference_proxy import _SamplerHolder
+        from claas.proxy.tinker_inference_proxy import _SamplerHolder
 
         holder = _SamplerHolder()
         assert holder._service is None
@@ -155,9 +155,9 @@ class TestHolderInternals:
         mock_service = MagicMock()
         mock_service.create_sampling_client.return_value = mock_sampler
 
-        with patch("claas.tinker_inference_proxy.tinker.ServiceClient", return_value=mock_service), \
-             patch("claas.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
-             patch("claas.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
+        with patch("claas.proxy.tinker_inference_proxy.tinker.ServiceClient", return_value=mock_service), \
+             patch("claas.proxy.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
+             patch("claas.proxy.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
             holder.refresh(model_path="tinker://x")
 
         assert holder._service is mock_service
@@ -210,7 +210,7 @@ def _patch_holder(holder, sampler, tokenizer, renderer):
 
 class TestChatCompletions:
     def test_non_streaming(self, proxy_client):
-        from claas.tinker_inference_proxy import _holder
+        from claas.proxy.tinker_inference_proxy import _holder
 
         sampler, _ = _make_mock_sampler()
         tokenizer = _make_mock_tokenizer()
@@ -233,7 +233,7 @@ class TestChatCompletions:
         assert body["usage"]["completion_tokens"] == 3
 
     def test_streaming(self, proxy_client):
-        from claas.tinker_inference_proxy import _holder
+        from claas.proxy.tinker_inference_proxy import _holder
 
         sampler, _ = _make_mock_sampler()
         tokenizer = _make_mock_tokenizer()
@@ -255,7 +255,7 @@ class TestChatCompletions:
 
 class TestCompletions:
     def test_non_streaming(self, proxy_client):
-        from claas.tinker_inference_proxy import _holder
+        from claas.proxy.tinker_inference_proxy import _holder
 
         sampler, _ = _make_mock_sampler()
         tokenizer = _make_mock_tokenizer()
@@ -273,7 +273,7 @@ class TestCompletions:
         assert body["choices"][0]["finish_reason"] == "stop"
 
     def test_streaming(self, proxy_client):
-        from claas.tinker_inference_proxy import _holder
+        from claas.proxy.tinker_inference_proxy import _holder
 
         sampler, _ = _make_mock_sampler()
         tokenizer = _make_mock_tokenizer()
@@ -302,12 +302,12 @@ class TestHelperFunctions:
         ],
     )
     def test_coerce_content(self, raw, expected):
-        from claas.tinker_inference_proxy import _coerce_content
+        from claas.proxy.tinker_inference_proxy import _coerce_content
 
         assert _coerce_content(raw) == expected
 
     def test_bounded_int_and_float(self):
-        from claas.tinker_inference_proxy import _bounded_float, _bounded_int
+        from claas.proxy.tinker_inference_proxy import _bounded_float, _bounded_int
 
         assert _bounded_int(None, default=10, minimum=1, maximum=100) == 10
         assert _bounded_int(999, default=10, minimum=1, maximum=100) == 100

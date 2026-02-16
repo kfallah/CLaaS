@@ -26,8 +26,9 @@ from typing import TYPE_CHECKING, cast
 
 import modal
 
-from .sdpo_loss import compute_sdpo_loss
-from .storage import (
+from claas.core.types import DistillBatchRequestPayload, SDPOLossInput
+from claas.training.sdpo_loss import compute_sdpo_loss
+from claas.training.storage import (
     LORA_MOUNT_PATH,
     cleanup_local_lora,
     load_lora,
@@ -35,12 +36,11 @@ from .storage import (
     save_lora,
     save_lora_inplace,
 )
-from .teacher import (
+from claas.training.teacher_helpers import (
     build_teacher_messages,
     parse_teacher_result,
     teacher_messages_to_chat_template,
 )
-from .types import DistillBatchRequestPayload, SDPOLossInput
 
 if TYPE_CHECKING:
     import torch

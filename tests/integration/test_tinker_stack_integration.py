@@ -6,6 +6,7 @@ which brings up and tears down the Docker stack automatically.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -14,7 +15,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
-from claas.teacher import build_teacher_messages
+from claas.training.teacher_helpers import build_teacher_messages
 
 if TYPE_CHECKING:
     from conftest import TinkerStack
@@ -22,6 +23,49 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.integration
 
 logger = logging.getLogger(__name__)
+
+
+_ASSISTANT_PREFIX = "<|im_start|>assistant\n"
+_IM_END = "<|im_end|>"
+
+
+def _fetch_raw_completion(
+    client: httpx.Client,
+    proxy_url: str,
+    response_content: str,
+) -> tuple[str, list[float]]:
+    """Fetch raw completion text and rollout logprobs from the proxy cache.
+
+    Mirrors the OpenClaw feedback plugin: hash the parsed content, hit
+    ``/v1/completions/raw``, and return ``(raw_text, logprobs)``.
+
+    The proxy stores the response wrapped in a chat template
+    (``<|im_start|>assistant\\n…<|im_end|>``).  We strip that wrapper so
+    the raw text — when re-tokenized by the Tinker engine with
+    ``add_special_tokens=False`` — reproduces exactly the generated
+    token sequence whose logprobs we're returning.
+    """
+    content_hash = hashlib.sha256(response_content.encode("utf-8")).hexdigest()
+    resp = client.get(
+        f"{proxy_url}/v1/completions/raw",
+        params={"content_hash": content_hash},
+        timeout=15.0,
+    )
+    assert resp.status_code == 200, (
+        f"Failed to fetch raw completion (hash={content_hash[:12]}…): {resp.text}"
+    )
+    data = resp.json()
+    logprobs = data["logprobs"]
+    assert logprobs is not None, "Proxy returned null logprobs"
+
+    # Unwrap the chat-template wrapper added by the proxy.
+    raw_text: str = data["response"]
+    if raw_text.startswith(_ASSISTANT_PREFIX):
+        raw_text = raw_text[len(_ASSISTANT_PREFIX) :]
+    if raw_text.endswith(_IM_END):
+        raw_text = raw_text[: -len(_IM_END)]
+
+    return raw_text, logprobs
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +178,15 @@ class TestTinkerStackRoundTrip:
                 assert len(response_content) > 0
                 logger.info("Model response: %s", response_content)
 
+                # 3b. Fetch raw response + rollout logprobs from proxy cache
+                raw_response, rollout_logprobs = _fetch_raw_completion(
+                    client, proxy_url, response_content,
+                )
+                logger.info(
+                    "Fetched %d rollout logprobs from proxy cache",
+                    len(rollout_logprobs),
+                )
+
                 # 4. Distill via feedback endpoint (teacher_mode=self)
                 teacher_messages = build_teacher_messages(user_prompt, feedback_text)
                 logger.info(
@@ -146,8 +199,9 @@ class TestTinkerStackRoundTrip:
                         {
                             "lora_id": lora_id,
                             "prompt": user_prompt,
-                            "response": response_content,
+                            "response": raw_response,
                             "feedback": feedback_text,
+                            "rollout_logprobs": rollout_logprobs,
                             "training": {"teacher_mode": "self"},
                         },
                     ],
@@ -304,6 +358,15 @@ class TestOpenClawEndToEnd:
                 assert len(response_content) > 0
                 logger.info("OpenClaw response: %s", response_content[:500])
 
+                # 2b. Fetch raw response + rollout logprobs from proxy cache
+                raw_response, rollout_logprobs = _fetch_raw_completion(
+                    client, tinker_stack.proxy_url, response_content,
+                )
+                logger.info(
+                    "Fetched %d rollout logprobs from proxy cache",
+                    len(rollout_logprobs),
+                )
+
                 # 3. Distill via feedback endpoint
                 teacher_messages = build_teacher_messages(user_prompt, feedback_text)
                 logger.info(
@@ -316,8 +379,9 @@ class TestOpenClawEndToEnd:
                         {
                             "lora_id": lora_id,
                             "prompt": user_prompt,
-                            "response": response_content,
+                            "response": raw_response,
                             "feedback": feedback_text,
+                            "rollout_logprobs": rollout_logprobs,
                             "training": {"teacher_mode": "self"},
                         },
                     ],

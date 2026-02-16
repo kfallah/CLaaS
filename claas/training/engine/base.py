@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from claas.types import (
+from claas.core.types import (
     DistillBatchRequestPayload,
     DistillResponse,
     LoraDeleteResponse,

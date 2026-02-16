@@ -23,18 +23,8 @@ import torch
 from tinker import types as T
 from tinker.types.tensor_data import TensorData
 
-from claas.teacher import build_teacher_messages, teacher_messages_to_chat_template
-from claas.training_engines.base import TrainingEngine
-from claas.training_engines.tinker.state import (
-    LoraEntry,
-    all_checkpoint_paths,
-    delete_entry,
-    get_entry,
-    list_loras as state_list_loras,
-    lora_exists as state_lora_exists,
-    set_tinker_path,
-)
-from claas.types import (
+from claas.core.config import TinkerConfig, get_config
+from claas.core.types import (
     DistillBatchItem,
     DistillBatchRequestPayload,
     DistillResponse,
@@ -47,14 +37,19 @@ from claas.types import (
     LoraRuntimeRef,
     ServiceHealth,
 )
+from claas.training.engine.base import TrainingEngine
+from claas.training.engine.tinker.state import (
+    LoraEntry,
+    all_checkpoint_paths,
+    delete_entry,
+    get_entry,
+    list_loras as state_list_loras,
+    lora_exists as state_lora_exists,
+    set_tinker_path,
+)
+from claas.training.teacher_helpers import build_teacher_messages, teacher_messages_to_chat_template
 
 logger = logging.getLogger(__name__)
-
-# Default model for the Tinker engine.
-_DEFAULT_BASE_MODEL = os.environ.get(
-    "CLAAS_TINKER_BASE_MODEL",
-    "gpt-oss/GPT-OSS-120B",
-)
 
 # Adaptive KL scaling defaults (from continualcode reference).
 _TARGET_ADV_ABS_MEAN = 0.03
@@ -65,9 +60,11 @@ class TinkerTrainingEngine(TrainingEngine):
     """Executes training and LoRA management through the Tinker Python SDK."""
 
     def __init__(self) -> None:
-        api_key = os.environ.get("CLAAS_TINKER_API_KEY", "")
+        cfg = get_config()
+        api_key = cfg.tinker_api_key if isinstance(cfg, TinkerConfig) else ""
         if api_key:
             os.environ["TINKER_API_KEY"] = api_key
+        self._base_model = cfg.tinker_base_model if isinstance(cfg, TinkerConfig) else "gpt-oss/GPT-OSS-120B"
         self._service: tinker.ServiceClient | None = None
 
     @property
@@ -81,7 +78,7 @@ class TinkerTrainingEngine(TrainingEngine):
     # ------------------------------------------------------------------
 
     async def init_lora(self, request: LoraInitRequest) -> LoraInitResponse:
-        base_model = request.base_model or _DEFAULT_BASE_MODEL
+        base_model = request.base_model or self._base_model
         rank = request.lora_r
 
         tc = await self.service.create_lora_training_client_async(
