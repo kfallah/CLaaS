@@ -1023,9 +1023,11 @@ def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert "prompt-d1" in response.text
     assert "prompt-d2" in response.text
-    assert ">1/2<" in response.text
-    assert ">2/2<" in response.text
-    assert response.text.count('id="feedback-detail-0-') == 2
+    # Batch is rendered as a single row with samples inside <details>
+    assert "Sample 1/2" in response.text
+    assert "Sample 2/2" in response.text
+    assert 'id="feedback-detail-0"' in response.text
+    assert "2 samples" in response.text
 
 
 def test_feedback_recent_route_is_removed():

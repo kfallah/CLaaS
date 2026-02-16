@@ -160,6 +160,12 @@ All configuration is via environment variables. Docker Compose users set these i
 |----------|---------|-------------|
 | `CLAAS_HF_SECRET_NAME` | | Name of Modal Secret containing HF credentials |
 
+## Dashboard
+
+The CLaaS API serves a built-in dashboard at `/v1/dashboard` showing recent feedback batches, training metrics, and timing breakdowns. Each row is a batch — expand it to see individual samples and detailed metrics.
+
+![CLaaS Dashboard](docs/dashboard.png)
+
 ## References
 
 1. Hübotter et al. (2026). "Reinforcement Learning via Self-Distillation." arXiv:2601.20802

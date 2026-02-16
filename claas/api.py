@@ -347,17 +347,15 @@ def _feedback_prompt_preview(prompt: str, limit: int = 140) -> str:
 
 
 def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
-    """Render dashboard table rows for feedback records.
+    """Render dashboard table rows for feedback records, grouped by batch.
 
-    Args:
-        records: Feedback records to render.
-
-    Returns:
-        HTML table rows with expandable detail sections.
+    Each batch gets a single summary row.  Expanding it reveals per-sample
+    details (prompt / response / feedback) plus the batch-level timing,
+    training metrics, and orchestration info.
     """
     rows: list[str] = []
-    for record_index, record in enumerate(records):
-        metrics_payload = {}
+    for idx, record in enumerate(records):
+        metrics_payload: dict[str, object] = {}
         if record.distill_result is not None:
             metrics_payload = record.distill_result.metadata
         timing_json = json.dumps(record.timing_ms.model_dump(mode="json"), indent=2, sort_keys=True)
@@ -365,60 +363,83 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
         vllm_json = json.dumps(record.vllm.model_dump(mode="json"), indent=2, sort_keys=True)
         error_value = record.error or ""
         batch_size = len(record.requests)
-        for item_index, req in enumerate(record.requests):
-            detail_row_id = f"feedback-detail-{record_index}-{item_index}"
-            prompt_preview = _feedback_prompt_preview(req.prompt)
+        detail_row_id = f"feedback-detail-{idx}"
 
-            rows.append(
+        # -- Batch summary row --
+        rows.append(
+            """
+            <tr>
+              <td>{request_id}<br><small>{timestamp}</small></td>
+              <td>{status} ({phase})</td>
+              <td>{lora_id}</td>
+              <td>{batch_size} sample{plural}</td>
+              <td>{distill_ms}</td>
+              <td>{total_ms}</td>
+              <td><button type="button" onclick="toggleDetails('{detail_row_id}', this)">Expand</button></td>
+            </tr>
+            """.format(
+                request_id=html.escape(record.request_id),
+                timestamp=html.escape(record.timestamp_utc),
+                status=html.escape(record.status),
+                phase=html.escape(record.phase),
+                lora_id=html.escape(record.lora_id),
+                batch_size=batch_size,
+                plural="s" if batch_size != 1 else "",
+                distill_ms=record.timing_ms.distill,
+                total_ms=record.timing_ms.total,
+                detail_row_id=detail_row_id,
+            )
+        )
+
+        # -- Expandable detail row --
+        sample_sections: list[str] = []
+        for item_index, req in enumerate(record.requests):
+            sample_sections.append(
                 """
-                <tr>
-                  <td>{request_id}<br><small>{timestamp}</small></td>
-                  <td>{item_number}/{batch_size}</td>
-                  <td>{status} ({phase})</td>
-                  <td>{lora_id}</td>
-                  <td><div class="prompt-preview">{prompt_preview}</div></td>
-                  <td>{distill_ms}</td>
-                  <td>{total_ms}</td>
-                  <td><button type="button" onclick="toggleDetails('{detail_row_id}', this)">Expand</button></td>
-                </tr>
-                <tr id="{detail_row_id}" class="detail-row">
-                  <td colspan="8">
-                    <div class="detail-panel">
-                      <section><h3>Batch Item</h3><pre>{item_number}/{batch_size}</pre></section>
-                      <section><h3>Prompt</h3><pre>{prompt}</pre></section>
-                      <section><h3>Response</h3><pre>{response}</pre></section>
-                      <section><h3>Feedback</h3><pre>{feedback}</pre></section>
-                      <section><h3>Timing (ms)</h3><pre>{timing_json}</pre></section>
-                      <section><h3>Training metrics</h3><pre>{metrics_json}</pre></section>
-                      <section><h3>vLLM orchestration</h3><pre>{vllm_json}</pre></section>
-                      <section><h3>Error</h3><pre>{error_value}</pre></section>
-                    </div>
-                  </td>
-                </tr>
+                <details{open_attr}>
+                  <summary>Sample {item_number}/{batch_size} &mdash; {prompt_preview}</summary>
+                  <div class="detail-panel">
+                    <section><h3>Prompt</h3><pre>{prompt}</pre></section>
+                    <section><h3>Response</h3><pre>{response}</pre></section>
+                    <section><h3>Feedback</h3><pre>{feedback}</pre></section>
+                  </div>
+                </details>
                 """.format(
-                    request_id=html.escape(record.request_id),
-                    timestamp=html.escape(record.timestamp_utc),
+                    open_attr=" open" if batch_size == 1 else "",
                     item_number=item_index + 1,
                     batch_size=batch_size,
-                    status=html.escape(record.status),
-                    phase=html.escape(record.phase),
-                    lora_id=html.escape(record.lora_id),
-                    prompt_preview=html.escape(prompt_preview),
-                    distill_ms=record.timing_ms.distill,
-                    total_ms=record.timing_ms.total,
-                    detail_row_id=detail_row_id,
+                    prompt_preview=html.escape(_feedback_prompt_preview(req.prompt, limit=80)),
                     prompt=html.escape(req.prompt),
                     response=html.escape(req.response),
                     feedback=html.escape(req.feedback),
-                    timing_json=html.escape(timing_json),
-                    metrics_json=html.escape(metrics_json),
-                    vllm_json=html.escape(vllm_json),
-                    error_value=html.escape(error_value),
                 )
             )
 
+        rows.append(
+            """
+            <tr id="{detail_row_id}" class="detail-row">
+              <td colspan="7">
+                {samples}
+                <div class="detail-panel" style="margin-top: 0.75rem">
+                  <section><h3>Timing (ms)</h3><pre>{timing_json}</pre></section>
+                  <section><h3>Training metrics</h3><pre>{metrics_json}</pre></section>
+                  <section><h3>vLLM orchestration</h3><pre>{vllm_json}</pre></section>
+                  <section><h3>Error</h3><pre>{error_value}</pre></section>
+                </div>
+              </td>
+            </tr>
+            """.format(
+                detail_row_id=detail_row_id,
+                samples="\n".join(sample_sections),
+                timing_json=html.escape(timing_json),
+                metrics_json=html.escape(metrics_json),
+                vllm_json=html.escape(vllm_json),
+                error_value=html.escape(error_value),
+            )
+        )
+
     if not rows:
-        return '<tr><td colspan="8">No feedback records found.</td></tr>'
+        return '<tr><td colspan="7">No feedback records found.</td></tr>'
     return "\n".join(rows)
 
 
