@@ -234,7 +234,7 @@ class DistillWorker:
         template_messages = teacher_messages_to_chat_template(messages)
         teacher_prompt_ids_raw = self.tokenizer.apply_chat_template(
             template_messages,
-            add_generation_prompt=True,
+            add_generation_prompt=False,
             return_tensors="pt",
             tokenize=True,
         )

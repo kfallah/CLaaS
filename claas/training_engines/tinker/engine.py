@@ -309,7 +309,7 @@ async def _build_sample_datum(
     template_messages = teacher_messages_to_chat_template(teacher_messages)
     teacher_prompt_text = tokenizer.apply_chat_template(
         template_messages,
-        add_generation_prompt=True,
+        add_generation_prompt=False,
         tokenize=False,
     )
     teacher_prompt_tokens: list[int] = tokenizer.encode(

@@ -591,6 +591,7 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
 
 def test_require_entry(tinker_env):
     """_require_entry raises for missing and returns entry for existing LoRA."""
+    pytest.importorskip("tinker")
     from claas.training_engines.tinker.engine import _require_entry
 
     with pytest.raises(FileNotFoundError, match="not found"):

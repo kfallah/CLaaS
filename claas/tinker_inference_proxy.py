@@ -13,6 +13,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ import re
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -162,6 +164,66 @@ class _SamplerHolder:
 _holder = _SamplerHolder()
 
 
+# ---------------------------------------------------------------------------
+# Raw completion cache
+# ---------------------------------------------------------------------------
+
+_CACHE_MAX_SIZE = int(os.environ.get("CLAAS_COMPLETION_CACHE_SIZE", "100"))
+_CACHE_TTL_SECS = 3600  # 1 hour
+
+
+class _CompletionCacheEntry:
+    __slots__ = ("prompt", "response", "token_ids", "logprobs", "created_at")
+
+    def __init__(
+        self,
+        prompt: str,
+        response: str,
+        token_ids: list[int],
+        logprobs: list[float] | None,
+    ) -> None:
+        self.prompt = prompt
+        self.response = response
+        self.token_ids = token_ids
+        self.logprobs = logprobs
+        self.created_at = time.monotonic()
+
+    def is_expired(self) -> bool:
+        return (time.monotonic() - self.created_at) > _CACHE_TTL_SECS
+
+
+class _CompletionCache:
+    """FIFO cache keyed by SHA-256 of parsed content text."""
+
+    def __init__(self, max_size: int = _CACHE_MAX_SIZE) -> None:
+        self._store: OrderedDict[str, _CompletionCacheEntry] = OrderedDict()
+        self._max_size = max_size
+        self._lock = threading.Lock()
+
+    def put(self, content_hash: str, entry: _CompletionCacheEntry) -> None:
+        with self._lock:
+            if content_hash in self._store:
+                self._store.move_to_end(content_hash)
+                self._store[content_hash] = entry
+            else:
+                self._store[content_hash] = entry
+                while len(self._store) > self._max_size:
+                    self._store.popitem(last=False)
+
+    def get(self, content_hash: str) -> _CompletionCacheEntry | None:
+        with self._lock:
+            entry = self._store.get(content_hash)
+            if entry is None:
+                return None
+            if entry.is_expired():
+                del self._store[content_hash]
+                return None
+            return entry
+
+
+_completion_cache = _CompletionCache()
+
+
 async def _sample_async(
     sampler: tinker.SamplingClient,
     prompt: T.ModelInput,
@@ -244,6 +306,21 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
     text_msg, _ = renderer.parse_response(seq.tokens)
     content = text_msg.get("content", "") if isinstance(text_msg, dict) else str(text_msg)
     content = _extract_final_channel(content)
+
+    # Cache raw completion for training pipeline retrieval
+    tokenizer = _holder.tokenizer
+    raw_completion_text = tokenizer.decode(seq.tokens, skip_special_tokens=False)
+    prompt_text = tokenizer.decode(model_input.to_ints(), skip_special_tokens=False)
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    _completion_cache.put(
+        content_hash,
+        _CompletionCacheEntry(
+            prompt=prompt_text,
+            response=f"<|im_start|>assistant\n{raw_completion_text}<|im_end|>",
+            token_ids=list(seq.tokens),
+            logprobs=list(seq.logprobs) if seq.logprobs is not None else None,
+        ),
+    )
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
@@ -336,6 +413,25 @@ async def refresh_sampler(body: RefreshRequest) -> dict[str, object]:
 async def sampler_status() -> dict[str, object]:
     """Return the currently loaded model path (null = base model only)."""
     return {"model_path": _holder._model_path, "base_model": _BASE_MODEL}
+
+
+@app.get("/v1/completions/raw")
+async def get_raw_completion(content_hash: str) -> dict[str, object]:
+    """Retrieve cached raw completion by SHA-256 hash of parsed content text."""
+    entry = _completion_cache.get(content_hash)
+    if entry is None:
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(  # type: ignore[return-value]
+            status_code=404,
+            content={"error": "No cached completion found for this content hash"},
+        )
+    return {
+        "prompt": entry.prompt,
+        "response": entry.response,
+        "token_ids": entry.token_ids,
+        "logprobs": entry.logprobs,
+    }
 
 
 @app.get("/v1/models")

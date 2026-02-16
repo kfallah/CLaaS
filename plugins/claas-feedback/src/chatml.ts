@@ -23,7 +23,7 @@ interface ContentBlock {
 }
 
 /** Extract text from a content field that may be string or ContentBlock[]. */
-function extractContent(content: unknown): string {
+export function extractContent(content: unknown): string {
   if (typeof content === "string") return content;
 
   if (!Array.isArray(content)) return String(content ?? "");
@@ -91,4 +91,38 @@ export function buildChatML(
   const response = turns[lastAssistantIdx].content;
 
   return { prompt, response };
+}
+
+// ---------------------------------------------------------------------------
+// Raw completion retrieval from the inference proxy
+// ---------------------------------------------------------------------------
+
+export interface RawCompletion {
+  prompt: string;
+  response: string;
+  token_ids: number[];
+  logprobs: number[] | null;
+}
+
+/**
+ * Fetch the raw (un-parsed) completion from the inference proxy cache.
+ *
+ * The proxy caches the full ChatML-wrapped response (including thinking blocks,
+ * tool calls, and special tokens) keyed by SHA-256 of the parsed content text
+ * that was returned to the client.
+ */
+export async function fetchRawCompletion(
+  proxyUrl: string,
+  contentHash: string,
+): Promise<RawCompletion> {
+  const url = `${proxyUrl.replace(/\/+$/, "")}/v1/completions/raw?content_hash=${encodeURIComponent(contentHash)}`;
+  const res = await fetch(url, { method: "GET" });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `Raw completion not available (${res.status}): ${body.slice(0, 300)}. ` +
+        "The proxy may have restarted or the completion expired.",
+    );
+  }
+  return (await res.json()) as RawCompletion;
 }
