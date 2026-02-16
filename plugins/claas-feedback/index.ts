@@ -200,7 +200,7 @@ export default function register(api: OpenClawPluginApi) {
       }
 
       // Submit to CLaaS
-      const { pendingSize } = appendFeedback(senderKey, rawPrompt, rawResponse, feedbackText);
+      const { pendingSize } = appendFeedback(senderKey, rawPrompt, rawResponse, feedbackText, rolloutLogprobs);
       if (pendingSize < feedbackBatchSize) {
         return {
           text: `✅ Feedback queued (buffer: ${pendingSize}/${feedbackBatchSize})`,
@@ -220,7 +220,7 @@ export default function register(api: OpenClawPluginApi) {
             prompt: item.prompt,
             response: item.response,
             feedback: item.feedback,
-            rollout_logprobs: rolloutLogprobs,
+            rollout_logprobs: item.rollout_logprobs,
             training: { teacher_mode: "self" },
           })),
           orchestration: {
