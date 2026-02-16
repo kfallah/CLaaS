@@ -327,7 +327,7 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
         content_hash,
         _CompletionCacheEntry(
             prompt=prompt_text,
-            response=f"<|im_start|>assistant\n{raw_completion_text}<|im_end|>",
+            response=raw_completion_text,
             token_ids=list(seq.tokens),
             logprobs=list(seq.logprobs) if seq.logprobs is not None else None,
         ),
