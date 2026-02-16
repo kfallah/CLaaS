@@ -25,15 +25,20 @@ pytestmark = pytest.mark.integration
 logger = logging.getLogger(__name__)
 
 
-def _fetch_rollout_logprobs(
+def _fetch_raw_completion(
     client: httpx.Client,
     proxy_url: str,
     response_content: str,
-) -> list[float]:
-    """Fetch rollout logprobs from the proxy's raw completion cache.
+) -> tuple[str, list[float]]:
+    """Fetch raw response and rollout logprobs from the proxy cache.
 
-    Mirrors what the OpenClaw feedback plugin does: hash the parsed
-    content, hit ``/v1/completions/raw``, and return the logprobs list.
+    Mirrors the OpenClaw feedback plugin: hash the parsed content, hit
+    ``/v1/completions/raw``, and return ``(raw_response, logprobs)``.
+
+    The *raw_response* includes the chat template tokens
+    (``<|im_start|>assistant\\n…<|im_end|>``) so that its token count
+    matches the logprobs length — the Tinker engine tokenizes the
+    response with ``add_special_tokens=False`` and compares lengths.
     """
     content_hash = hashlib.sha256(response_content.encode("utf-8")).hexdigest()
     resp = client.get(
@@ -44,9 +49,10 @@ def _fetch_rollout_logprobs(
     assert resp.status_code == 200, (
         f"Failed to fetch raw completion (hash={content_hash[:12]}…): {resp.text}"
     )
-    logprobs = resp.json()["logprobs"]
+    data = resp.json()
+    logprobs = data["logprobs"]
     assert logprobs is not None, "Proxy returned null logprobs"
-    return logprobs
+    return data["response"], logprobs
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +165,8 @@ class TestTinkerStackRoundTrip:
                 assert len(response_content) > 0
                 logger.info("Model response: %s", response_content)
 
-                # 3b. Fetch rollout logprobs from proxy cache
-                rollout_logprobs = _fetch_rollout_logprobs(
+                # 3b. Fetch raw response + rollout logprobs from proxy cache
+                raw_response, rollout_logprobs = _fetch_raw_completion(
                     client, proxy_url, response_content,
                 )
                 logger.info(
@@ -180,7 +186,7 @@ class TestTinkerStackRoundTrip:
                         {
                             "lora_id": lora_id,
                             "prompt": user_prompt,
-                            "response": response_content,
+                            "response": raw_response,
                             "feedback": feedback_text,
                             "rollout_logprobs": rollout_logprobs,
                             "training": {"teacher_mode": "self"},
@@ -339,8 +345,8 @@ class TestOpenClawEndToEnd:
                 assert len(response_content) > 0
                 logger.info("OpenClaw response: %s", response_content[:500])
 
-                # 2b. Fetch rollout logprobs from proxy cache
-                rollout_logprobs = _fetch_rollout_logprobs(
+                # 2b. Fetch raw response + rollout logprobs from proxy cache
+                raw_response, rollout_logprobs = _fetch_raw_completion(
                     client, tinker_stack.proxy_url, response_content,
                 )
                 logger.info(
@@ -360,7 +366,7 @@ class TestOpenClawEndToEnd:
                         {
                             "lora_id": lora_id,
                             "prompt": user_prompt,
-                            "response": response_content,
+                            "response": raw_response,
                             "feedback": feedback_text,
                             "rollout_logprobs": rollout_logprobs,
                             "training": {"teacher_mode": "self"},
