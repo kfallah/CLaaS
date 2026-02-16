@@ -489,7 +489,7 @@ async def score_completion(req: ScoreRequest) -> dict[str, object]:
 
     model_input = T.ModelInput.from_ints(full_tokens)
     logprobs_full = await asyncio.to_thread(
-        lambda: sampler.compute_logprobs(model_input),
+        lambda: sampler.compute_logprobs(model_input).result(),
     )
 
     # Slice completion logprobs (same pattern as engine.py _slice_completion_logprobs)
