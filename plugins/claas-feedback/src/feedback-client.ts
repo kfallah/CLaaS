@@ -2,7 +2,7 @@
  * HTTP client for the CLaaS batched feedback API.
  */
 
-const TIMEOUT_MS = 2 * 60 * 1000;
+const TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface DistillRequestPayload {
   lora_id: string;
