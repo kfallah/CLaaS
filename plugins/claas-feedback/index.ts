@@ -56,7 +56,7 @@ export default function register(api: OpenClawPluginApi) {
     "http://tinker-proxy:8000";
   const loraId = config.loraId ?? "openclaw/assistant-latest";
   const debugEnabled = config.debug === true || process.env.CLAAS_FEEDBACK_DEBUG === "true";
-  const feedbackBatchSize = config.feedbackBatchSize ?? 4;
+  const feedbackBatchSize = Math.max(1, config.feedbackBatchSize ?? 4);
   const logDebug = (message: string): void => {
     if (debugEnabled) {
       console.debug(message);
