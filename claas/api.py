@@ -42,11 +42,7 @@ import modal
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 
-from .storage import LORA_MOUNT_PATH, lora_volume
-from .teacher import format_teacher_prompt
-from .training_engines import get_training_engine
-from .training_engines.base import EngineKind, TrainingEngine
-from .types import (
+from .core.types import (
     DistillBatchItem,
     DistillBatchRequestPayload,
     DistillRequest,
@@ -64,6 +60,10 @@ from .types import (
     LoraListResponse,
     ServiceHealth,
 )
+from .training.engine import get_training_engine
+from .training.engine.base import EngineKind, TrainingEngine
+from .training.storage import LORA_MOUNT_PATH, lora_volume
+from .training.teacher_helpers import format_teacher_prompt
 
 logger = logging.getLogger(__name__)
 

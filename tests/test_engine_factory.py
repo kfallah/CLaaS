@@ -6,9 +6,9 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from claas.training_engines import get_training_engine  # noqa: E402
-from claas.training_engines.local.engine import LocalTrainingEngine  # noqa: E402
-from claas.training_engines.modal.engine import ModalTrainingEngine  # noqa: E402
+from claas.training.engine import get_training_engine  # noqa: E402
+from claas.training.engine.local.engine import LocalTrainingEngine  # noqa: E402
+from claas.training.engine.modal.engine import ModalTrainingEngine  # noqa: E402
 
 
 def test_get_local_engine():
@@ -22,7 +22,7 @@ def test_get_modal_engine():
 
 
 def test_get_tinker_engine():
-    from claas.training_engines.tinker.engine import TinkerTrainingEngine
+    from claas.training.engine.tinker.engine import TinkerTrainingEngine
 
     engine = get_training_engine("tinker")
     assert isinstance(engine, TinkerTrainingEngine)

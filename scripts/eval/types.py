@@ -4,14 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypedDict
+from typing import Any
 
-
-class ChatMessage(TypedDict):
-    """Normalized chat message used across eval rollout logs."""
-
-    role: Literal["system", "user", "assistant"]
-    content: str
+from claas.core.types import ChatMessage
 
 
 @dataclass

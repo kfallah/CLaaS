@@ -18,9 +18,9 @@ import sys
 
 import modal
 
-from .storage import create_initial_lora, list_loras
-from .teacher import TeacherService
-from .worker import DistillWorker
+from .training.storage import create_initial_lora, list_loras
+from .training.teacher_service import TeacherService
+from .training.worker import DistillWorker
 
 
 def cmd_init_lora(args: argparse.Namespace) -> int:

@@ -18,7 +18,7 @@ import logging
 import torch
 import torch.nn.functional as F
 
-from .types import SDPOLossInput, SDPOLossResult
+from claas.core.types import SDPOLossInput, SDPOLossResult
 
 logger = logging.getLogger(__name__)
 

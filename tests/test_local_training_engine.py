@@ -6,8 +6,12 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from claas.training_engines.local.engine import LocalTrainingEngine  # noqa: E402
-from claas.types import DistillBatchItem, DistillBatchRequestPayload, TrainingConfig  # noqa: E402
+from claas.core.types import (  # noqa: E402
+    DistillBatchItem,
+    DistillBatchRequestPayload,
+    TrainingConfig,
+)
+from claas.training.engine.local.engine import LocalTrainingEngine  # noqa: E402
 
 
 class _Worker:
@@ -22,7 +26,7 @@ class _Worker:
 
 
 def test_local_engine_distill_ignores_cleanup_error(monkeypatch):
-    from claas.training_engines.local import engine as local_engine
+    from claas.training.engine.local import engine as local_engine
 
     monkeypatch.setattr(local_engine, "DistillWorker", _Worker)
 

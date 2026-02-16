@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from claas.api import web_app
-from claas.types import (
+from claas.core.types import (
     DistillResponse,
     LoraDeleteResponse,
     LoraExistsPayload,

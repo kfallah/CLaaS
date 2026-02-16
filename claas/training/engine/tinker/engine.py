@@ -23,18 +23,7 @@ import torch
 from tinker import types as T
 from tinker.types.tensor_data import TensorData
 
-from claas.teacher import build_teacher_messages, teacher_messages_to_chat_template
-from claas.training_engines.base import TrainingEngine
-from claas.training_engines.tinker.state import (
-    LoraEntry,
-    all_checkpoint_paths,
-    delete_entry,
-    get_entry,
-    list_loras as state_list_loras,
-    lora_exists as state_lora_exists,
-    set_tinker_path,
-)
-from claas.types import (
+from claas.core.types import (
     DistillBatchItem,
     DistillBatchRequestPayload,
     DistillResponse,
@@ -47,6 +36,17 @@ from claas.types import (
     LoraRuntimeRef,
     ServiceHealth,
 )
+from claas.training.engine.base import TrainingEngine
+from claas.training.engine.tinker.state import (
+    LoraEntry,
+    all_checkpoint_paths,
+    delete_entry,
+    get_entry,
+    list_loras as state_list_loras,
+    lora_exists as state_lora_exists,
+    set_tinker_path,
+)
+from claas.training.teacher_helpers import build_teacher_messages, teacher_messages_to_chat_template
 
 logger = logging.getLogger(__name__)
 

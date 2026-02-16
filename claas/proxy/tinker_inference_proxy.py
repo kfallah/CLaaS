@@ -7,7 +7,7 @@ without a local GPU.
 Usage::
 
     TINKER_API_KEY=... CLAAS_TINKER_BASE_MODEL=gpt-oss/GPT-OSS-120B \
-        uvicorn claas.tinker_inference_proxy:app --host 0.0.0.0 --port 8000
+        uvicorn claas.proxy.tinker_inference_proxy:app --host 0.0.0.0 --port 8000
 """
 
 from __future__ import annotations
@@ -243,14 +243,14 @@ async def _sample_async(
 # Request / Response models
 # ---------------------------------------------------------------------------
 
-class ChatMessage(BaseModel):
+class ChatCompletionMessage(BaseModel):
     role: str
     content: Any = ""
 
 
 class ChatCompletionRequest(BaseModel):
     model: str = _BASE_MODEL
-    messages: list[ChatMessage]
+    messages: list[ChatCompletionMessage]
     max_tokens: int | None = None
     temperature: float | None = None
     top_p: float | None = None

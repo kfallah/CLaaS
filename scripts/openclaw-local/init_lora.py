@@ -46,7 +46,7 @@ def main() -> None:
                 print(f"LoRA '{alias_key}' already exists -> {target}, skipping.")
                 return
 
-    from claas.storage import create_initial_lora
+    from claas.training.storage import create_initial_lora
 
     lora_r = int(os.environ.get("LORA_R", "32"))
     lora_alpha = int(os.environ.get("LORA_ALPHA", str(lora_r * 2)))

@@ -1,12 +1,11 @@
-"""Tests for pure helper functions in claas.teacher."""
+"""Tests for pure helper functions in claas.training.teacher_helpers."""
 
 from __future__ import annotations
 
 import pytest
 
-from claas.teacher import (
-    ChatMessage,
-    TokenLogprobs,
+from claas.core.types import ChatMessage
+from claas.training.teacher_helpers import (
     build_teacher_messages,
     format_teacher_prompt,
     messages_to_chatml,
@@ -93,9 +92,9 @@ class TestFormatTeacherPrompt:
 class TestParseTeacherResult:
     def test_parses_result(self):
         pytest.importorskip("torch")
-        from claas.teacher import parse_teacher_result
+        from claas.training.teacher_helpers import parse_teacher_result
 
-        result: list[TokenLogprobs] = [
+        result = [
             {"indices": [10, 20, 30], "logprobs": [-0.1, -0.5, -1.0]},
             {"indices": [40, 50], "logprobs": [-0.2, -0.3]},
         ]
@@ -109,14 +108,14 @@ class TestParseTeacherResult:
 
     def test_empty_result_raises(self):
         pytest.importorskip("torch")
-        from claas.teacher import parse_teacher_result
+        from claas.training.teacher_helpers import parse_teacher_result
 
         with pytest.raises(ValueError, match="Empty teacher result"):
             parse_teacher_result([])
 
     def test_all_empty_raises(self):
         pytest.importorskip("torch")
-        from claas.teacher import parse_teacher_result
+        from claas.training.teacher_helpers import parse_teacher_result
 
         with pytest.raises(ValueError, match="empty top-K"):
-            parse_teacher_result([{"indices": [], "logprobs": []}])  # type: ignore[list-item]
+            parse_teacher_result([{"indices": [], "logprobs": []}])

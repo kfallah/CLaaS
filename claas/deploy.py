@@ -9,8 +9,8 @@ from __future__ import annotations
 import modal
 
 from .api import app as api_app
-from .teacher import app as teacher_app
-from .worker import app as worker_app
+from .training.teacher_service import app as teacher_app
+from .training.worker import app as worker_app
 
 app = modal.App("claas-distill")
 app.include(api_app)

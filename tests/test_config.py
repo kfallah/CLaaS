@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from claas.config import DEFAULT_CONFIG, CLaaSConfig, get_config
+from claas.core.config import DEFAULT_CONFIG, CLaaSConfig, get_config
 
 
 def test_config_defaults_and_accessors():

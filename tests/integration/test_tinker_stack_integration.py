@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
-from claas.teacher import build_teacher_messages
+from claas.training.teacher_helpers import build_teacher_messages
 
 if TYPE_CHECKING:
     from conftest import TinkerStack
