@@ -80,9 +80,7 @@ web_app = FastAPI(
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
 VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "sk-local")
 FEEDBACK_LOG_DIR = os.environ.get("FEEDBACK_LOG_DIR", "./feedback_logs")
-FEEDBACK_DASHBOARD_TEMPLATE = (
-    Path(__file__).resolve().parent / "templates" / "feedback_recent" / "index.html"
-)
+FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "index.html"
 FEEDBACK_LOCK_TIMEOUT_S = float(os.environ.get("FEEDBACK_LOCK_TIMEOUT_S", "120"))
 # Default "local" assumes GPU deps (torch, etc.) are available on this machine.
 # Set to "modal" for Modal deployments where the API image is CPU-only.
@@ -370,8 +368,7 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
         HTML table rows with expandable detail sections.
     """
     rows: list[str] = []
-    for index, record in enumerate(records):
-        detail_row_id = f"feedback-detail-{index}"
+    for record_index, record in enumerate(records):
         metrics_payload = {}
         if record.distill_result is not None:
             metrics_payload = record.distill_result.metadata
@@ -379,55 +376,61 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
         metrics_json = json.dumps(metrics_payload, indent=2, sort_keys=True)
         vllm_json = json.dumps(record.vllm.model_dump(mode="json"), indent=2, sort_keys=True)
         error_value = record.error or ""
-        first_req = record.requests[0]
-        prompt_preview = _feedback_prompt_preview(first_req.prompt)
+        batch_size = len(record.requests)
+        for item_index, req in enumerate(record.requests):
+            detail_row_id = f"feedback-detail-{record_index}-{item_index}"
+            prompt_preview = _feedback_prompt_preview(req.prompt)
 
-        rows.append(
-            """
-            <tr>
-              <td>{request_id}<br><small>{timestamp}</small></td>
-              <td>{status} ({phase})</td>
-              <td>{lora_id}</td>
-              <td><div class="prompt-preview">{prompt_preview}</div></td>
-              <td>{distill_ms}</td>
-              <td>{total_ms}</td>
-              <td><button type="button" onclick="toggleDetails('{detail_row_id}', this)">Expand</button></td>
-            </tr>
-            <tr id="{detail_row_id}" class="detail-row">
-              <td colspan="7">
-                <div class="detail-panel">
-                  <section><h3>Prompt</h3><pre>{prompt}</pre></section>
-                  <section><h3>Response</h3><pre>{response}</pre></section>
-                  <section><h3>Feedback</h3><pre>{feedback}</pre></section>
-                  <section><h3>Timing (ms)</h3><pre>{timing_json}</pre></section>
-                  <section><h3>Training metrics</h3><pre>{metrics_json}</pre></section>
-                  <section><h3>vLLM orchestration</h3><pre>{vllm_json}</pre></section>
-                  <section><h3>Error</h3><pre>{error_value}</pre></section>
-                </div>
-              </td>
-            </tr>
-            """.format(
-                request_id=html.escape(record.request_id),
-                timestamp=html.escape(record.timestamp_utc),
-                status=html.escape(record.status),
-                phase=html.escape(record.phase),
-                lora_id=html.escape(record.lora_id),
-                prompt_preview=html.escape(prompt_preview),
-                distill_ms=record.timing_ms.distill,
-                total_ms=record.timing_ms.total,
-                detail_row_id=detail_row_id,
-                prompt=html.escape(first_req.prompt),
-                response=html.escape(first_req.response),
-                feedback=html.escape(first_req.feedback),
-                timing_json=html.escape(timing_json),
-                metrics_json=html.escape(metrics_json),
-                vllm_json=html.escape(vllm_json),
-                error_value=html.escape(error_value),
+            rows.append(
+                """
+                <tr>
+                  <td>{request_id}<br><small>{timestamp}</small></td>
+                  <td>{item_number}/{batch_size}</td>
+                  <td>{status} ({phase})</td>
+                  <td>{lora_id}</td>
+                  <td><div class="prompt-preview">{prompt_preview}</div></td>
+                  <td>{distill_ms}</td>
+                  <td>{total_ms}</td>
+                  <td><button type="button" onclick="toggleDetails('{detail_row_id}', this)">Expand</button></td>
+                </tr>
+                <tr id="{detail_row_id}" class="detail-row">
+                  <td colspan="8">
+                    <div class="detail-panel">
+                      <section><h3>Batch Item</h3><pre>{item_number}/{batch_size}</pre></section>
+                      <section><h3>Prompt</h3><pre>{prompt}</pre></section>
+                      <section><h3>Response</h3><pre>{response}</pre></section>
+                      <section><h3>Feedback</h3><pre>{feedback}</pre></section>
+                      <section><h3>Timing (ms)</h3><pre>{timing_json}</pre></section>
+                      <section><h3>Training metrics</h3><pre>{metrics_json}</pre></section>
+                      <section><h3>vLLM orchestration</h3><pre>{vllm_json}</pre></section>
+                      <section><h3>Error</h3><pre>{error_value}</pre></section>
+                    </div>
+                  </td>
+                </tr>
+                """.format(
+                    request_id=html.escape(record.request_id),
+                    timestamp=html.escape(record.timestamp_utc),
+                    item_number=item_index + 1,
+                    batch_size=batch_size,
+                    status=html.escape(record.status),
+                    phase=html.escape(record.phase),
+                    lora_id=html.escape(record.lora_id),
+                    prompt_preview=html.escape(prompt_preview),
+                    distill_ms=record.timing_ms.distill,
+                    total_ms=record.timing_ms.total,
+                    detail_row_id=detail_row_id,
+                    prompt=html.escape(req.prompt),
+                    response=html.escape(req.response),
+                    feedback=html.escape(req.feedback),
+                    timing_json=html.escape(timing_json),
+                    metrics_json=html.escape(metrics_json),
+                    vllm_json=html.escape(vllm_json),
+                    error_value=html.escape(error_value),
+                )
             )
-        )
 
     if not rows:
-        return '<tr><td colspan="7">No feedback records found.</td></tr>'
+        return '<tr><td colspan="8">No feedback records found.</td></tr>'
     return "\n".join(rows)
 
 
@@ -811,8 +814,8 @@ async def health_check() -> HealthResponse:
     return HealthResponse(status=status, worker=worker, teacher=teacher)
 
 
-@web_app.get("/v1/feedback/recent", response_class=HTMLResponse)
-async def recent_feedback_dashboard(limit: int = Query(default=20, ge=1, le=200)) -> HTMLResponse:
+@web_app.get("/v1/dashboard", response_class=HTMLResponse)
+async def dashboard(limit: int = Query(default=20, ge=1, le=200)) -> HTMLResponse:
     """Serve a minimal dashboard of recent feedback records.
 
     Args:
