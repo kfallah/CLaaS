@@ -9,7 +9,7 @@ export interface DistillRequestPayload {
   prompt: string;
   response: string;
   feedback: string;
-  rollout_logprobs?: number[] | null;
+  rollout_logprobs: number[];
   training: {
     teacher_mode: string;
   };

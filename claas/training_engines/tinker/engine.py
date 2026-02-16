@@ -192,18 +192,6 @@ class TinkerTrainingEngine(TrainingEngine):
         )
         tokenizer = training_client.get_tokenizer()
 
-        # Lazily create student sampling client only if needed.
-        needs_student_sampling = any(
-            sample.rollout_logprobs is None
-            or len(sample.rollout_logprobs) != len(tokenizer.encode(sample.response, add_special_tokens=False))
-            for sample in payload.samples
-        )
-        student_sampling = None
-        if needs_student_sampling:
-            student_sampling = await training_client.save_weights_and_get_sampling_client_async(
-                "current"
-            )
-
         teacher_sampling = await self.service.create_sampling_client_async(
             base_model=base_model
         )
@@ -211,7 +199,7 @@ class TinkerTrainingEngine(TrainingEngine):
         # ── Phase 2: Per-sample processing (concurrent) ──
         tasks = [
             _build_sample_datum(
-                sample, tokenizer, student_sampling, teacher_sampling, kl_coef
+                sample, tokenizer, teacher_sampling, kl_coef
             )
             for sample in payload.samples
         ]
@@ -277,7 +265,6 @@ class TinkerTrainingEngine(TrainingEngine):
 async def _build_sample_datum(
     sample: DistillBatchItem,
     tokenizer: Any,
-    student_sampling: Any | None,
     teacher_sampling: Any,
     kl_coef: float,
 ) -> tuple[T.Datum, dict[str, float]]:
@@ -293,16 +280,13 @@ async def _build_sample_datum(
     prompt_len = len(prompt_tokens)
     completion_len = len(response_tokens)
 
-    # ── Compute student (rollout) logprobs ──
-    if sample.rollout_logprobs is not None and len(sample.rollout_logprobs) == completion_len:
-        student_logprobs = list(sample.rollout_logprobs)
-    else:
-        assert student_sampling is not None, "student_sampling required but not created"
-        student_full = T.ModelInput.from_ints(full_tokens)
-        student_logprobs_full = await student_sampling.compute_logprobs_async(student_full)
-        student_logprobs = _slice_completion_logprobs(
-            student_logprobs_full, prompt_len, completion_len
+    # ── Validate and use provided rollout logprobs ──
+    if len(sample.rollout_logprobs) != completion_len:
+        raise ValueError(
+            f"rollout_logprobs length ({len(sample.rollout_logprobs)}) != "
+            f"completion_len ({completion_len})"
         )
+    student_logprobs = list(sample.rollout_logprobs)
 
     # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
     teacher_messages = build_teacher_messages(sample.prompt, sample.feedback)

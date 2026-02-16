@@ -373,8 +373,8 @@ def test_engine_delete_lora_continues_on_checkpoint_error(tinker_engine):
 def test_engine_distill_full_flow(tinker_engine, mock_training_client):
     """End-to-end distill: restore → tokenize → logprobs → train → save.
 
-    Exercises the complete distill method with rollout_logprobs=None,
-    forcing the engine to compute student logprobs via sampling client.
+    Exercises the complete distill method with valid rollout_logprobs
+    provided for each sample (mandatory field).
     """
     engine, mock_service = tinker_engine
 
@@ -403,7 +403,7 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
                 prompt="Hello",
                 response="World",
                 feedback="Good job",
-                rollout_logprobs=[],
+                rollout_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
             )
         ],
     )
@@ -429,10 +429,8 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
         "tinker://init-ckpt"
     )
 
-    # Verify student logprobs were computed via sampling client (not provided)
-    mock_training_client.save_weights_and_get_sampling_client_async.assert_called_once_with(
-        "current"
-    )
+    # Student sampling client was NOT used (rollout_logprobs provided)
+    mock_training_client.save_weights_and_get_sampling_client_async.assert_not_called()
 
     # Verify teacher was queried with base model
     mock_service.create_sampling_client_async.assert_called_once_with(
@@ -495,8 +493,8 @@ def test_engine_distill_uses_provided_rollout_logprobs(tinker_engine, mock_train
 def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_client):
     """Batched distill: 3 samples processed concurrently, single train step.
 
-    Mixes samples with provided and missing rollout_logprobs to verify that
-    the student sampling client is created at most once.
+    All samples provide valid rollout_logprobs (mandatory field), so
+    the student sampling client is never created.
     """
     engine, mock_service = tinker_engine
 
@@ -515,26 +513,26 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
     )
 
     samples = [
-        # Sample 1: no rollout_logprobs → needs student sampling
+        # Sample 1: 5 tokens ("World")
         DistillBatchItem(
             prompt="Hello",
             response="World",
             feedback="Good",
-            rollout_logprobs=[],
+            rollout_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
         ),
-        # Sample 2: valid rollout_logprobs → skips student sampling
+        # Sample 2: 5 tokens ("There")
         DistillBatchItem(
             prompt="Hi",
             response="There",
             feedback="Nice",
             rollout_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
         ),
-        # Sample 3: no rollout_logprobs → needs student sampling
+        # Sample 3: 3 tokens ("You")
         DistillBatchItem(
             prompt="Hey",
             response="You",
             feedback="Great",
-            rollout_logprobs=None,
+            rollout_logprobs=[-0.1, -0.2, -0.3],
         ),
     ]
 
@@ -575,10 +573,8 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
     # save_state called once
     mock_training_client.save_state_async.assert_called_once_with("step-1")
 
-    # Student sampling client created at most once
-    mock_training_client.save_weights_and_get_sampling_client_async.assert_called_once_with(
-        "current"
-    )
+    # Student sampling client was NOT used (all samples have valid rollout_logprobs)
+    mock_training_client.save_weights_and_get_sampling_client_async.assert_not_called()
 
     # Teacher sampling client created once
     mock_service.create_sampling_client_async.assert_called_once_with(
