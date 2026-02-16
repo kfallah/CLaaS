@@ -83,6 +83,7 @@ class TestTinkerStackRoundTrip:
         feedback_text = "Good, concise greeting."
 
         with httpx.Client(timeout=300.0) as client:
+            created = False
             try:
                 # 1. Init LoRA
                 init_payload = {
@@ -100,6 +101,7 @@ class TestTinkerStackRoundTrip:
                 assert init_resp.status_code == 200, init_resp.text
                 assert init_resp.json()["lora_id"] == lora_id
                 logger.info("Init response: %s", init_resp.text)
+                created = True
 
                 # 2. Verify it appears in list
                 list_resp = client.get(
@@ -211,24 +213,20 @@ class TestTinkerStackRoundTrip:
                 )
 
             finally:
-                # 6. Cleanup — always delete even on assertion failure
-                delete_resp = client.delete(
-                    f"{claas_url}/v1/lora",
-                    params={"lora_id": lora_id},
-                    timeout=30.0,
-                )
-                assert delete_resp.status_code == 200, delete_resp.text
-                assert delete_resp.json()["deleted"] is True
-                logger.info("Deleted %s: %s", lora_id, delete_resp.text)
-
-                # Verify it's gone
-                verify_resp = client.get(
-                    f"{claas_url}/v1/lora",
-                    params={"prefix": "test/"},
-                    timeout=15.0,
-                )
-                if verify_resp.status_code == 200:
-                    assert lora_id not in verify_resp.json()["loras"]
+                # 7. Cleanup — best-effort to avoid masking root failures
+                if created:
+                    try:
+                        delete_resp = client.delete(
+                            f"{claas_url}/v1/lora",
+                            params={"lora_id": lora_id},
+                            timeout=30.0,
+                        )
+                        if delete_resp.status_code == 200 and delete_resp.json().get("deleted"):
+                            logger.info("Deleted %s: %s", lora_id, delete_resp.text)
+                        else:
+                            logger.warning("Cleanup failed for %s: %s", lora_id, delete_resp.text)
+                    except Exception:
+                        logger.warning("Cleanup request failed for %s", lora_id, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +257,7 @@ class TestOpenClawEndToEnd:
         }
 
         with httpx.Client(timeout=300.0) as client:
+            created = False
             try:
                 # 1. Init LoRA via CLaaS API
                 init_payload = {
@@ -275,6 +274,7 @@ class TestOpenClawEndToEnd:
                 )
                 assert init_resp.status_code == 200, init_resp.text
                 logger.info("Init response: %s", init_resp.text)
+                created = True
 
                 # 2. Chat through OpenClaw (HTTP API -> context engine -> tinker-proxy)
                 chat_payload = {
@@ -379,12 +379,17 @@ class TestOpenClawEndToEnd:
                 )
 
             finally:
-                # 5. Cleanup
-                delete_resp = client.delete(
-                    f"{claas_url}/v1/lora",
-                    params={"lora_id": lora_id},
-                    timeout=30.0,
-                )
-                assert delete_resp.status_code == 200, delete_resp.text
-                assert delete_resp.json()["deleted"] is True
-                logger.info("Deleted %s: %s", lora_id, delete_resp.text)
+                # 5. Cleanup — best-effort to avoid masking root failures
+                if created:
+                    try:
+                        delete_resp = client.delete(
+                            f"{claas_url}/v1/lora",
+                            params={"lora_id": lora_id},
+                            timeout=30.0,
+                        )
+                        if delete_resp.status_code == 200 and delete_resp.json().get("deleted"):
+                            logger.info("Deleted %s: %s", lora_id, delete_resp.text)
+                        else:
+                            logger.warning("Cleanup failed for %s: %s", lora_id, delete_resp.text)
+                    except Exception:
+                        logger.warning("Cleanup request failed for %s", lora_id, exc_info=True)

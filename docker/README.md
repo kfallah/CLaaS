@@ -66,6 +66,8 @@ This stack brings up:
 | `openclaw-tinker` | 18789 | OpenClaw gateway with Telegram bot |
 | `init-tinker` | — | One-shot: creates LoRA via API + writes OpenClaw config |
 
+> **Note:** `docker-compose.tinker.yml` uses the base service names `claas-api`, `openclaw`, and `init` (no `-tinker` suffix).
+
 ## Architecture
 
 ```
@@ -127,7 +129,7 @@ Send a DM to your Telegram bot — it should respond using the `openclaw-assista
 
 ## Configuration
 
-All settings are in `.env`:
+Settings live in `.env` (local profile) and `.env.tinker` (tinker stack):
 
 | Variable | Default | Description |
 |----------|---------|-------------|

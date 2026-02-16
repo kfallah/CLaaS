@@ -188,8 +188,9 @@ async def _vllm_post(
 
 async def _tinker_proxy_refresh(model_path: str) -> None:
     """Tell the Tinker inference proxy to reload with the latest checkpoint."""
+    headers = {"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {}
     async with httpx.AsyncClient(base_url=VLLM_BASE_URL, timeout=30) as client:
-        resp = await client.post("/v1/sampler/refresh", json={"model_path": model_path})
+        resp = await client.post("/v1/sampler/refresh", json={"model_path": model_path}, headers=headers)
     resp.raise_for_status()
     logger.info("Tinker proxy refreshed to checkpoint: %s", model_path)
 
@@ -775,7 +776,13 @@ async def delete_lora_adapter(lora_id: str) -> LoraDeleteResponse:
 
     Returns {"deleted": false} if not found (idempotent, no 404).
     """
-    return await _get_training_engine().delete_lora(lora_id)
+    try:
+        return await _get_training_engine().delete_lora(lora_id)
+    except (ValueError, RuntimeError, OSError, httpx.HTTPError) as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"LoRA deletion failed: {str(e)}",
+        ) from e
 
 
 @web_app.get("/v1/lora/export")

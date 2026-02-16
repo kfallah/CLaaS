@@ -101,6 +101,12 @@ class TinkerTrainingEngine(TrainingEngine):
         return LoraListResponse(loras=loras)
 
     async def delete_lora(self, lora_id: str) -> LoraDeleteResponse:
+        """Delete a LoRA adapter and its Tinker checkpoints.
+
+        Removes all tracked checkpoint paths from the Tinker service,
+        then deletes the local state entry.  Returns ``deleted=False``
+        if the LoRA was not found (idempotent).
+        """
         entry = get_entry(lora_id)
         if entry is None:
             return LoraDeleteResponse(deleted=False)
@@ -200,11 +206,11 @@ class TinkerTrainingEngine(TrainingEngine):
         # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
         teacher_messages = build_teacher_messages(payload.prompt, payload.feedback)
         template_messages = teacher_messages_to_chat_template(teacher_messages)
-        teacher_prompt_text = str(tokenizer.apply_chat_template(
+        teacher_prompt_text = tokenizer.apply_chat_template(
             template_messages,
             add_generation_prompt=True,
             tokenize=False,
-        ))
+        )
         teacher_prompt_tokens: list[int] = tokenizer.encode(
             teacher_prompt_text,
             add_special_tokens=False,
