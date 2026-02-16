@@ -115,9 +115,8 @@ class DistillRequest(BaseModel):
         min_length=1,
         description="Feedback about response quality",
     )
-    rollout_logprobs: list[float] = Field(
-        ...,
-        min_length=1,
+    rollout_logprobs: list[float] | None = Field(
+        default=None,
         description="Log-probabilities from the inference server that generated the rollout.",
     )
     training: TrainingConfig = Field(
@@ -140,7 +139,7 @@ class DistillRequestPayload(BaseModel):
     prompt: str
     response: str
     feedback: str
-    rollout_logprobs: list[float]
+    rollout_logprobs: list[float] | None = None
     training: TrainingConfig
     teacher_result: list[TeacherTokenLogprobs] | None = None
     save_in_place: bool = False
@@ -152,7 +151,7 @@ class DistillBatchItem(BaseModel):
     prompt: str
     response: str
     feedback: str
-    rollout_logprobs: list[float]
+    rollout_logprobs: list[float] | None = None
     teacher_result: list[TeacherTokenLogprobs] | None = None
 
 

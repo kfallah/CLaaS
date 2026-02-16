@@ -357,6 +357,10 @@ class DistillWorker:
             student_logits = student_output.logits[:, response_start - 1 : -1, :].contiguous()
             del student_output
 
+            if sample.rollout_logprobs is None:
+                raise ValueError(
+                    "rollout_logprobs is required for local/modal distill"
+                )
             old_student_logprobs = torch.tensor(
                 sample.rollout_logprobs,
                 dtype=torch.float32,
