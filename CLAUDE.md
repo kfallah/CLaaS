@@ -96,6 +96,33 @@ Heavy dependencies (torch, vllm, transformers) are only available inside Modal c
 
 Never add code to kill, restart, or spawn vLLM from within the API process. vLLM is managed externally (by the user, systemd, Docker, etc.). The API communicates with vLLM only via its HTTP API (sleep/wake, load/unload LoRA). Adding process management (pkill, subprocess.Popen, etc.) to the API is fragile, creates tight coupling, and is not how this system is designed.
 
+## Development Workflow
+
+All features are developed on branches and merged via GitHub PRs. Every PR must pass CI before merging.
+
+CI has two jobs (`lint-and-test` runs on every PR, `integration` runs on manual dispatch):
+
+```bash
+# Check PR status
+gh pr checks <pr-number>
+
+# Trigger the full CI suite (including integration tests)
+gh workflow run ci.yml --ref <branch-name>
+
+# Watch a run
+gh run watch <run-id> --exit-status
+```
+
+Before opening or merging a PR, verify locally:
+
+```bash
+uv run ruff check claas/ tests/ --fix
+uv run ty check
+uv run pytest tests/ -q -m "not integration"
+```
+
+Gate merges on all CI checks passing. Run the integration test (`workflow_dispatch`) before merging any change that touches the training engine, proxy, or API feedback flow.
+
 ## Ruff Rules
 
 Using default ruff rules plus:
