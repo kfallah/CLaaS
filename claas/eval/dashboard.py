@@ -35,8 +35,12 @@ def _load_json(directory: str, filename: str) -> dict[str, Any]:
     path = os.path.join(directory, filename)
     if not os.path.exists(path):
         return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to read %s: %s", path, exc)
+        return {}
 
 
 def _load_steps(run_dir: str, preference: str) -> list[StepResult]:
@@ -49,7 +53,10 @@ def _load_steps(run_dir: str, preference: str) -> list[StepResult]:
         for line in f:
             line = line.strip()
             if line:
-                steps.append(step_result_from_dict(json.loads(line)))
+                try:
+                    steps.append(step_result_from_dict(json.loads(line)))
+                except json.JSONDecodeError:
+                    logger.warning("Skipping invalid JSONL line in %s", path)
     return steps
 
 
@@ -114,9 +121,12 @@ def _embed_plots(run_dir: str) -> str:
         if not fname.lower().endswith(".png"):
             continue
         fpath = os.path.join(plots_dir, fname)
-        with open(fpath, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("ascii")
-        images.append((fname, b64))
+        try:
+            with open(fpath, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            images.append((fname, b64))
+        except OSError as exc:
+            logger.warning("Failed to read plot %s: %s", fpath, exc)
 
     if not images:
         return ""
