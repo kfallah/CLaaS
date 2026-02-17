@@ -842,7 +842,7 @@ async def dashboard(limit: int = Query(default=20, ge=1, le=200)) -> HTMLRespons
 
 
 @web_app.get("/v1/eval", response_class=HTMLResponse)
-async def eval_dashboard(results_dir: str = Query(default="./eval_results")) -> HTMLResponse:
+async def eval_dashboard(results_dir: str = Query(default="./data/evals")) -> HTMLResponse:
     """Serve a dashboard of evaluation results.
 
     Args:
@@ -853,12 +853,12 @@ async def eval_dashboard(results_dir: str = Query(default="./eval_results")) -> 
     """
     from .eval.dashboard import eval_dashboard_html
 
-    base_dir = Path("./eval_results").resolve()
+    base_dir = Path("./data/evals").resolve()
     requested_dir = Path(results_dir).resolve()
     if not requested_dir.is_relative_to(base_dir):
         raise HTTPException(
             status_code=400,
-            detail="results_dir must be within ./eval_results",
+            detail="results_dir must be within ./data/evals",
         )
     content = await asyncio.to_thread(eval_dashboard_html, str(requested_dir))
     return HTMLResponse(content=content)

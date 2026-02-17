@@ -30,7 +30,7 @@ class HarnessConfig:
     vllm_model_name: str = "qwen3-8b"
     preferences: list[str] = field(default_factory=lambda: ["no_emoji", "concise", "identity"])
     num_steps: int = 20
-    output_dir: str = "./eval_results"
+    output_dir: str = "./data/evals"
     gemini_api_key: str | None = None
     metrics: list[str] = field(default_factory=lambda: ["logprob"])
     plots: bool = False

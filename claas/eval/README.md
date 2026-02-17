@@ -21,10 +21,10 @@ Or as a module:
 python -m claas.eval --preferences no_emoji --metrics all --num-steps 20
 ```
 
-Results are written to `--output-dir` (default `./eval_results`). View them in the browser:
+Results are written to `--output-dir` (default `./data/evals/<UTC timestamp>`). View them in the browser:
 
 ```http
-GET /v1/eval?results_dir=./eval_results
+GET /v1/eval?results_dir=./data/evals
 ```
 
 ## Metrics
@@ -59,7 +59,7 @@ Presets: `all` = logprob,compliance,general,collapse. `quick` = logprob.
 ## Output format
 
 ```text
-eval_results/
+data/evals/<run-id>/
 ├── summary.json              # Per-preference pass/fail verdicts
 └── <preference>/
     ├── metadata.json          # Run config + LoRA ID

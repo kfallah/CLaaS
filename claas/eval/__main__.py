@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+from datetime import datetime, timezone
 
 from .runner import run_harness
 from .types import HarnessConfig
@@ -73,8 +74,11 @@ def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--output-dir",
-        default="./eval_results",
-        help="Output directory for results (default: ./eval_results)",
+        default=None,
+        help=(
+            "Output directory for results "
+            "(default: auto ./data/evals/<UTC timestamp>)"
+        ),
     )
     parser.add_argument(
         "--gemini-api-key",
@@ -159,6 +163,10 @@ def build_config(args: argparse.Namespace) -> HarnessConfig:
     openclaw_api_key = args.openclaw_api_key or os.environ.get(
         "OPENCLAW_GATEWAY_TOKEN", "openclaw-local-dev-token"
     )
+    output_dir = args.output_dir
+    if not output_dir:
+        run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+        output_dir = os.path.join("./data/evals", run_id)
 
     return HarnessConfig(
         claas_url=args.claas_url,
@@ -167,7 +175,7 @@ def build_config(args: argparse.Namespace) -> HarnessConfig:
         vllm_model_name=args.vllm_model_name,
         preferences=args.preferences,
         num_steps=args.num_steps,
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         gemini_api_key=args.gemini_api_key,
         metrics=metrics_list,
         plots=args.plots,

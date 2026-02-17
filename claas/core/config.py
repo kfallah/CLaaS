@@ -123,7 +123,7 @@ class ProxyConfig:
 
 def _build_base_fields() -> dict[str, object]:
     return {
-        "feedback_log_dir": _env("FEEDBACK_LOG_DIR", "./feedback_logs"),
+        "feedback_log_dir": _env("FEEDBACK_LOG_DIR", "./data/feedback"),
         "hf_token": _env("HF_TOKEN", ""),
         "lora_root": _env("CLAAS_LORA_ROOT", "/loras"),
         "storage_backend": _env("CLAAS_STORAGE_BACKEND", "modal_volume"),
