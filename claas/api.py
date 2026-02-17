@@ -853,7 +853,14 @@ async def eval_dashboard(results_dir: str = Query(default="./eval_results")) -> 
     """
     from .eval.dashboard import eval_dashboard_html
 
-    content = await asyncio.to_thread(eval_dashboard_html, results_dir)
+    base_dir = Path("./eval_results").resolve()
+    requested_dir = Path(results_dir).resolve()
+    if not requested_dir.is_relative_to(base_dir):
+        raise HTTPException(
+            status_code=400,
+            detail="results_dir must be within ./eval_results",
+        )
+    content = await asyncio.to_thread(eval_dashboard_html, str(requested_dir))
     return HTMLResponse(content=content)
 
 
