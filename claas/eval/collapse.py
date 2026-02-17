@@ -66,7 +66,7 @@ import math
 
 import httpx
 
-from .types import ChatMessage, CollapseMetrics, EvalRollout
+from .types import DEFAULT_SYSTEM_PROMPT, ChatMessage, CollapseMetrics, EvalRollout
 from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
@@ -132,8 +132,6 @@ async def measure_entropy_and_mean_logprob(
     model: str,
     prompt: str = COLLAPSE_PROBE,
     timeout_s: float = 60.0,
-    system_prompt: str | None = None,
-    prompt_preamble: list[ChatMessage] | None = None,
     rollout_log: list[EvalRollout] | None = None,
     openclaw_url: str | None = None,
     openclaw_api_key: str = "openclaw-local-dev-token",
@@ -172,19 +170,10 @@ async def measure_entropy_and_mean_logprob(
         # Fallback: direct to vLLM
         base_url = vllm_url
         headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
-        messages = (
-            list(prompt_preamble or [])
-            + (
-                [{"role": "system", "content": system_prompt}]
-                if system_prompt
-                and not any(
-                    m.get("role") == "system" and m.get("content") == system_prompt
-                    for m in (prompt_preamble or [])
-                )
-                else []
-            )
-            + [{"role": "user", "content": prompt}]
-        )
+        messages = [
+            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
         req_model = model
 
     async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
@@ -237,12 +226,9 @@ async def measure_entropy_and_mean_logprob(
         else 0.0
     )
     if rollout_log is not None:
-        rollout_msgs: list[ChatMessage] = list(prompt_preamble or [])
-        if system_prompt and not any(
-            m.get("role") == "system" and m.get("content") == system_prompt
-            for m in rollout_msgs
-        ):
-            rollout_msgs.append(ChatMessage(role="system", content=system_prompt))
+        rollout_msgs: list[ChatMessage] = []
+        if not openclaw_url:
+            rollout_msgs.append(ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
         rollout_msgs.append(ChatMessage(role="user", content=prompt))
         rollout_msgs.append(ChatMessage(role="assistant", content=response_text))
         rollout_log.append(
@@ -332,8 +318,6 @@ async def measure_self_rouge_l(
     prompt: str = COLLAPSE_PROBE,
     n_samples: int = 3,
     timeout_s: float = 60.0,
-    system_prompt: str | None = None,
-    prompt_preamble: list[ChatMessage] | None = None,
     rollout_log: list[EvalRollout] | None = None,
     openclaw_url: str | None = None,
     openclaw_api_key: str = "openclaw-local-dev-token",
@@ -348,19 +332,10 @@ async def measure_self_rouge_l(
     else:
         base_url = vllm_url
         headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
-        messages = (
-            list(prompt_preamble or [])
-            + (
-                [{"role": "system", "content": system_prompt}]
-                if system_prompt
-                and not any(
-                    m.get("role") == "system" and m.get("content") == system_prompt
-                    for m in (prompt_preamble or [])
-                )
-                else []
-            )
-            + [{"role": "user", "content": prompt}]
-        )
+        messages = [
+            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
         req_model = model
 
     responses = []
@@ -392,12 +367,9 @@ async def measure_self_rouge_l(
             scores.append(rouge_l_score(clean_responses[i], clean_responses[j]))
 
     if rollout_log is not None:
-        base_msgs: list[ChatMessage] = list(prompt_preamble or [])
-        if system_prompt and not any(
-            m.get("role") == "system" and m.get("content") == system_prompt
-            for m in base_msgs
-        ):
-            base_msgs.append(ChatMessage(role="system", content=system_prompt))
+        base_msgs: list[ChatMessage] = []
+        if not openclaw_url:
+            base_msgs.append(ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
         for idx, response in enumerate(responses):
             sample_msgs = list(base_msgs)
             sample_msgs.append(ChatMessage(role="user", content=prompt))
@@ -429,8 +401,6 @@ async def measure_collapse(
     model: str,
     baseline_entropy: float | None = None,
     baseline_mean_logprob: float | None = None,
-    system_prompt: str | None = None,
-    prompt_preamble: list[ChatMessage] | None = None,
     rollout_log: list[EvalRollout] | None = None,
     openclaw_url: str | None = None,
     openclaw_api_key: str = "openclaw-local-dev-token",
@@ -446,8 +416,6 @@ async def measure_collapse(
         vllm_url=vllm_url,
         vllm_api_key=vllm_api_key,
         model=model,
-        system_prompt=system_prompt,
-        prompt_preamble=prompt_preamble,
         rollout_log=rollout_log,
         openclaw_url=openclaw_url,
         openclaw_api_key=openclaw_api_key,
@@ -457,8 +425,6 @@ async def measure_collapse(
         vllm_url,
         vllm_api_key,
         model,
-        system_prompt=system_prompt,
-        prompt_preamble=prompt_preamble,
         rollout_log=rollout_log,
         openclaw_url=openclaw_url,
         openclaw_api_key=openclaw_api_key,

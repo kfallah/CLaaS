@@ -30,11 +30,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 
 from .runner import run_harness
-from .types import ChatMessage, HarnessConfig
+from .types import HarnessConfig
 
 
 def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
@@ -113,24 +112,6 @@ def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
         help="Random seed (default: 42)",
     )
     parser.add_argument(
-        "--system-prompt",
-        default=None,
-        help="Optional system prompt prepended to all eval chat generations",
-    )
-    parser.add_argument(
-        "--system-prompt-file",
-        default=None,
-        help="Path to file containing system prompt (overrides --system-prompt)",
-    )
-    parser.add_argument(
-        "--preamble-file",
-        default=None,
-        help=(
-            "Path to JSON containing chat message preamble to prepend to every eval generation. "
-            'Accepted formats: [{role,content}, ...] or {"messages": [...]}'
-        ),
-    )
-    parser.add_argument(
         "--openclaw-url",
         default=None,
         help=(
@@ -174,35 +155,10 @@ def build_config(args: argparse.Namespace) -> HarnessConfig:
     if args.collapse_steps is not None:
         collapse_steps = {int(s.strip()) for s in args.collapse_steps.split(",") if s.strip()}
 
-    system_prompt = args.system_prompt
-    if args.system_prompt_file:
-        with open(args.system_prompt_file) as f:
-            system_prompt = f.read().strip()
-    if system_prompt is None:
-        system_prompt = os.environ.get("EVAL_SYSTEM_PROMPT")
-
     openclaw_url = args.openclaw_url
     openclaw_api_key = args.openclaw_api_key or os.environ.get(
         "OPENCLAW_GATEWAY_TOKEN", "openclaw-local-dev-token"
     )
-
-    prompt_preamble: list[ChatMessage] = []
-    if args.preamble_file:
-        with open(args.preamble_file) as f:
-            raw = json.load(f)
-        if isinstance(raw, dict):
-            raw = raw.get("messages", [])
-        if not isinstance(raw, list):
-            raise ValueError('--preamble-file JSON must be a list or {"messages": [...]} format')
-        parsed: list[ChatMessage] = []
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            role = item.get("role")
-            content = item.get("content")
-            if role in {"system", "user", "assistant"} and isinstance(content, str):
-                parsed.append(ChatMessage(role=role, content=content))
-        prompt_preamble = parsed
 
     return HarnessConfig(
         claas_url=args.claas_url,
@@ -218,8 +174,6 @@ def build_config(args: argparse.Namespace) -> HarnessConfig:
         collapse_steps=collapse_steps,
         lora_id_prefix=args.lora_id_prefix,
         seed=args.seed,
-        system_prompt=system_prompt,
-        prompt_preamble=prompt_preamble,
         openclaw_url=openclaw_url,
         openclaw_api_key=openclaw_api_key,
         proxy_url=args.proxy_url,

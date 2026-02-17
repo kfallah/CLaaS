@@ -8,6 +8,8 @@ from typing import Any
 
 from claas.core.types import ChatMessage
 
+DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
+
 
 @dataclass
 class EvalRollout:
@@ -35,8 +37,6 @@ class HarnessConfig:
     collapse_steps: set[int] | None = None
     lora_id_prefix: str = "eval"
     seed: int = 42
-    system_prompt: str | None = None
-    prompt_preamble: list[ChatMessage] = field(default_factory=list)
     openclaw_url: str | None = None
     openclaw_api_key: str = "openclaw-local-dev-token"
     proxy_url: str | None = None
@@ -142,8 +142,6 @@ class MetricContext:
     baseline: EvalMetrics
     response_text: str | None = None
     generate: Callable[[str], Awaitable[str]] | None = None
-    system_prompt: str | None = None
-    prompt_preamble: list[ChatMessage] = field(default_factory=list)
     openclaw_url: str | None = None
     openclaw_api_key: str = "openclaw-local-dev-token"
     proxy_url: str | None = None

@@ -57,7 +57,7 @@ import httpx
 from claas.core.types import ChatMessage
 
 from .preferences import LogprobPair
-from .types import LogprobMargin
+from .types import DEFAULT_SYSTEM_PROMPT, LogprobMargin
 
 logger = logging.getLogger(__name__)
 
@@ -167,20 +167,19 @@ async def measure_logprob_margin(
     pair: LogprobPair,
     baseline_margin: float | None = None,
     proxy_url: str | None = None,
-    system_prompt: str | None = None,
+    use_default_system_prompt: bool = True,
 ) -> LogprobMargin:
     """Measure the logprob margin between positive and negative examples.
 
-    When ``system_prompt`` is provided it is prepended to the pair's prompt
-    messages so that scoring is consistent with what the model sees through
-    OpenClaw during generation.
+    In direct-vLLM mode, prepend the default system prompt so scoring
+    matches non-OpenClaw generation inputs.
     """
     messages = list(pair.prompt_messages)
-    if system_prompt and not any(
-        m.get("role") == "system" and m.get("content") == system_prompt
+    if use_default_system_prompt and not any(
+        m.get("role") == "system" and m.get("content") == DEFAULT_SYSTEM_PROMPT
         for m in messages
     ):
-        messages.insert(0, ChatMessage(role="system", content=system_prompt))
+        messages.insert(0, ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
 
     if proxy_url:
         positive_lp = await fetch_response_logprob_sum_via_proxy(

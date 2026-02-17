@@ -14,7 +14,14 @@ import httpx
 from .capability import evaluate_general_capability
 from .collapse import measure_collapse
 from .logprob import measure_logprob_margin
-from .types import ChatMessage, EvalMetrics, EvalRollout, LogprobMargin, MetricContext
+from .types import (
+    DEFAULT_SYSTEM_PROMPT,
+    ChatMessage,
+    EvalMetrics,
+    EvalRollout,
+    LogprobMargin,
+    MetricContext,
+)
 from .verifiers import explain_verifier, run_verifier
 
 logger = logging.getLogger(__name__)
@@ -25,14 +32,11 @@ DEFAULT_COLLAPSE_STEPS = {0, 5, 10, 15, 19}
 def _prefixed_messages(
     prompt: str,
     response_text: str | None,
-    system_prompt: str | None,
-    prompt_preamble: list[ChatMessage],
+    include_default_system_prompt: bool,
 ) -> list[ChatMessage]:
-    messages: list[ChatMessage] = list(prompt_preamble)
-    if system_prompt and not any(
-        m.get("role") == "system" and m.get("content") == system_prompt for m in messages
-    ):
-        messages.append(ChatMessage(role="system", content=system_prompt))
+    messages: list[ChatMessage] = []
+    if include_default_system_prompt:
+        messages.append(ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
     messages.append(ChatMessage(role="user", content=prompt))
     if response_text is not None:
         messages.append(ChatMessage(role="assistant", content=response_text))
@@ -59,7 +63,7 @@ class LogprobMetric:
             margin = await measure_logprob_margin(
                 ctx.vllm_url, ctx.vllm_api_key, ctx.vllm_model, pair, baseline_margin,
                 proxy_url=ctx.proxy_url,
-                system_prompt=ctx.system_prompt,
+                use_default_system_prompt=ctx.openclaw_url is None,
             )
             margins.append(margin)
         if margins:
@@ -92,8 +96,7 @@ class ComplianceMetric:
                         messages=_prefixed_messages(
                             prompt=probe_prompt,
                             response_text=response_text,
-                            system_prompt=ctx.system_prompt,
-                            prompt_preamble=ctx.prompt_preamble,
+                            include_default_system_prompt=ctx.openclaw_url is None,
                         ),
                         metadata={
                             "verifier": ctx.pref.verifier_name,
@@ -110,8 +113,7 @@ class ComplianceMetric:
                         messages=_prefixed_messages(
                             prompt=probe_prompt,
                             response_text=None,
-                            system_prompt=ctx.system_prompt,
-                            prompt_preamble=ctx.prompt_preamble,
+                            include_default_system_prompt=ctx.openclaw_url is None,
                         ),
                         metadata={"error": str(e), "verifier": ctx.pref.verifier_name},
                     )
@@ -131,8 +133,6 @@ class GeneralMetric:
                 ctx.vllm_url,
                 ctx.vllm_api_key,
                 ctx.vllm_model,
-                system_prompt=ctx.system_prompt,
-                prompt_preamble=ctx.prompt_preamble,
                 rollout_log=rollout_log,
                 openclaw_url=ctx.openclaw_url,
                 openclaw_api_key=ctx.openclaw_api_key,
@@ -160,8 +160,6 @@ class CollapseMetric:
                 ctx.vllm_url, ctx.vllm_api_key, ctx.vllm_model,
                 baseline_entropy=baseline_entropy,
                 baseline_mean_logprob=baseline_mean_logprob,
-                system_prompt=ctx.system_prompt,
-                prompt_preamble=ctx.prompt_preamble,
                 rollout_log=rollout_log,
                 openclaw_url=ctx.openclaw_url,
                 openclaw_api_key=ctx.openclaw_api_key,

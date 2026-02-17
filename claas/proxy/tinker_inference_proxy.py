@@ -127,7 +127,11 @@ class _SamplerHolder:
 
     def _ensure(self) -> None:
         with self._lock:
-            if self._sampler is not None:
+            if (
+                self._sampler is not None
+                and self._tokenizer is not None
+                and self._renderer is not None
+            ):
                 return
             proxy_cfg = get_proxy_config()
             api_key = proxy_cfg.tinker_api_key

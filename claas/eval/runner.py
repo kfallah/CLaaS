@@ -21,6 +21,7 @@ from .metrics import Metric, build_metrics
 from .plotting import generate_plots
 from .preferences import PreferenceConfig, get_preference_configs
 from .types import (
+    DEFAULT_SYSTEM_PROMPT,
     ChatMessage,
     EvalMetrics,
     ExperimentResult,
@@ -36,17 +37,12 @@ logger = logging.getLogger(__name__)
 
 def _build_messages(
     prompt: str,
-    system_prompt: str | None = None,
-    prompt_preamble: list[ChatMessage] | None = None,
 ) -> list[ChatMessage]:
-    """Build chat messages with optional preamble and system prompt."""
-    messages: list[ChatMessage] = list(prompt_preamble or [])
-    if system_prompt and not any(
-        m.get("role") == "system" and m.get("content") == system_prompt for m in messages
-    ):
-        messages.append(ChatMessage(role="system", content=system_prompt))
-    messages.append(ChatMessage(role="user", content=prompt))
-    return messages
+    """Build direct-vLLM messages with a default system prompt."""
+    return [
+        ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT),
+        ChatMessage(role="user", content=prompt),
+    ]
 
 
 async def _init_lora(config: HarnessConfig, lora_id: str) -> str:
@@ -163,11 +159,7 @@ async def _generate_response(
             else {}
         )
         base_url = config.vllm_url
-        messages = _build_messages(
-            prompt=prompt,
-            system_prompt=config.system_prompt,
-            prompt_preamble=config.prompt_preamble,
-        )
+        messages = _build_messages(prompt=prompt)
         body = {
             "model": model,
             "messages": messages,
@@ -249,11 +241,7 @@ async def _fetch_rollout_logprobs_vllm(
     chat template is applied server-side (no manual ChatML construction).
     """
     headers = {"Authorization": f"Bearer {config.vllm_api_key}"} if config.vllm_api_key else {}
-    messages = _build_messages(
-        prompt=prompt,
-        system_prompt=config.system_prompt,
-        prompt_preamble=config.prompt_preamble,
-    )
+    messages = _build_messages(prompt=prompt)
 
     async with httpx.AsyncClient(base_url=config.vllm_url, timeout=60.0) as client:
         # Tokenize prompt messages to learn token count
@@ -330,8 +318,6 @@ async def _measure_eval_metrics(
         baseline=baseline,
         response_text=response_text,
         generate=generate,
-        system_prompt=config.system_prompt,
-        prompt_preamble=config.prompt_preamble,
         openclaw_url=config.openclaw_url,
         openclaw_api_key=config.openclaw_api_key,
         proxy_url=config.proxy_url,
