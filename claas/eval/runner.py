@@ -210,7 +210,7 @@ async def _fetch_cached_completion(
         resp.raise_for_status()
 
     data = resp.json()
-    return data["prompt"], data["response"], data["logprobs"]
+    return data["prompt"], data["response"], data["logprobs"] or []
 
 
 async def _generate_and_collect(
