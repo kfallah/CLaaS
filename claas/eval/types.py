@@ -131,44 +131,6 @@ class GeminiEvalResult:
 
 
 @dataclass
-class CriteriaResult:
-    """Pass/marginal/fail verdicts for each success criterion."""
-
-    logprob_margin_increase: str | None = None
-    preference_compliance: str | None = None
-    capability_retention: str | None = None
-    entropy_ratio: str | None = None
-    self_rouge_l: str | None = None
-
-    def verdicts(self) -> list[str]:
-        """Return all non-None verdict values."""
-        return [
-            v
-            for v in [
-                self.logprob_margin_increase,
-                self.preference_compliance,
-                self.capability_retention,
-                self.entropy_ratio,
-                self.self_rouge_l,
-            ]
-            if v is not None
-        ]
-
-
-@dataclass
-class PreferenceSummary:
-    """Summary result for a single preference experiment."""
-
-    preference: str
-    lora_id: str
-    criteria: CriteriaResult = field(default_factory=CriteriaResult)
-    logprob_margin_delta: float | None = None
-    final_compliance: float | None = None
-    capability_ratio: float | None = None
-    overall: str = "pending"
-
-
-@dataclass
 class MetricContext:
     """Bundled arguments passed to each metric's measure() method."""
 

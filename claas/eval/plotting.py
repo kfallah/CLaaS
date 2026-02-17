@@ -117,7 +117,6 @@ def _plot_learning_curves(
     ax.set_ylabel("Preference Compliance")
     ax.set_title("Learning Curves: Preference Compliance Over Steps")
     ax.set_ylim(-0.05, 1.05)
-    ax.axhline(y=0.8, color="green", linestyle="--", alpha=0.5, label="Pass threshold")
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -169,26 +168,18 @@ def _plot_collapse_dashboard(
     # Entropy ratio
     axes[0].set_title("Entropy Ratio to Baseline")
     axes[0].set_xlabel("Step")
-    axes[0].axhline(y=0.6, color="orange", linestyle="--", alpha=0.5)
-    axes[0].axhline(y=0.4, color="red", linestyle="--", alpha=0.5)
-    axes[0].axhspan(0.6, 1.5, alpha=0.1, color="green")
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
 
     # Self-ROUGE-L
     axes[1].set_title("Self-ROUGE-L")
     axes[1].set_xlabel("Step")
-    axes[1].axhline(y=0.85, color="orange", linestyle="--", alpha=0.5)
-    axes[1].axhline(y=0.95, color="red", linestyle="--", alpha=0.5)
-    axes[1].axhspan(0.0, 0.85, alpha=0.1, color="green")
     axes[1].legend()
     axes[1].grid(True, alpha=0.3)
 
     # Logprob drift
     axes[2].set_title("Logprob Drift from Baseline")
     axes[2].set_xlabel("Step")
-    axes[2].axhline(y=2.0, color="red", linestyle="--", alpha=0.5)
-    axes[2].axhspan(0.0, 2.0, alpha=0.1, color="green")
     axes[2].legend()
     axes[2].grid(True, alpha=0.3)
 
@@ -223,7 +214,6 @@ def _plot_forgetting(
     ax.set_ylabel("General Capability Score")
     ax.set_title("Forgetting: General Capability Over Training Steps")
     ax.set_ylim(-0.05, 1.05)
-    ax.axhline(y=0.9, color="green", linestyle="--", alpha=0.5, label="0.9x threshold")
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()

@@ -69,17 +69,37 @@
       .pref-section {
         margin-top: 1.5rem;
       }
-      .verdict-pass {
-        color: #16a34a;
-        font-weight: 600;
+      .run-section {
+        margin-bottom: 2rem;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        padding: 1rem;
+        background: #ffffff;
       }
-      .verdict-fail {
-        color: #dc2626;
-        font-weight: 600;
+      .run-section > summary {
+        font-size: 1.15rem;
+        cursor: pointer;
+        padding: 0.4rem 0;
       }
-      .verdict-marginal {
-        color: #d97706;
-        font-weight: 600;
+      .plot-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+        gap: 1rem;
+        margin: 1rem 0;
+      }
+      .plot-item {
+        text-align: center;
+      }
+      .plot-item img {
+        max-width: 100%;
+        height: auto;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+      }
+      .plot-item p {
+        margin: 0.3rem 0 0;
+        font-size: 0.85rem;
+        color: #475569;
       }
       details {
         margin-bottom: 0.75rem;

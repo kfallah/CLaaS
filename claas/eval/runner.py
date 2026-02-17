@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -21,15 +22,14 @@ from .plotting import generate_plots
 from .preferences import PreferenceConfig, get_preference_configs
 from .types import (
     ChatMessage,
-    CriteriaResult,
     EvalMetrics,
     ExperimentResult,
     HarnessConfig,
     MetricContext,
-    PreferenceSummary,
     SDPOMetrics,
     StepResult,
 )
+from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
 
@@ -185,57 +185,56 @@ async def _generate_response(
         return resp.json()["choices"][0]["message"]["content"]
 
 
-async def _score_via_proxy(
+async def _fetch_cached_completion(
     proxy_url: str,
-    prompt: str,
-    response_content: str,
-) -> list[float]:
-    """Score a prompt+response via the Tinker proxy and return per-token logprobs.
+    visible_content: str,
+) -> tuple[str, str, list[float]]:
+    """Fetch the cached raw completion from the proxy by content hash.
 
-    We use the proxy's ``/v1/score`` endpoint instead of the completion cache
-    (``/v1/completions/raw``) because intermediaries like OpenClaw may transform
-    the response content before returning it to the caller (e.g. stripping
-    ``</think>`` tags from Qwen3 thinking-mode output).  This causes the
-    SHA-256 content hash to diverge from what the proxy originally cached,
-    resulting in a permanent 404 on cache lookup.  Scoring via ``/v1/score``
-    avoids the hash entirely and produces logprobs aligned with the completion
-    tokens as tokenized by ``tokenizer.encode(response, add_special_tokens=False)``,
-    which matches how the Tinker training engine tokenizes the response.
+    The proxy caches ``{prompt, response, logprobs}`` keyed by
+    ``SHA-256(stripped_content)``.  Since the proxy now strips thinking
+    before returning content, ``visible_content`` already matches the
+    cache key.  We apply ``strip_thinking`` defensively in case the caller
+    passes un-stripped text.
+
+    Returns ``(real_prompt, raw_response, rollout_logprobs)``.
     """
+    content_hash = hashlib.sha256(
+        strip_thinking(visible_content).encode("utf-8"),
+    ).hexdigest()
     async with httpx.AsyncClient(base_url=proxy_url, timeout=60.0) as client:
-        resp = await client.post(
-            "/v1/score",
-            json={
-                "messages": [{"role": "user", "content": prompt}],
-                "completion": response_content,
-            },
+        resp = await client.get(
+            "/v1/completions/raw",
+            params={"content_hash": content_hash},
         )
         resp.raise_for_status()
 
-    return resp.json()["logprobs"]
+    data = resp.json()
+    return data["prompt"], data["response"], data["logprobs"]
 
 
 async def _generate_and_collect(
     config: HarnessConfig,
     model: str,
     prompt: str,
-) -> tuple[str, str, list[float]]:
-    """Generate via OpenClaw, then score the response for rollout logprobs.
+) -> tuple[str, str, str, list[float]]:
+    """Generate via OpenClaw, then fetch cached raw completion from the proxy.
 
     When ``config.openclaw_url`` is set, generation routes through the OpenClaw
-    gateway which prepends the full agent system prompt and context.  The
-    response is then scored via the Tinker proxy's ``/v1/score`` endpoint to
-    obtain per-token rollout logprobs.
+    gateway which prepends the full agent system prompt and context.  The proxy
+    strips thinking from the returned content and caches the raw completion
+    (with the full OpenClaw-templated prompt and generation-time logprobs)
+    keyed by ``SHA-256(visible_content)``.
 
-    Returns (parsed_content, response_for_feedback, rollout_logprobs).
+    Returns ``(visible_content, real_prompt, raw_response, rollout_logprobs)``.
     """
     assert config.proxy_url is not None
     content = await _generate_response(config, model, prompt, temperature=0.7)
 
-    rollout_lps = await _score_via_proxy(
-        config.proxy_url, prompt, content,
+    real_prompt, raw_response, rollout_lps = await _fetch_cached_completion(
+        config.proxy_url, content,
     )
-    return content, content, rollout_lps
+    return content, real_prompt, raw_response, rollout_lps
 
 
 async def _fetch_rollout_logprobs_vllm(
@@ -422,43 +421,27 @@ def _write_baseline(output_dir: str, preference: str, baseline: EvalMetrics) -> 
         json.dump(dataclasses.asdict(baseline), f, indent=2)
 
 
-def _evaluate_verdict(value: float, pass_thresh: float, marginal_thresh: float, higher_is_better: bool = True) -> str:
-    """Return 'pass', 'marginal', or 'fail' for a metric value."""
-    if higher_is_better:
-        if value > pass_thresh:
-            return "pass"
-        return "marginal" if value >= marginal_thresh else "fail"
-    # Lower is better (e.g. self_rouge_l)
-    if value < pass_thresh:
-        return "pass"
-    return "marginal" if value < marginal_thresh else "fail"
-
-
 def _write_summary(output_dir: str, results: list[ExperimentResult]) -> None:
-    """Write aggregated summary with pass/fail per success criteria."""
-    summaries: dict[str, PreferenceSummary] = {}
+    """Write aggregated summary with raw metric values (no verdicts)."""
+    summaries: dict[str, dict[str, object]] = {}
 
     for result in results:
-        criteria = CriteriaResult()
-        entry = PreferenceSummary(
-            preference=result.preference,
-            lora_id=result.lora_id,
-            criteria=criteria,
-        )
+        entry: dict[str, object] = {
+            "preference": result.preference,
+            "lora_id": result.lora_id,
+        }
 
-        # Final logprob margin increase
+        # Final logprob margin delta
         if result.steps and result.steps[-1].eval.logprob_margin:
-            delta = result.steps[-1].eval.logprob_margin.margin_delta_from_baseline
-            criteria.logprob_margin_increase = _evaluate_verdict(delta, 2.0, 0.5)
-            entry.logprob_margin_delta = delta
+            entry["logprob_margin_delta"] = (
+                result.steps[-1].eval.logprob_margin.margin_delta_from_baseline
+            )
 
         # Preference compliance @ final step
         if result.steps and result.steps[-1].eval.preference_compliance is not None:
-            compliance = result.steps[-1].eval.preference_compliance
-            criteria.preference_compliance = _evaluate_verdict(compliance, 0.8, 0.5)
-            entry.final_compliance = compliance
+            entry["final_compliance"] = result.steps[-1].eval.preference_compliance
 
-        # General capability retention
+        # General capability retention ratio
         if (
             result.baseline.general
             and result.steps
@@ -466,41 +449,15 @@ def _write_summary(output_dir: str, results: list[ExperimentResult]) -> None:
         ):
             baseline_score = result.baseline.general.general_score
             final_score = result.steps[-1].eval.general.general_score
-            ratio = final_score / baseline_score if baseline_score > 0 else 1.0
-            criteria.capability_retention = _evaluate_verdict(ratio, 0.9, 0.7)
-            entry.capability_ratio = ratio
-
-        # Collapse
-        collapse_entries = [s for s in result.steps if s.eval.collapse]
-        if collapse_entries:
-            last_collapse = collapse_entries[-1].eval.collapse
-            if last_collapse is not None:
-                if last_collapse.entropy_ratio_to_baseline is not None:
-                    criteria.entropy_ratio = _evaluate_verdict(
-                        last_collapse.entropy_ratio_to_baseline, 0.6, 0.4,
-                    )
-                criteria.self_rouge_l = _evaluate_verdict(
-                    last_collapse.self_rouge_l, 0.85, 0.95, higher_is_better=False,
-                )
-
-        # Overall pass
-        verdicts = criteria.verdicts()
-        if verdicts and all(v == "pass" for v in verdicts):
-            entry.overall = "pass"
-        elif any(v == "fail" for v in verdicts):
-            entry.overall = "fail"
-        else:
-            entry.overall = "marginal"
+            entry["capability_ratio"] = (
+                final_score / baseline_score if baseline_score > 0 else 1.0
+            )
 
         summaries[result.preference] = entry
 
     path = os.path.join(output_dir, "summary.json")
     with open(path, "w") as f:
-        json.dump(
-            {k: dataclasses.asdict(v) for k, v in summaries.items()},
-            f,
-            indent=2,
-        )
+        json.dump(summaries, f, indent=2)
     logger.info("Summary written to %s", path)
 
 
@@ -609,15 +566,15 @@ async def run_preference_experiment(
             ]
 
             if config.proxy_url:
-                # Tinker mode: generate via OpenClaw, score via proxy /v1/score
+                # Tinker mode: generate via OpenClaw, fetch cached completion
                 try:
-                    content, raw_response, rollout_lps = await _generate_and_collect(
-                        config, vllm_model, prompt,
+                    content, real_prompt, raw_response, rollout_lps = (
+                        await _generate_and_collect(config, vllm_model, prompt)
                     )
                     if response_text is None:
                         response_text = content
                     samples.append({
-                        "prompt": prompt,
+                        "prompt": real_prompt,
                         "response": raw_response,
                         "feedback": feedback_str,
                         "rollout_logprobs": rollout_lps,
