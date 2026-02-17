@@ -473,13 +473,10 @@ async def score_completion(req: ScoreRequest) -> dict[str, object]:
         result = tokenizer.apply_chat_template(
             dicts, add_generation_prompt=True, tokenize=True,
         )
-        if isinstance(result, list):
-            prompt_tokens: list[int] = result
-        else:
-            prompt_tokens = result["input_ids"]
+        prompt_tokens: list[int] = list(result if isinstance(result, list) else result["input_ids"])
     else:
         assert req.prompt is not None
-        prompt_tokens = tokenizer.encode(req.prompt, add_special_tokens=True)
+        prompt_tokens = list(tokenizer.encode(req.prompt, add_special_tokens=True))
     completion_tokens: list[int] = tokenizer.encode(
         req.completion, add_special_tokens=False,
     )
