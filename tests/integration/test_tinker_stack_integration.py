@@ -126,8 +126,8 @@ class TestTinkerStackRoundTrip:
                 init_payload = {
                     "lora_id": lora_id,
                     "base_model": tinker_stack.model,
-                    "lora_r": 8,
-                    "lora_alpha": 16,
+                    "lora_r": 32,
+                    "lora_alpha": 64,
                 }
                 logger.info("POST /v1/lora/init:\n%s", json.dumps(init_payload, indent=2))
                 init_resp = client.post(
@@ -314,8 +314,8 @@ class TestOpenClawEndToEnd:
                 init_payload = {
                     "lora_id": lora_id,
                     "base_model": tinker_stack.model,
-                    "lora_r": 8,
-                    "lora_alpha": 16,
+                    "lora_r": 32,
+                    "lora_alpha": 64,
                 }
                 logger.info("POST /v1/lora/init:\n%s", json.dumps(init_payload, indent=2))
                 init_resp = client.post(

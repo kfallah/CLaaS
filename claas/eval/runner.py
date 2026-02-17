@@ -15,6 +15,8 @@ import time
 
 import httpx
 
+from claas.core.sdpo_metrics import normalize_sdpo_metrics
+
 from .gemini import GeminiUser
 from .logprob import derive_vllm_model_name
 from .metrics import Metric, build_metrics
@@ -119,12 +121,12 @@ async def _submit_feedback(
     if not distill_result:
         return None
 
-    metadata = distill_result.get("metadata", {})
+    metadata = normalize_sdpo_metrics(distill_result.get("metadata", {}))
     return SDPOMetrics(
-        distill_loss=metadata.get("distill_loss", 0.0),
-        kl_reg=metadata.get("kl_reg", 0.0),
-        mean_is_ratio=metadata.get("mean_is_ratio", 0.0),
-        clip_fraction=metadata.get("clip_fraction", 0.0),
+        distill_loss=metadata.get("distill_loss"),
+        kl_reg=metadata.get("kl_reg"),
+        mean_is_ratio=metadata.get("mean_is_ratio"),
+        clip_fraction=metadata.get("clip_fraction"),
     )
 
 

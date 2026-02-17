@@ -25,7 +25,7 @@ class TrainingConfig(BaseModel):
     """Training configuration for distillation."""
 
     learning_rate: float = Field(
-        default=1e-4,
+        default=5e-5,
         ge=1e-6,
         le=1e-2,
         description="Learning rate for LoRA parameter updates",

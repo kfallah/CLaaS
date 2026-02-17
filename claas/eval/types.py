@@ -33,7 +33,7 @@ class HarnessConfig:
     output_dir: str = "./data/evals"
     gemini_api_key: str | None = None
     metrics: list[str] = field(default_factory=lambda: ["logprob"])
-    plots: bool = False
+    plots: bool = True
     collapse_steps: set[int] | None = None
     lora_id_prefix: str = "eval"
     seed: int = 42
@@ -41,7 +41,7 @@ class HarnessConfig:
     openclaw_api_key: str = "openclaw-local-dev-token"
     proxy_url: str | None = None
     base_model: str = "Qwen/Qwen3-8B"
-    batch_size: int = 1
+    batch_size: int = 4
 
 
 @dataclass
@@ -58,10 +58,10 @@ class LogprobMargin:
 class SDPOMetrics:
     """Metrics returned by a single SDPO distillation step."""
 
-    distill_loss: float
-    kl_reg: float
-    mean_is_ratio: float
-    clip_fraction: float
+    distill_loss: float | None
+    kl_reg: float | None
+    mean_is_ratio: float | None
+    clip_fraction: float | None
 
 
 @dataclass

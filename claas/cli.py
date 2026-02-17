@@ -149,8 +149,8 @@ def main() -> int:
         default="Qwen/Qwen3-8B",
         help="Base model name",
     )
-    init_parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
-    init_parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
+    init_parser.add_argument("--lora-r", type=int, default=32, help="LoRA rank")
+    init_parser.add_argument("--lora-alpha", type=int, default=64, help="LoRA alpha")
     init_parser.add_argument(
         "--target-modules",
         default=None,
@@ -182,7 +182,7 @@ def main() -> int:
     distill_parser.add_argument("--prompt", required=True, help="Prompt text")
     distill_parser.add_argument("--response", required=True, help="Response text")
     distill_parser.add_argument("--feedback", required=True, help="Feedback text")
-    distill_parser.add_argument("--learning-rate", type=float, default=1e-4)
+    distill_parser.add_argument("--learning-rate", type=float, default=5e-5)
     distill_parser.add_argument("--alpha", type=float, default=0.5)
     distill_parser.add_argument(
         "--teacher-mode",

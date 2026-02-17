@@ -49,7 +49,7 @@ def main() -> None:
     from claas.training.storage import create_initial_lora
 
     lora_r = int(os.environ.get("LORA_R", "32"))
-    lora_alpha = int(os.environ.get("LORA_ALPHA", str(lora_r * 2)))
+    lora_alpha = int(os.environ.get("LORA_ALPHA", "64"))
     full_id = create_initial_lora(
         LORA_NAME, base_model_name=BASE_MODEL, lora_r=lora_r, lora_alpha=lora_alpha,
     )

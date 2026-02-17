@@ -95,9 +95,9 @@ def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--plots",
-        action="store_true",
-        default=False,
-        help="Generate summary plots after evaluation (default: off)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Generate summary plots after evaluation (default: on; disable with --no-plots)",
     )
     parser.add_argument(
         "--collapse-steps",
@@ -144,8 +144,8 @@ def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=1,
-        help="Samples per feedback step (default: 1 = progressive, 4 = batched)",
+        default=4,
+        help="Samples per feedback step (default: 4 = batched)",
     )
 
 

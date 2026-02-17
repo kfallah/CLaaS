@@ -236,11 +236,14 @@ def _plot_sdpo_diagnostics(
             sdpo = s.sdpo_metrics
             if not sdpo:
                 continue
-            x_loss.append(s.step)
-            y_loss.append(sdpo.distill_loss)
-            x_kl.append(s.step)
-            y_kl.append(sdpo.kl_reg)
-            has_data = True
+            if sdpo.distill_loss is not None:
+                x_loss.append(s.step)
+                y_loss.append(sdpo.distill_loss)
+                has_data = True
+            if sdpo.kl_reg is not None:
+                x_kl.append(s.step)
+                y_kl.append(sdpo.kl_reg)
+                has_data = True
 
         if x_loss:
             ax1.plot(x_loss, y_loss, marker="o", label=pref)
