@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CLaaS Eval Dashboard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, Arial, sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 1.5rem;
+        background: #f8fafc;
+        color: #0f172a;
+      }
+      h1 {
+        margin-top: 0;
+      }
+      h2 {
+        margin-top: 2rem;
+        border-bottom: 2px solid #e2e8f0;
+        padding-bottom: 0.3rem;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #ffffff;
+        border: 1px solid #cbd5e1;
+        margin-bottom: 1.5rem;
+      }
+      th,
+      td {
+        padding: 0.6rem;
+        border-bottom: 1px solid #e2e8f0;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #e2e8f0;
+      }
+      .detail-row {
+        display: none;
+        background: #f8fafc;
+      }
+      .detail-panel {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+        gap: 0.75rem;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: #f1f5f9;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        padding: 0.6rem;
+        max-height: 20rem;
+        overflow: auto;
+      }
+      button {
+        cursor: pointer;
+      }
+      a {
+        color: #2563eb;
+      }
+      .pref-section {
+        margin-top: 1.5rem;
+      }
+      .verdict-pass {
+        color: #16a34a;
+        font-weight: 600;
+      }
+      .verdict-fail {
+        color: #dc2626;
+        font-weight: 600;
+      }
+      .verdict-marginal {
+        color: #d97706;
+        font-weight: 600;
+      }
+      details {
+        margin-bottom: 0.75rem;
+      }
+      details summary {
+        cursor: pointer;
+        font-weight: 500;
+      }
+    </style>
+    <script>
+      function toggleDetails(rowId, button) {
+        const detailRow = document.getElementById(rowId);
+        if (detailRow.style.display === 'table-row') {
+          detailRow.style.display = 'none';
+          button.textContent = 'Expand';
+          return;
+        }
+        detailRow.style.display = 'table-row';
+        button.textContent = 'Collapse';
+      }
+    </script>
+  </head>
+  <body>
+    <h1>CLaaS Eval Dashboard</h1>
+    {{CONTENT}}
+  </body>
+</html>

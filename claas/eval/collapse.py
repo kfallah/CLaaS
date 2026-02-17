@@ -114,7 +114,7 @@ async def measure_token_entropy(
     model: str,
     prompt: str = COLLAPSE_PROBE,
     timeout_s: float = 60.0,
-) -> float:
+) -> float | None:
     """Generate response with top_logprobs=20 and compute mean token entropy."""
     mean_entropy, _mean_logprob = await measure_entropy_and_mean_logprob(
         vllm_url=vllm_url,
@@ -135,28 +135,64 @@ async def measure_entropy_and_mean_logprob(
     system_prompt: str | None = None,
     prompt_preamble: list[ChatMessage] | None = None,
     rollout_log: list[EvalRollout] | None = None,
-) -> tuple[float, float]:
-    """Generate one response and return (mean_entropy, mean_logprob)."""
-    headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
+    openclaw_url: str | None = None,
+    openclaw_api_key: str = "openclaw-local-dev-token",
+    proxy_url: str | None = None,
+) -> tuple[float | None, float]:
+    """Generate one response and return (mean_entropy, mean_logprob).
 
-    async with httpx.AsyncClient(base_url=vllm_url, timeout=timeout_s) as client:
+    Routing:
+    - **OpenClaw + local vLLM** (openclaw_url set, proxy_url None): Generate
+      through OpenClaw which forwards to vLLM. vLLM returns logprobs and
+      top_logprobs in chat completion responses, so entropy works as before.
+    - **OpenClaw + Tinker proxy** (openclaw_url and proxy_url set): Generate
+      through OpenClaw which forwards to the proxy. The proxy doesn't return
+      top_logprobs, so entropy is None. After generation, score the response
+      via proxy /v1/score to get mean_logprob for drift detection.
+    - **Direct vLLM** (fallback, no openclaw_url): Legacy direct-to-vLLM path.
+    """
+    if openclaw_url and proxy_url:
+        # Tinker mode: generate through OpenClaw, score via proxy /v1/score
+        return await _entropy_and_logprob_tinker(
+            openclaw_url=openclaw_url,
+            openclaw_api_key=openclaw_api_key,
+            proxy_url=proxy_url,
+            prompt=prompt,
+            timeout_s=timeout_s,
+            rollout_log=rollout_log,
+        )
+
+    if openclaw_url:
+        # Local mode via OpenClaw: route through OpenClaw → vLLM
+        base_url = openclaw_url
+        headers = {"Authorization": f"Bearer {openclaw_api_key}"}
+        messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
+        req_model = "openclaw"
+    else:
+        # Fallback: direct to vLLM
+        base_url = vllm_url
+        headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
+        messages = (
+            list(prompt_preamble or [])
+            + (
+                [{"role": "system", "content": system_prompt}]
+                if system_prompt
+                and not any(
+                    m.get("role") == "system" and m.get("content") == system_prompt
+                    for m in (prompt_preamble or [])
+                )
+                else []
+            )
+            + [{"role": "user", "content": prompt}]
+        )
+        req_model = model
+
+    async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
         resp = await client.post(
             "/v1/chat/completions",
             json={
-                "model": model,
-                "messages": (
-                    list(prompt_preamble or [])
-                    + (
-                        [{"role": "system", "content": system_prompt}]
-                        if system_prompt
-                        and not any(
-                            m.get("role") == "system" and m.get("content") == system_prompt
-                            for m in (prompt_preamble or [])
-                        )
-                        else []
-                    )
-                    + [{"role": "user", "content": prompt}]
-                ),
+                "model": req_model,
+                "messages": messages,
                 "temperature": 0,
                 "max_tokens": 2048,
                 "logprobs": True,
@@ -167,8 +203,8 @@ async def measure_entropy_and_mean_logprob(
         resp.raise_for_status()
 
     choice = resp.json()["choices"][0]
-    message = choice.get("message", {})
-    response_text = message.get("content", "")
+    message_body = choice.get("message", {})
+    response_text = message_body.get("content", "")
     logprobs_content = choice.get("logprobs", {}).get("content", [])
 
     if not logprobs_content:
@@ -221,6 +257,72 @@ async def measure_entropy_and_mean_logprob(
             )
         )
     return (mean_entropy, mean_logprob)
+
+
+async def _entropy_and_logprob_tinker(
+    openclaw_url: str,
+    openclaw_api_key: str,
+    proxy_url: str,
+    prompt: str = COLLAPSE_PROBE,
+    timeout_s: float = 60.0,
+    rollout_log: list[EvalRollout] | None = None,
+) -> tuple[None, float]:
+    """Tinker mode: generate through OpenClaw, score via proxy /v1/score.
+
+    The proxy doesn't support top_logprobs, so entropy is unavailable (None).
+    Mean logprob is obtained by scoring the generated response via /v1/score.
+    """
+    headers = {"Authorization": f"Bearer {openclaw_api_key}"}
+
+    # Generate through OpenClaw
+    async with httpx.AsyncClient(base_url=openclaw_url, timeout=timeout_s) as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "openclaw",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "max_tokens": 2048,
+            },
+            headers=headers,
+        )
+        resp.raise_for_status()
+
+    response_text = resp.json()["choices"][0]["message"]["content"]
+
+    # Score via proxy /v1/score to get logprob sum
+    async with httpx.AsyncClient(base_url=proxy_url, timeout=timeout_s) as client:
+        score_resp = await client.post(
+            "/v1/score",
+            json={
+                "messages": [{"role": "user", "content": prompt}],
+                "completion": response_text,
+            },
+        )
+        score_resp.raise_for_status()
+
+    score_data = score_resp.json()
+    logprob_sum = score_data["logprob_sum"]
+    completion_tokens = score_data.get("completion_tokens", 1)
+    mean_logprob = logprob_sum / max(completion_tokens, 1)
+
+    if rollout_log is not None:
+        rollout_log.append(
+            EvalRollout(
+                metric="collapse",
+                messages=[
+                    ChatMessage(role="user", content=prompt),
+                    ChatMessage(role="assistant", content=response_text),
+                ],
+                metadata={
+                    "task": "entropy_probe",
+                    "mean_entropy": None,
+                    "mean_logprob": mean_logprob,
+                    "mode": "tinker",
+                },
+            )
+        )
+    return (None, mean_logprob)
 
 
 async def measure_self_rouge_l(
@@ -332,11 +434,13 @@ async def measure_collapse(
     rollout_log: list[EvalRollout] | None = None,
     openclaw_url: str | None = None,
     openclaw_api_key: str = "openclaw-local-dev-token",
+    proxy_url: str | None = None,
 ) -> CollapseMetrics:
     """Run all collapse detection checks and return metrics.
 
-    Entropy/logprob probes always go direct to vLLM (need logprobs).
-    Self-ROUGE-L samples route through OpenClaw when configured.
+    Both entropy/logprob probes and self-ROUGE-L route through OpenClaw
+    when configured. In Tinker mode (proxy_url set), entropy is unavailable
+    and mean_logprob is obtained via proxy /v1/score.
     """
     mean_entropy, mean_logprob = await measure_entropy_and_mean_logprob(
         vllm_url=vllm_url,
@@ -345,6 +449,9 @@ async def measure_collapse(
         system_prompt=system_prompt,
         prompt_preamble=prompt_preamble,
         rollout_log=rollout_log,
+        openclaw_url=openclaw_url,
+        openclaw_api_key=openclaw_api_key,
+        proxy_url=proxy_url,
     )
     self_rouge = await measure_self_rouge_l(
         vllm_url,
@@ -357,10 +464,12 @@ async def measure_collapse(
         openclaw_api_key=openclaw_api_key,
     )
 
-    # Entropy ratio
-    entropy_ratio = 1.0
-    if baseline_entropy and baseline_entropy > 0:
-        entropy_ratio = mean_entropy / baseline_entropy
+    # Entropy ratio (None when entropy unavailable, e.g. Tinker mode)
+    entropy_ratio: float | None = None
+    if mean_entropy is not None:
+        entropy_ratio = 1.0
+        if baseline_entropy and baseline_entropy > 0:
+            entropy_ratio = mean_entropy / baseline_entropy
 
     # Logprob drift from baseline mean token logprob.
     drift = 0.0
@@ -369,7 +478,7 @@ async def measure_collapse(
 
     # Alert conditions
     alert = False
-    if entropy_ratio < 0.6:
+    if entropy_ratio is not None and entropy_ratio < 0.6:
         logger.warning("COLLAPSE ALERT: entropy ratio %.2f < 0.6", entropy_ratio)
         alert = True
     if self_rouge > 0.85:

@@ -68,9 +68,9 @@ class SDPOMetrics:
 class CollapseMetrics:
     """Collapse detection metrics."""
 
-    mean_entropy: float = 0.0
+    mean_entropy: float | None = None
     mean_logprob: float = 0.0
-    entropy_ratio_to_baseline: float = 1.0
+    entropy_ratio_to_baseline: float | None = None
     self_rouge_l: float = 0.0
     mean_logprob_drift: float = 0.0
     alert: bool = False

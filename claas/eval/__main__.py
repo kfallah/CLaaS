@@ -1,13 +1,29 @@
 """CLI entry point for the evaluation harness.
 
-Usage:
-    python -m scripts.eval \
-        --claas-url http://localhost:8080 \
-        --vllm-url http://localhost:8000 \
-        --preferences no_emoji concise identity \
-        --num-steps 20 \
-        --output-dir ./eval_results \
-        --metrics logprob
+Both Docker stacks (local GPU + vLLM, and Tinker no-GPU) route generation
+through OpenClaw, which injects the real agent system prompt and context.
+
+Tinker stack (no GPU)::
+
+    python -m claas.eval \\
+        --openclaw-url http://localhost:18789 \\
+        --proxy-url http://localhost:8000 \\
+        --claas-url http://localhost:8080 \\
+        --base-model Qwen/Qwen3-Coder-30B-A3B-Instruct \\
+        --preferences no_emoji --metrics logprob --num-steps 10
+
+Local stack (GPU)::
+
+    python -m claas.eval \\
+        --openclaw-url http://localhost:18789 \\
+        --vllm-url http://localhost:8000 \\
+        --claas-url http://localhost:8080 \\
+        --base-model Qwen/Qwen3-8B \\
+        --preferences no_emoji --metrics all --num-steps 20
+
+Can also be invoked via the CLI::
+
+    claas eval --preferences no_emoji --metrics logprob --num-steps 10
 """
 
 from __future__ import annotations
@@ -21,10 +37,8 @@ from .runner import run_harness
 from .types import ChatMessage, HarnessConfig
 
 
-def parse_args() -> HarnessConfig:
-    parser = argparse.ArgumentParser(
-        description="SDPO Continual Learning Evaluation Harness",
-    )
+def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add all eval harness arguments to an argparse parser."""
     parser.add_argument(
         "--claas-url",
         default="http://localhost:8080",
@@ -113,17 +127,18 @@ def parse_args() -> HarnessConfig:
         default=None,
         help=(
             "Path to JSON containing chat message preamble to prepend to every eval generation. "
-            "Accepted formats: [{role,content}, ...] or {\"messages\": [...]}"
+            'Accepted formats: [{role,content}, ...] or {"messages": [...]}'
         ),
     )
     parser.add_argument(
         "--openclaw-url",
         default=None,
         help=(
-            "OpenClaw gateway URL (e.g. http://localhost:18789). When set, chat completions "
-            "for compliance/general/collapse metrics are routed through OpenClaw's "
-            "/v1/chat/completions endpoint, which includes the full agent system prompt and "
-            "context. Requires gateway chatCompletions endpoint to be enabled."
+            "OpenClaw gateway URL (e.g. http://localhost:18789). Primary generation endpoint "
+            "for both local and Tinker stacks. All chat completions route through OpenClaw's "
+            "/v1/chat/completions endpoint, which injects the full agent system prompt and "
+            "context. OpenClaw forwards to the backend (vLLM or Tinker proxy) which applies "
+            "the real tokenizer chat template."
         ),
     )
     parser.add_argument(
@@ -148,8 +163,9 @@ def parse_args() -> HarnessConfig:
         help="Samples per feedback step (default: 1 = progressive, 4 = batched)",
     )
 
-    args = parser.parse_args()
 
+def build_config(args: argparse.Namespace) -> HarnessConfig:
+    """Build a HarnessConfig from parsed CLI arguments."""
     # Parse --metrics comma string
     metrics_list = [m.strip() for m in args.metrics.split(",") if m.strip()]
 
@@ -177,7 +193,7 @@ def parse_args() -> HarnessConfig:
         if isinstance(raw, dict):
             raw = raw.get("messages", [])
         if not isinstance(raw, list):
-            raise ValueError("--preamble-file JSON must be a list or {\"messages\": [...]} format")
+            raise ValueError('--preamble-file JSON must be a list or {"messages": [...]} format')
         parsed: list[ChatMessage] = []
         for item in raw:
             if not isinstance(item, dict):
@@ -210,6 +226,15 @@ def parse_args() -> HarnessConfig:
         base_model=args.base_model,
         batch_size=args.batch_size,
     )
+
+
+def parse_args() -> HarnessConfig:
+    parser = argparse.ArgumentParser(
+        description="SDPO Continual Learning Evaluation Harness",
+    )
+    add_eval_arguments(parser)
+    args = parser.parse_args()
+    return build_config(args)
 
 
 def main() -> None:

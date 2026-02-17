@@ -59,6 +59,7 @@ class LogprobMetric:
             margin = await measure_logprob_margin(
                 ctx.vllm_url, ctx.vllm_api_key, ctx.vllm_model, pair, baseline_margin,
                 proxy_url=ctx.proxy_url,
+                system_prompt=ctx.system_prompt,
             )
             margins.append(margin)
         if margins:
@@ -164,6 +165,7 @@ class CollapseMetric:
                 rollout_log=rollout_log,
                 openclaw_url=ctx.openclaw_url,
                 openclaw_api_key=ctx.openclaw_api_key,
+                proxy_url=ctx.proxy_url,
             )
             metrics.rollouts.extend(rollout_log)
         except (httpx.HTTPError, KeyError) as e:

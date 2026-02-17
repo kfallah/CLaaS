@@ -7,15 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import hashlib
 import json
 import logging
 import os
 import time
 
 import httpx
-
-from claas.training.teacher_helpers import messages_to_chatml
 
 from .gemini import GeminiUser
 from .logprob import derive_vllm_model_name
@@ -188,59 +185,57 @@ async def _generate_response(
         return resp.json()["choices"][0]["message"]["content"]
 
 
-async def _fetch_rollout_from_proxy_cache(
+async def _score_via_proxy(
     proxy_url: str,
+    prompt: str,
     response_content: str,
-) -> tuple[str, list[float]]:
-    """Fetch raw completion and rollout logprobs from the Tinker proxy cache.
+) -> list[float]:
+    """Score a prompt+response via the Tinker proxy and return per-token logprobs.
 
-    Uses the content hash pattern from the integration tests.  Returns the
-    raw response text and logprobs as-is — they come from the same
-    ``seq.tokens`` / ``seq.logprobs`` and are already aligned.
+    We use the proxy's ``/v1/score`` endpoint instead of the completion cache
+    (``/v1/completions/raw``) because intermediaries like OpenClaw may transform
+    the response content before returning it to the caller (e.g. stripping
+    ``</think>`` tags from Qwen3 thinking-mode output).  This causes the
+    SHA-256 content hash to diverge from what the proxy originally cached,
+    resulting in a permanent 404 on cache lookup.  Scoring via ``/v1/score``
+    avoids the hash entirely and produces logprobs aligned with the completion
+    tokens as tokenized by ``tokenizer.encode(response, add_special_tokens=False)``,
+    which matches how the Tinker training engine tokenizes the response.
     """
-    content_hash = hashlib.sha256(response_content.encode("utf-8")).hexdigest()
-    async with httpx.AsyncClient(base_url=proxy_url, timeout=30.0) as client:
-        resp = await client.get(
-            "/v1/completions/raw",
-            params={"content_hash": content_hash},
+    async with httpx.AsyncClient(base_url=proxy_url, timeout=60.0) as client:
+        resp = await client.post(
+            "/v1/score",
+            json={
+                "messages": [{"role": "user", "content": prompt}],
+                "completion": response_content,
+            },
         )
         resp.raise_for_status()
 
-    data = resp.json()
-    return data["response"], data["logprobs"]
+    return resp.json()["logprobs"]
 
 
 async def _generate_and_collect(
     config: HarnessConfig,
+    model: str,
     prompt: str,
 ) -> tuple[str, str, list[float]]:
-    """Generate via proxy, then fetch rollout logprobs from cache.
+    """Generate via OpenClaw, then score the response for rollout logprobs.
 
-    Returns (parsed_content, raw_response, rollout_logprobs).
+    When ``config.openclaw_url`` is set, generation routes through the OpenClaw
+    gateway which prepends the full agent system prompt and context.  The
+    response is then scored via the Tinker proxy's ``/v1/score`` endpoint to
+    obtain per-token rollout logprobs.
+
+    Returns (parsed_content, response_for_feedback, rollout_logprobs).
     """
     assert config.proxy_url is not None
-    messages = _build_messages(
-        prompt=prompt,
-        system_prompt=config.system_prompt,
-        prompt_preamble=config.prompt_preamble,
-    )
-    async with httpx.AsyncClient(base_url=config.proxy_url, timeout=120.0) as client:
-        resp = await client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "",
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 2048,
-            },
-        )
-        resp.raise_for_status()
-        content: str = resp.json()["choices"][0]["message"]["content"]
+    content = await _generate_response(config, model, prompt, temperature=0.7)
 
-    raw_response, rollout_lps = await _fetch_rollout_from_proxy_cache(
-        config.proxy_url, content,
+    rollout_lps = await _score_via_proxy(
+        config.proxy_url, prompt, content,
     )
-    return content, raw_response, rollout_lps
+    return content, content, rollout_lps
 
 
 async def _fetch_rollout_logprobs_vllm(
@@ -249,34 +244,50 @@ async def _fetch_rollout_logprobs_vllm(
     prompt: str,
     response_text: str,
 ) -> list[float]:
-    """Score a prompt+response via vLLM and return per-token logprobs."""
+    """Score a prompt+response via vLLM and return per-token logprobs.
 
-    # We need per-token logprobs, not just the sum. Use the vLLM tokenize+completions
-    # pattern to get them.
+    Uses vLLM's message-based /tokenize endpoint so the real tokenizer
+    chat template is applied server-side (no manual ChatML construction).
+    """
     headers = {"Authorization": f"Bearer {config.vllm_api_key}"} if config.vllm_api_key else {}
     messages = _build_messages(
         prompt=prompt,
         system_prompt=config.system_prompt,
         prompt_preamble=config.prompt_preamble,
     )
-    chatml_prefix = messages_to_chatml(messages)
 
     async with httpx.AsyncClient(base_url=config.vllm_url, timeout=60.0) as client:
-        # Tokenize prompt to learn its length
+        # Tokenize prompt messages to learn token count
         tok_resp = await client.post(
             "/tokenize",
-            json={"model": model, "prompt": chatml_prefix},
+            json={"model": model, "messages": messages},
             headers=headers,
         )
         tok_resp.raise_for_status()
         prompt_token_count: int = tok_resp.json()["count"]
 
-        # Get logprobs for prompt + response
+        # Tokenize full conversation (prompt + response) to get token IDs
+        full_messages = list(messages) + [
+            {"role": "assistant", "content": response_text},
+        ]
+        full_tok_resp = await client.post(
+            "/tokenize",
+            json={
+                "model": model,
+                "messages": full_messages,
+                "add_generation_prompt": False,
+            },
+            headers=headers,
+        )
+        full_tok_resp.raise_for_status()
+        full_token_ids = full_tok_resp.json()["tokens"]
+
+        # Get logprobs for the full sequence
         comp_resp = await client.post(
             "/v1/completions",
             json={
                 "model": model,
-                "prompt": chatml_prefix + response_text,
+                "prompt": full_token_ids,
                 "max_tokens": 1,
                 "prompt_logprobs": 1,
             },
@@ -464,9 +475,10 @@ def _write_summary(output_dir: str, results: list[ExperimentResult]) -> None:
         if collapse_entries:
             last_collapse = collapse_entries[-1].eval.collapse
             if last_collapse is not None:
-                criteria.entropy_ratio = _evaluate_verdict(
-                    last_collapse.entropy_ratio_to_baseline, 0.6, 0.4,
-                )
+                if last_collapse.entropy_ratio_to_baseline is not None:
+                    criteria.entropy_ratio = _evaluate_verdict(
+                        last_collapse.entropy_ratio_to_baseline, 0.6, 0.4,
+                    )
                 criteria.self_rouge_l = _evaluate_verdict(
                     last_collapse.self_rouge_l, 0.85, 0.95, higher_is_better=False,
                 )
@@ -597,10 +609,10 @@ async def run_preference_experiment(
             ]
 
             if config.proxy_url:
-                # Tinker mode: generate via proxy, collect rollout logprobs from cache
+                # Tinker mode: generate via OpenClaw, score via proxy /v1/score
                 try:
                     content, raw_response, rollout_lps = await _generate_and_collect(
-                        config, prompt,
+                        config, vllm_model, prompt,
                     )
                     if response_text is None:
                         response_text = content

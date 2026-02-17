@@ -16,13 +16,16 @@ preferred response than to the dispreferred one.
 
 For each (prompt, response) pair the pipeline:
 
-1. Tokenizes the ChatML prompt prefix via ``POST /tokenize`` to learn
-   where the prompt ends and the response begins.
-2. Sends the full sequence (prefix + response) to ``POST /v1/completions``
-   with ``max_tokens=1`` and ``prompt_logprobs=1``, which returns the
-   per-token log probabilities assigned by the model to every token in
-   the input without generating any new tokens.
-3. Discards the logprobs that correspond to the prompt tokens (using the
+1. Tokenizes the prompt messages via ``POST /tokenize`` with
+   ``{"messages": [...]}`` so vLLM applies the real tokenizer chat
+   template server-side. This gives the prompt token count.
+2. Tokenizes the full conversation (prompt + assistant response) the
+   same way with ``add_generation_prompt: false`` to get the full token
+   IDs.
+3. Sends the full token IDs to ``POST /v1/completions`` with
+   ``max_tokens=1`` and ``prompt_logprobs=1``, which returns per-token
+   log probabilities for every token in the input.
+4. Discards the logprobs that correspond to the prompt tokens (using the
    count from step 1) and sums the logprobs for only the response tokens.
 
 The margin is then ``positive_logprob_sum - negative_logprob_sum``.
@@ -52,7 +55,6 @@ import re
 import httpx
 
 from claas.core.types import ChatMessage
-from claas.training.teacher_helpers import messages_to_chatml
 
 from .preferences import LogprobPair
 from .types import LogprobMargin
@@ -78,30 +80,50 @@ async def fetch_response_logprob_sum(
 ) -> float:
     """Fetch the total log-probability of response_text given prompt messages.
 
+    Uses vLLM's message-based /tokenize endpoint so the real tokenizer chat
+    template is applied server-side (no manual ChatML construction).
+
     Steps:
-    1. POST /tokenize to get prompt token count
-    2. POST /v1/completions with prompt+response, max_tokens=1, prompt_logprobs=1
-    3. Extract and sum logprobs for response tokens
+    1. POST /tokenize {"messages": [...]} to get prompt token count
+    2. POST /tokenize {"messages": [..., assistant], "add_generation_prompt": false}
+       to get full token IDs
+    3. POST /v1/completions with full token IDs, max_tokens=1, prompt_logprobs=1
+    4. Extract and sum logprobs for response tokens
     """
     headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
-    chatml_prefix = messages_to_chatml(messages)
 
     async with httpx.AsyncClient(base_url=vllm_url, timeout=timeout_s) as client:
-        # Step 1: tokenize the prompt to learn its length
+        # Step 1: tokenize prompt messages to learn token count
         tok_resp = await client.post(
             "/tokenize",
-            json={"model": model, "prompt": chatml_prefix},
+            json={"model": model, "messages": messages},
             headers=headers,
         )
         tok_resp.raise_for_status()
         prompt_token_count = tok_resp.json()["count"]
 
-        # Step 2: get logprobs for prompt + response
+        # Step 2: tokenize full conversation (prompt + response) to get token IDs
+        full_messages = list(messages) + [
+            {"role": "assistant", "content": response_text},
+        ]
+        full_tok_resp = await client.post(
+            "/tokenize",
+            json={
+                "model": model,
+                "messages": full_messages,
+                "add_generation_prompt": False,
+            },
+            headers=headers,
+        )
+        full_tok_resp.raise_for_status()
+        full_token_ids = full_tok_resp.json()["tokens"]
+
+        # Step 3: get logprobs for the full sequence
         comp_resp = await client.post(
             "/v1/completions",
             json={
                 "model": model,
-                "prompt": chatml_prefix + response_text,
+                "prompt": full_token_ids,
                 "max_tokens": 1,
                 "prompt_logprobs": 1,
             },
@@ -111,7 +133,7 @@ async def fetch_response_logprob_sum(
 
     raw_logprobs = comp_resp.json()["choices"][0]["prompt_logprobs"]
 
-    # Step 3: skip prompt tokens, extract logprob values, sum
+    # Step 4: skip prompt tokens, extract logprob values, sum
     logprob_sum = 0.0
     for entry in raw_logprobs[prompt_token_count:]:
         if entry is None:
@@ -145,21 +167,34 @@ async def measure_logprob_margin(
     pair: LogprobPair,
     baseline_margin: float | None = None,
     proxy_url: str | None = None,
+    system_prompt: str | None = None,
 ) -> LogprobMargin:
-    """Measure the logprob margin between positive and negative examples."""
+    """Measure the logprob margin between positive and negative examples.
+
+    When ``system_prompt`` is provided it is prepended to the pair's prompt
+    messages so that scoring is consistent with what the model sees through
+    OpenClaw during generation.
+    """
+    messages = list(pair.prompt_messages)
+    if system_prompt and not any(
+        m.get("role") == "system" and m.get("content") == system_prompt
+        for m in messages
+    ):
+        messages.insert(0, ChatMessage(role="system", content=system_prompt))
+
     if proxy_url:
         positive_lp = await fetch_response_logprob_sum_via_proxy(
-            proxy_url, pair.prompt_messages, pair.positive_response,
+            proxy_url, messages, pair.positive_response,
         )
         negative_lp = await fetch_response_logprob_sum_via_proxy(
-            proxy_url, pair.prompt_messages, pair.negative_response,
+            proxy_url, messages, pair.negative_response,
         )
     else:
         positive_lp = await fetch_response_logprob_sum(
-            vllm_url, vllm_api_key, model, pair.prompt_messages, pair.positive_response,
+            vllm_url, vllm_api_key, model, messages, pair.positive_response,
         )
         negative_lp = await fetch_response_logprob_sum(
-            vllm_url, vllm_api_key, model, pair.prompt_messages, pair.negative_response,
+            vllm_url, vllm_api_key, model, messages, pair.negative_response,
         )
 
     margin = positive_lp - negative_lp
