@@ -53,6 +53,21 @@ def _base_model() -> str:
 # Fallback renderer using the tokenizer's built-in chat template
 # ---------------------------------------------------------------------------
 
+
+def _apply_chat_template_ids(tokenizer: Any, dicts: list[dict[str, str]]) -> list[int]:
+    """Tokenize messages via apply_chat_template, returning token ids.
+
+    The tokenizer parameter is typed as ``Any`` so that ty doesn't try to
+    narrow the complex union return type of ``apply_chat_template``.
+    """
+    result = tokenizer.apply_chat_template(
+        dicts, add_generation_prompt=True, tokenize=True,
+    )
+    if isinstance(result, list):
+        return result
+    return result["input_ids"]
+
+
 class _TokenizerChatRenderer:
     """Minimal renderer that delegates to ``tokenizer.apply_chat_template``.
 
@@ -64,13 +79,7 @@ class _TokenizerChatRenderer:
 
     def build_generation_prompt(self, messages: list[Message]) -> T.ModelInput:
         dicts = [{"role": m["role"], "content": m.get("content", "")} for m in messages]
-        result: Any = self._tokenizer.apply_chat_template(
-            dicts, add_generation_prompt=True, tokenize=True,
-        )
-        if isinstance(result, list):
-            token_ids: list[int] = result
-        else:
-            token_ids = result["input_ids"]
+        token_ids = _apply_chat_template_ids(self._tokenizer, dicts)
         return T.ModelInput.from_ints(token_ids)
 
     def parse_response(self, tokens: list[int]) -> tuple[dict[str, str], list[Any]]:
@@ -228,8 +237,25 @@ class _CompletionCache:
                 return None
             return entry
 
-
 _completion_cache = _CompletionCache()
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove thinking blocks before hashing content.
+
+    Handles two cases:
+    1. Proper ``<think>...</think>`` blocks.
+    2. Orphaned ``</think>`` when the opening ``<think>`` was consumed as a
+       special token by the tokenizer (Qwen3).  Everything before the first
+       orphaned ``</think>`` is thinking text and is stripped.
+    """
+    text = _THINK_RE.sub("", text)
+    idx = text.find("</think>")
+    if idx >= 0:
+        text = text[idx + len("</think>"):]
+    return text.strip()
 
 
 async def _sample_async(
@@ -331,12 +357,13 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
     text_msg, _ = renderer.parse_response(seq.tokens)
     content = text_msg.get("content", "") if isinstance(text_msg, dict) else str(text_msg)
     content = _extract_final_channel(content)
+    content = _strip_thinking(content)
 
     # Cache raw completion for training pipeline retrieval
     tokenizer = _holder.tokenizer
     raw_completion_text = tokenizer.decode(seq.tokens, skip_special_tokens=False)
     prompt_text = tokenizer.decode(model_input.to_ints(), skip_special_tokens=False)
-    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    content_hash = hashlib.sha256(_strip_thinking(content).encode("utf-8")).hexdigest()
     _completion_cache.put(
         content_hash,
         _CompletionCacheEntry(
@@ -469,13 +496,7 @@ async def score_completion(req: ScoreRequest) -> dict[str, object]:
 
     if req.messages is not None:
         dicts = [{"role": m.role, "content": m.content or ""} for m in req.messages]
-        result: Any = tokenizer.apply_chat_template(
-            dicts, add_generation_prompt=True, tokenize=True,
-        )
-        if isinstance(result, list):
-            prompt_tokens: list[int] = result
-        else:
-            prompt_tokens = result["input_ids"]
+        prompt_tokens: list[int] = _apply_chat_template_ids(tokenizer, dicts)
     else:
         assert req.prompt is not None
         prompt_tokens = list(tokenizer.encode(req.prompt, add_special_tokens=True))

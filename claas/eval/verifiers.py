@@ -16,8 +16,19 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 def strip_thinking(text: str) -> str:
-    """Remove Qwen3 ``<think>...</think>`` blocks from model output."""
-    return _THINK_RE.sub("", text).strip()
+    """Remove thinking blocks from model output.
+
+    Handles two cases:
+    1. Proper ``<think>...</think>`` blocks.
+    2. Orphaned ``</think>`` when the opening ``<think>`` was consumed as a
+       special token by the tokenizer (Qwen3).  Everything before the first
+       orphaned ``</think>`` is thinking text and is stripped.
+    """
+    text = _THINK_RE.sub("", text)
+    idx = text.find("</think>")
+    if idx >= 0:
+        text = text[idx + len("</think>"):]
+    return text.strip()
 
 
 def _is_emoji(char: str) -> bool:

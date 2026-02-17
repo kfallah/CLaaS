@@ -166,7 +166,15 @@ export default function register(api: OpenClawPluginApi) {
       if (!parsedContent) {
         return { text: "No bot response found in the last conversation." };
       }
-      const contentHash = createHash("sha256").update(parsedContent).digest("hex");
+      // Strip proper <think>...</think> blocks, then strip orphaned </think>
+      // (when <think> was consumed as a special token by the tokenizer).
+      let visibleContent = parsedContent.replace(/<think>[\s\S]*?<\/think>/g, "");
+      const closeIdx = visibleContent.indexOf("</think>");
+      if (closeIdx >= 0) {
+        visibleContent = visibleContent.slice(closeIdx + "</think>".length);
+      }
+      visibleContent = visibleContent.trim();
+      const contentHash = createHash("sha256").update(visibleContent).digest("hex");
 
       let rawPrompt: string;
       let rawResponse: string;

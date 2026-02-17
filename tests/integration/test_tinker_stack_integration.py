@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import uuid
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,8 @@ import httpx
 import pytest
 
 from claas.training.teacher_helpers import build_teacher_messages
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 if TYPE_CHECKING:
     from conftest import TinkerStack
@@ -37,7 +40,12 @@ def _fetch_raw_completion(
 
     Returns the raw response and logprobs as-is from the proxy cache.
     """
-    content_hash = hashlib.sha256(response_content.encode("utf-8")).hexdigest()
+    visible = _THINK_RE.sub("", response_content)
+    idx = visible.find("</think>")
+    if idx >= 0:
+        visible = visible[idx + len("</think>"):]
+    visible = visible.strip()
+    content_hash = hashlib.sha256(visible.encode("utf-8")).hexdigest()
     resp = client.get(
         f"{proxy_url}/v1/completions/raw",
         params={"content_hash": content_hash},
