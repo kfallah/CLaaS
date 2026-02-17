@@ -23,7 +23,7 @@ python -m claas.eval --preferences no_emoji --metrics all --num-steps 20
 
 Results are written to `--output-dir` (default `./eval_results`). View them in the browser:
 
-```
+```http
 GET /v1/eval?results_dir=./eval_results
 ```
 
@@ -58,7 +58,7 @@ Presets: `all` = logprob,compliance,general,collapse. `quick` = logprob.
 
 ## Output format
 
-```
+```text
 eval_results/
 ├── summary.json              # Per-preference pass/fail verdicts
 └── <preference>/
