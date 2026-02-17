@@ -64,15 +64,14 @@ class _TokenizerChatRenderer:
 
     def build_generation_prompt(self, messages: list[Message]) -> T.ModelInput:
         dicts = [{"role": m["role"], "content": m.get("content", "")} for m in messages]
-        result = self._tokenizer.apply_chat_template(
+        result: Any = self._tokenizer.apply_chat_template(
             dicts, add_generation_prompt=True, tokenize=True,
         )
-        # apply_chat_template may return a plain list[int] or a BatchEncoding
         if isinstance(result, list):
-            token_ids: list[int] = result  # type: ignore[assignment]
+            token_ids: list[int] = result
         else:
-            token_ids = result["input_ids"]  # type: ignore[index]
-        return T.ModelInput.from_ints(token_ids)  # type: ignore[arg-type]
+            token_ids = result["input_ids"]
+        return T.ModelInput.from_ints(token_ids)
 
     def parse_response(self, tokens: list[int]) -> tuple[dict[str, str], list[Any]]:
         text = self._tokenizer.decode(tokens, skip_special_tokens=True)
@@ -470,10 +469,13 @@ async def score_completion(req: ScoreRequest) -> dict[str, object]:
 
     if req.messages is not None:
         dicts = [{"role": m.role, "content": m.content or ""} for m in req.messages]
-        result = tokenizer.apply_chat_template(
+        result: Any = tokenizer.apply_chat_template(
             dicts, add_generation_prompt=True, tokenize=True,
         )
-        prompt_tokens: list[int] = list(result if isinstance(result, list) else result["input_ids"])
+        if isinstance(result, list):
+            prompt_tokens: list[int] = result
+        else:
+            prompt_tokens = result["input_ids"]
     else:
         assert req.prompt is not None
         prompt_tokens = list(tokenizer.encode(req.prompt, add_special_tokens=True))
