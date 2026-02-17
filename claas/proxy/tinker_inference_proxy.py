@@ -495,7 +495,7 @@ async def score_completion(req: ScoreRequest) -> dict[str, object]:
     sampler = _holder.sampler
 
     if req.messages is not None:
-        dicts = [{"role": m.role, "content": m.content or ""} for m in req.messages]
+        dicts = [{"role": m.role, "content": _coerce_content(m.content)} for m in req.messages]
         prompt_tokens: list[int] = _apply_chat_template_ids(tokenizer, dicts)
     else:
         assert req.prompt is not None
