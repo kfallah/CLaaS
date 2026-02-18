@@ -1,50 +1,8 @@
-"""Logprob margin computation via vLLM /v1/completions API.
+"""Logprob margin: sum(logp(positive)) - sum(logp(negative)) via vLLM.
 
-**What is "logprob margin"?**
-
-The logprob margin is the difference between the sum of per-token log
-probabilities for a preferred (positive) response and a dispreferred
-(negative) response, given the same prompt.  Concretely:
-
-    margin = sum(logp(token) for token in positive_response)
-           - sum(logp(token) for token in negative_response)
-
-A positive margin indicates the model assigns higher probability to the
-preferred response than to the dispreferred one.
-
-**How it works**
-
-For each (prompt, response) pair the pipeline:
-
-1. Tokenizes the prompt messages via ``POST /tokenize`` with
-   ``{"messages": [...]}`` so vLLM applies the real tokenizer chat
-   template server-side. This gives the prompt token count.
-2. Tokenizes the full conversation (prompt + assistant response) the
-   same way with ``add_generation_prompt: false`` to get the full token
-   IDs.
-3. Sends the full token IDs to ``POST /v1/completions`` with
-   ``max_tokens=1`` and ``prompt_logprobs=1``, which returns per-token
-   log probabilities for every token in the input.
-4. Discards the logprobs that correspond to the prompt tokens (using the
-   count from step 1) and sums the logprobs for only the response tokens.
-
-The margin is then ``positive_logprob_sum - negative_logprob_sum``.
-
-**Why this metric?**
-
-Logprob margin directly measures whether SDPO training is shifting the
-model's distribution toward preferred behaviours *without* needing to
-generate text.  Because the model only scores existing tokens (no
-sampling), the measurement is fast and fully deterministic, making it
-ideal for automated regression checks across training checkpoints.
-
-**Connection to claas/api.py**
-
-This module mirrors the ``_fetch_rollout_logprobs()`` helper in
-``claas/api.py``, which uses the same tokenize-then-completions pattern
-during the distillation rollout to collect logprobs from the student
-model.  The eval version is factored out here so it can run stand-alone
-against any vLLM endpoint without importing the training code.
+Scores existing token sequences through vLLM's prompt_logprobs endpoint
+(no generation needed), giving a fast, deterministic measure of whether
+training is shifting the model toward preferred responses.
 """
 
 from __future__ import annotations
