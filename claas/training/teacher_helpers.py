@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from claas.core.config import DEFAULT_SYSTEM_PROMPT
 from claas.core.types import ChatMessage
 
 if TYPE_CHECKING:
@@ -34,16 +35,13 @@ def build_teacher_messages(
         List of message dicts with 'role' and 'content' keys
     """
     if system_prompt is None:
-        system_prompt = (
-            "You are an expert coding assistant. Provide high-quality, "
-            "correct, and well-explained code solutions."
-        )
+        system_prompt = DEFAULT_SYSTEM_PROMPT
     messages: list[ChatMessage] = [{"role": "system", "content": system_prompt}]
 
     # Build user content with veRL-style template
     if feedback:
         feedback_section = (
-            "\n\nThe following is feedback from your unsuccessful earlier attempt:"
+            "\n\nThe following is positive or negative feedback from your earlier attempt:"
             f"\n\n{feedback}\n"
         )
         user_content = f"{prompt}{feedback_section}\n\nCorrectly solve the original question.\n"

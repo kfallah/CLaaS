@@ -18,6 +18,8 @@ import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 
+DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
+
 # ---------------------------------------------------------------------------
 # Env var helpers
 # ---------------------------------------------------------------------------
@@ -61,7 +63,7 @@ class CLaaSConfig:
     """Base configuration shared by all execution modes."""
 
     mode: str = ""
-    feedback_log_dir: str = ""
+    feedback_log_dir: str = "./data/feedback"
     hf_token: str = ""
     lora_root: str = ""
     storage_backend: str = ""
