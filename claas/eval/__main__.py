@@ -5,7 +5,7 @@ through OpenClaw, which injects the real agent system prompt and context.
 
 Tinker stack (no GPU)::
 
-    python -m claas.eval \\
+    python -m claas.eval --mode tinker \\
         --openclaw-url http://localhost:18789 \\
         --proxy-url http://localhost:8000 \\
         --claas-url http://localhost:8080 \\
@@ -14,7 +14,7 @@ Tinker stack (no GPU)::
 
 Local stack (GPU)::
 
-    python -m claas.eval \\
+    python -m claas.eval --mode local \\
         --openclaw-url http://localhost:18789 \\
         --vllm-url http://localhost:8000 \\
         --claas-url http://localhost:8080 \\
@@ -23,7 +23,7 @@ Local stack (GPU)::
 
 Can also be invoked via the CLI::
 
-    claas eval --preferences no_emoji --metrics logprob --num-steps 10
+    claas eval --mode local --preferences no_emoji --metrics logprob --num-steps 10
 """
 
 from __future__ import annotations
@@ -39,6 +39,12 @@ from .types import HarnessConfig
 
 def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
     """Add all eval harness arguments to an argparse parser."""
+    parser.add_argument(
+        "--mode",
+        choices=["local", "tinker"],
+        default="local",
+        help="Execution mode: 'local' (GPU + vLLM) or 'tinker' (no GPU, Tinker proxy) (default: local)",
+    )
     parser.add_argument(
         "--claas-url",
         default="http://localhost:8080",
@@ -74,8 +80,8 @@ def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--output-dir",
-        default=None,
-        help="Output directory for results (auto-generated if omitted)",
+        default="./data/evals",
+        help="Base output directory for results (default: ./data/evals)",
     )
     parser.add_argument(
         "--gemini-api-key",
@@ -148,6 +154,8 @@ def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_config(args: argparse.Namespace) -> HarnessConfig:
     """Build a HarnessConfig from parsed CLI arguments."""
+    mode: str = args.mode
+
     # Parse --metrics comma string
     metrics_list = [m.strip() for m in args.metrics.split(",") if m.strip()]
 
@@ -160,12 +168,18 @@ def build_config(args: argparse.Namespace) -> HarnessConfig:
     openclaw_api_key = args.openclaw_api_key or os.environ.get(
         "OPENCLAW_GATEWAY_TOKEN", "openclaw-local-dev-token"
     )
-    output_dir = args.output_dir
-    if not output_dir:
-        run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
-        output_dir = os.path.join("./data/evals", run_id)
+
+    # Tinker mode: default proxy_url to vllm_url if not explicitly set
+    proxy_url = args.proxy_url
+    if mode == "tinker" and not proxy_url:
+        proxy_url = args.vllm_url
+
+    # Timestamped subdir under the base output directory
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+    output_dir = os.path.join(args.output_dir, run_id)
 
     return HarnessConfig(
+        mode=mode,
         claas_url=args.claas_url,
         vllm_url=args.vllm_url,
         vllm_api_key=args.vllm_api_key,
@@ -181,7 +195,7 @@ def build_config(args: argparse.Namespace) -> HarnessConfig:
         seed=args.seed,
         openclaw_url=openclaw_url,
         openclaw_api_key=openclaw_api_key,
-        proxy_url=args.proxy_url,
+        proxy_url=proxy_url,
         base_model=args.base_model,
         batch_size=args.batch_size,
     )

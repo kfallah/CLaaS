@@ -24,6 +24,7 @@ class EvalRollout:
 class HarnessConfig:
     """Top-level configuration for an evaluation run."""
 
+    mode: str = "local"  # "local" (GPU + vLLM) or "tinker" (no GPU, Tinker proxy)
     claas_url: str = "http://localhost:8080"
     vllm_url: str = "http://localhost:8000"
     vllm_api_key: str = "sk-local"

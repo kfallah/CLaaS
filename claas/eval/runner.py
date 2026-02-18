@@ -491,7 +491,7 @@ async def run_preference_experiment(
     lora_path = _lora_path_on_disk(actual_lora_id)
 
     # Load LoRA into vLLM (skip for Tinker — proxy auto-refreshes)
-    if not config.proxy_url:
+    if config.mode == "local":
         logger.info("[%s] Loading LoRA into vLLM as '%s'", pref.name, vllm_model)
         await _load_lora_into_vllm(config, actual_lora_id, lora_path)
 
@@ -557,7 +557,7 @@ async def run_preference_experiment(
                 (step * config.batch_size + i) % len(pref.probe_prompts)
             ]
 
-            if config.proxy_url:
+            if config.mode == "tinker":
                 # Tinker mode: generate via OpenClaw, fetch cached completion
                 try:
                     content, real_prompt, raw_response, rollout_lps = (
@@ -632,7 +632,7 @@ async def run_preference_experiment(
                     logger.error("[%s] Step %d feedback failed on retry: %s", pref.name, step, e2)
 
         # Reload LoRA into vLLM (skip for Tinker — proxy auto-refreshes)
-        if not config.proxy_url:
+        if config.mode == "local":
             try:
                 await _load_lora_into_vllm(config, actual_lora_id, lora_path)
             except (httpx.HTTPError, KeyError) as e:
