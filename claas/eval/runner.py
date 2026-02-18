@@ -15,6 +15,14 @@ import time
 
 import httpx
 
+from claas.core.types import (
+    DistillBatchItem,
+    DistillRequest,
+    FeedbackBatchRequest,
+    FeedbackOrchestration,
+    TrainingConfig,
+)
+
 from .gemini import GeminiUser
 from .logprob import derive_vllm_model_name
 from .metrics import Metric, build_metrics
@@ -25,6 +33,7 @@ from .types import (
     ChatMessage,
     EvalMetrics,
     ExperimentResult,
+    ExperimentSummary,
     HarnessConfig,
     MetricContext,
     SDPOMetrics,
@@ -90,28 +99,25 @@ async def _load_lora_into_vllm(
 async def _submit_feedback(
     config: HarnessConfig,
     lora_id: str,
-    samples: list[dict[str, object]],
+    samples: list[DistillBatchItem],
 ) -> SDPOMetrics | None:
-    """Submit batched feedback via CLaaS API and return SDPO metrics.
-
-    Each sample dict must contain: prompt, response, feedback, rollout_logprobs.
-    """
-    payload: dict[str, object] = {
-        "requests": [
-            {
-                "lora_id": lora_id,
-                "prompt": s["prompt"],
-                "response": s["response"],
-                "feedback": s["feedback"],
-                "rollout_logprobs": s["rollout_logprobs"],
-                "training": {"teacher_mode": "self"},
-            }
+    """Submit batched feedback via CLaaS API and return SDPO metrics."""
+    payload = FeedbackBatchRequest(
+        requests=[
+            DistillRequest(
+                lora_id=lora_id,
+                prompt=s.prompt,
+                response=s.response,
+                feedback=s.feedback,
+                rollout_logprobs=s.rollout_logprobs,
+                training=TrainingConfig(teacher_mode="self"),
+            )
             for s in samples
         ],
-        "orchestration": {"sleep_before": False, "wake_after": False},
-    }
+        orchestration=FeedbackOrchestration(sleep_before=False, wake_after=False),
+    )
     async with httpx.AsyncClient(base_url=config.claas_url, timeout=180.0) as client:
-        resp = await client.post("/v1/feedback", json=payload)
+        resp = await client.post("/v1/feedback", json=payload.model_dump())
         resp.raise_for_status()
         result = resp.json()
 
@@ -412,20 +418,20 @@ def _write_summary(output_dir: str, results: list[ExperimentResult]) -> None:
     summaries: dict[str, dict[str, object]] = {}
 
     for result in results:
-        entry: dict[str, object] = {
-            "preference": result.preference,
-            "lora_id": result.lora_id,
-        }
+        entry = ExperimentSummary(
+            preference=result.preference,
+            lora_id=result.lora_id,
+        )
 
         # Final logprob margin delta
         if result.steps and result.steps[-1].eval.logprob_margin:
-            entry["logprob_margin_delta"] = (
+            entry.logprob_margin_delta = (
                 result.steps[-1].eval.logprob_margin.margin_delta_from_baseline
             )
 
         # Preference compliance @ final step
         if result.steps and result.steps[-1].eval.preference_compliance is not None:
-            entry["final_compliance"] = result.steps[-1].eval.preference_compliance
+            entry.final_compliance = result.steps[-1].eval.preference_compliance
 
         # General capability retention ratio
         if (
@@ -435,11 +441,11 @@ def _write_summary(output_dir: str, results: list[ExperimentResult]) -> None:
         ):
             baseline_score = result.baseline.general.general_score
             final_score = result.steps[-1].eval.general.general_score
-            entry["capability_ratio"] = (
+            entry.capability_ratio = (
                 final_score / baseline_score if baseline_score > 0 else 1.0
             )
 
-        summaries[result.preference] = entry
+        summaries[result.preference] = dataclasses.asdict(entry)
 
     path = os.path.join(output_dir, "summary.json")
     with open(path, "w") as f:
@@ -543,7 +549,7 @@ async def run_preference_experiment(
         feedback_str = pref.feedback_string
 
         # Collect samples for this step (batch_size >= 1)
-        samples: list[dict[str, object]] = []
+        samples: list[DistillBatchItem] = []
         response_text: str | None = None
 
         for i in range(config.batch_size):
@@ -559,12 +565,12 @@ async def run_preference_experiment(
                     )
                     if response_text is None:
                         response_text = content
-                    samples.append({
-                        "prompt": real_prompt,
-                        "response": raw_response,
-                        "feedback": feedback_str,
-                        "rollout_logprobs": rollout_lps,
-                    })
+                    samples.append(DistillBatchItem(
+                        prompt=real_prompt,
+                        response=raw_response,
+                        feedback=feedback_str,
+                        rollout_logprobs=rollout_lps,
+                    ))
                 except (httpx.HTTPError, KeyError, ValueError) as e:
                     logger.warning(
                         "[%s] Step %d sample %d proxy generation failed: %s",
@@ -581,12 +587,12 @@ async def run_preference_experiment(
                     rollout_lps = await _fetch_rollout_logprobs_vllm(
                         config, vllm_model, prompt, gen_text,
                     )
-                    samples.append({
-                        "prompt": prompt,
-                        "response": gen_text,
-                        "feedback": feedback_str,
-                        "rollout_logprobs": rollout_lps,
-                    })
+                    samples.append(DistillBatchItem(
+                        prompt=prompt,
+                        response=gen_text,
+                        feedback=feedback_str,
+                        rollout_logprobs=rollout_lps,
+                    ))
                 except (httpx.HTTPError, KeyError, ValueError) as e:
                     logger.warning(
                         "[%s] Step %d sample %d vLLM generation failed: %s",
@@ -604,7 +610,7 @@ async def run_preference_experiment(
                     feedback_str = gemini_result.feedback
                     # Update feedback in all samples
                     for s in samples:
-                        s["feedback"] = feedback_str
+                        s.feedback = feedback_str
             except (httpx.HTTPError, KeyError, ValueError, ImportError) as e:
                 logger.warning("[%s] Gemini feedback failed, using default: %s", pref.name, e)
 

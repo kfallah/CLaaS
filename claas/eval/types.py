@@ -124,6 +124,17 @@ class ExperimentResult:
 
 
 @dataclass
+class ExperimentSummary:
+    """Summary entry for a single preference experiment."""
+
+    preference: str
+    lora_id: str
+    logprob_margin_delta: float | None = None
+    final_compliance: float | None = None
+    capability_ratio: float | None = None
+
+
+@dataclass
 class GeminiEvalResult:
     """Result from Gemini's evaluation of a chatbot response."""
 
