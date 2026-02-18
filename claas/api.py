@@ -78,6 +78,7 @@ web_app = FastAPI(
 )
 
 FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "index.html"
+EVAL_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "eval_dashboard.html"
 
 
 def _get_engine_kind() -> EngineKind:
@@ -461,7 +462,8 @@ def _feedback_dashboard_html(records: list[FeedbackLogRecord]) -> str:
 async def _run_distill(payload: DistillBatchRequestPayload) -> DistillResponse:
     """Execute a distill request via configured execution backend."""
     engine = _get_training_engine()
-    return await engine.distill(payload)
+    result = await engine.distill(payload)
+    return result
 
 
 # API Endpoints
@@ -838,6 +840,29 @@ async def dashboard(limit: int = Query(default=20, ge=1, le=200)) -> HTMLRespons
     records = await asyncio.to_thread(_read_recent_feedback_logs, limit)
     html_content = _feedback_dashboard_html(records)
     return HTMLResponse(content=html_content)
+
+
+@web_app.get("/v1/eval", response_class=HTMLResponse)
+async def eval_dashboard(results_dir: str = Query(default="./data/evals")) -> HTMLResponse:
+    """Serve a dashboard of evaluation results.
+
+    Args:
+        results_dir: Path to the eval results directory.
+
+    Returns:
+        HTML dashboard with summary and per-preference step details.
+    """
+    from .eval.dashboard import eval_dashboard_html
+
+    base_dir = Path("./data/evals").resolve()
+    requested_dir = Path(results_dir).resolve()
+    if not requested_dir.is_relative_to(base_dir):
+        raise HTTPException(
+            status_code=400,
+            detail="results_dir must be within ./data/evals",
+        )
+    content = await asyncio.to_thread(eval_dashboard_html, str(requested_dir))
+    return HTMLResponse(content=content)
 
 
 @web_app.get("/")

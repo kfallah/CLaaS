@@ -5,6 +5,7 @@ Usage:
     claas distill  --lora-id user123/coder-v1 --prompt "..." --response "..."
     claas health
     claas deploy          # Modal deployment
+    claas eval --preferences no_emoji --metrics logprob --num-steps 10
 
 Set CLAAS_DISTILL_EXECUTION_MODE (local | modal | tinker) to select backend.
 """
@@ -12,6 +13,7 @@ Set CLAAS_DISTILL_EXECUTION_MODE (local | modal | tinker) to select backend.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import subprocess
 import sys
@@ -81,6 +83,16 @@ def cmd_health(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Run the evaluation harness."""
+    from .eval.__main__ import build_config
+    from .eval.runner import run_harness
+
+    config = build_config(args)
+    asyncio.run(run_harness(config))
+    return 0
+
+
 def cmd_distill(args: argparse.Namespace) -> int:
     """Run a single distillation step (for testing)."""
     request = {
@@ -137,8 +149,8 @@ def main() -> int:
         default="Qwen/Qwen3-8B",
         help="Base model name",
     )
-    init_parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
-    init_parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
+    init_parser.add_argument("--lora-r", type=int, default=32, help="LoRA rank")
+    init_parser.add_argument("--lora-alpha", type=int, default=64, help="LoRA alpha")
     init_parser.add_argument(
         "--target-modules",
         default=None,
@@ -170,7 +182,7 @@ def main() -> int:
     distill_parser.add_argument("--prompt", required=True, help="Prompt text")
     distill_parser.add_argument("--response", required=True, help="Response text")
     distill_parser.add_argument("--feedback", required=True, help="Feedback text")
-    distill_parser.add_argument("--learning-rate", type=float, default=1e-4)
+    distill_parser.add_argument("--learning-rate", type=float, default=5e-5)
     distill_parser.add_argument("--alpha", type=float, default=0.5)
     distill_parser.add_argument(
         "--teacher-mode",
@@ -185,6 +197,13 @@ def main() -> int:
         help="Top-K logprobs from teacher source",
     )
     distill_parser.set_defaults(func=cmd_distill)
+
+    # eval command
+    eval_parser = subparsers.add_parser("eval", help="Run the evaluation harness")
+    from .eval.__main__ import add_eval_arguments
+
+    add_eval_arguments(eval_parser)
+    eval_parser.set_defaults(func=cmd_eval)
 
     args = parser.parse_args()
     return args.func(args)

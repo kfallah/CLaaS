@@ -52,6 +52,10 @@ feedback_logs/
 .local_loras/
 .run-logs/
 
+# Runtime data (feedback logs, eval results)
+data/feedback/
+data/evals/
+
 # Eval harness results
 eval_results*/
 eval_smoke*/

@@ -18,6 +18,8 @@ import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 
+DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
+
 # ---------------------------------------------------------------------------
 # Env var helpers
 # ---------------------------------------------------------------------------
@@ -61,7 +63,7 @@ class CLaaSConfig:
     """Base configuration shared by all execution modes."""
 
     mode: str = ""
-    feedback_log_dir: str = ""
+    feedback_log_dir: str = "./data/feedback"
     hf_token: str = ""
     lora_root: str = ""
     storage_backend: str = ""
@@ -123,7 +125,7 @@ class ProxyConfig:
 
 def _build_base_fields() -> dict[str, object]:
     return {
-        "feedback_log_dir": _env("FEEDBACK_LOG_DIR", "./feedback_logs"),
+        "feedback_log_dir": _env("FEEDBACK_LOG_DIR", "./data/feedback"),
         "hf_token": _env("HF_TOKEN", ""),
         "lora_root": _env("CLAAS_LORA_ROOT", "/loras"),
         "storage_backend": _env("CLAAS_STORAGE_BACKEND", "modal_volume"),

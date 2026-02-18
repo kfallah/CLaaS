@@ -160,7 +160,7 @@ These are set inside the containers (via `docker-compose.yml`) and generally don
 | `CLAAS_LORA_ROOT` | `/loras` | Root directory for LoRA adapter storage |
 | `CLAAS_STORAGE_BACKEND` | `modal_volume` | Storage backend: `local_fs`, `modal_volume`, or `tinker_json` |
 | `CLAAS_ALLOWED_INIT_BASE_MODELS` | `Qwen/Qwen3-8B` | Comma-separated allowlist of base models for `/v1/lora/init` |
-| `FEEDBACK_LOG_DIR` | `./feedback_logs` | Directory for structured feedback JSON logs |
+| `FEEDBACK_LOG_DIR` | `./data/feedback` | Directory for structured feedback JSON logs |
 
 #### vLLM (local mode)
 

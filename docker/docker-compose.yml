@@ -56,12 +56,11 @@ services:
       - CLAAS_BASE_MODEL_ID=${MODEL:-Qwen/Qwen3-8B}
       - VLLM_BASE_URL=http://vllm:8000
       - VLLM_API_KEY=sk-local
-      - FEEDBACK_LOG_DIR=/feedback-logs
       - HF_TOKEN=${HF_TOKEN:-}
     volumes:
       - lora-storage:/loras
       - hf-cache:/root/.cache/huggingface
-      - claas-feedback-logs:/feedback-logs
+      - claas-feedback-logs:/app/data/feedback
     ports:
       - "${CLAAS_API_PORT:-8080}:8080"
     deploy:
@@ -148,11 +147,10 @@ services:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:-}
       - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
       - CLAAS_TINKER_STATE_PATH=/data/tinker_state.json
-      - FEEDBACK_LOG_DIR=/feedback-logs
       - VLLM_BASE_URL=http://tinker-proxy:8000
       - WAIT_FOR_BACKEND=0
     volumes:
-      - claas-feedback-logs:/feedback-logs
+      - claas-feedback-logs:/app/data/feedback
       - tinker-state:/data
     ports:
       - "${CLAAS_API_PORT:-8080}:8080"

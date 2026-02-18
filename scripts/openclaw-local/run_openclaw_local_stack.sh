@@ -196,7 +196,6 @@ start_stack_once() {
   CLAAS_DISTILL_EXECUTION_MODE=local \
   VLLM_BASE_URL="http://127.0.0.1:8000" \
   VLLM_API_KEY="${API_KEY:-sk-local}" \
-  FEEDBACK_LOG_DIR="$LOG_DIR/feedback-logs" \
   nohup uvicorn claas.api:web_app --host 0.0.0.0 --port "${CLAAS_API_PORT:-8080}" >>"$CLAAS_API_LOG" 2>&1 &
   local api_pid=$!
   echo "$api_pid" >"$CLAAS_API_PID_FILE"

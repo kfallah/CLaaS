@@ -33,6 +33,9 @@ from claas.training.engine.tinker.state import (
 # ── Fixtures ────────────────────────────────────────────────────────
 
 
+TEST_BASE_MODEL = "meta-llama/Llama-3.2-1B"
+
+
 @pytest.fixture()
 def state_file(tmp_path):
     """Yield a temporary state file path, cleaned up automatically."""
@@ -129,16 +132,16 @@ def test_state_get_entry(state_file):
     set_tinker_path(
         lora_id="user/model",
         tinker_path="tinker://checkpoints/abc",
-        base_model="Qwen/Qwen3-235B-A22B",
-        rank=16,
+        base_model=TEST_BASE_MODEL,
+        rank=32,
         step=5,
         path=state_file,
     )
     entry = get_entry("user/model", path=state_file)
     assert entry is not None
     assert entry.tinker_path == "tinker://checkpoints/abc"
-    assert entry.base_model == "Qwen/Qwen3-235B-A22B"
-    assert entry.rank == 16
+    assert entry.base_model == TEST_BASE_MODEL
+    assert entry.rank == 32
     assert entry.step == 5
 
 
@@ -258,13 +261,13 @@ def test_engine_init_lora(tinker_engine):
     mock_tc.save_state_async = AsyncMock(return_value=mock_save_result)
     mock_service.create_lora_training_client_async = AsyncMock(return_value=mock_tc)
 
-    request = LoraInitRequest(lora_id="test/lora", base_model="Qwen/Qwen3-235B-A22B", lora_r=32)
+    request = LoraInitRequest(lora_id="test/lora", base_model=TEST_BASE_MODEL, lora_r=32)
     result = asyncio.run(engine.init_lora(request))
 
     assert isinstance(result, LoraInitResponse)
     assert result.lora_id == "test/lora"
     mock_service.create_lora_training_client_async.assert_called_once_with(
-        base_model="Qwen/Qwen3-235B-A22B", rank=32
+        base_model=TEST_BASE_MODEL, rank=32
     )
     mock_tc.save_state_async.assert_called_once_with("init")
 
@@ -272,7 +275,7 @@ def test_engine_init_lora(tinker_engine):
     entry = get_entry("test/lora")
     assert entry is not None
     assert entry.tinker_path == "tinker://checkpoints/init-abc"
-    assert entry.base_model == "Qwen/Qwen3-235B-A22B"
+    assert entry.base_model == TEST_BASE_MODEL
     assert entry.rank == 32
     assert entry.step == 0
 

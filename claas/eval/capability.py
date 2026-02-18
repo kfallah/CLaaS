@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from .types import ChatMessage, EvalRollout, GeneralCapability
+from .types import DEFAULT_SYSTEM_PROMPT, ChatMessage, EvalRollout, GeneralCapability
 from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
@@ -143,8 +143,6 @@ async def evaluate_general_capability(
     vllm_api_key: str,
     model: str,
     timeout_s: float = 60.0,
-    system_prompt: str | None = None,
-    prompt_preamble: list[ChatMessage] | None = None,
     rollout_log: list[EvalRollout] | None = None,
     openclaw_url: str | None = None,
     openclaw_api_key: str = "openclaw-local-dev-token",
@@ -171,19 +169,10 @@ async def evaluate_general_capability(
             messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
             req_model = "openclaw"
         else:
-            messages = (
-                list(prompt_preamble or [])
-                + (
-                    [{"role": "system", "content": system_prompt}]
-                    if system_prompt
-                    and not any(
-                        m.get("role") == "system" and m.get("content") == system_prompt
-                        for m in (prompt_preamble or [])
-                    )
-                    else []
-                )
-                + [{"role": "user", "content": prompt}]
-            )
+            messages = [
+                {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ]
             req_model = model
 
         for budget in token_budgets:
@@ -224,12 +213,9 @@ async def evaluate_general_capability(
 
     coding_result = verify_coding(coding_text)
     if rollout_log is not None:
-        coding_msgs: list[ChatMessage] = list(prompt_preamble or [])
-        if system_prompt and not any(
-            m.get("role") == "system" and m.get("content") == system_prompt
-            for m in coding_msgs
-        ):
-            coding_msgs.append(ChatMessage(role="system", content=system_prompt))
+        coding_msgs: list[ChatMessage] = []
+        if not openclaw_url:
+            coding_msgs.append(ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
         coding_msgs.append(ChatMessage(role="user", content=CODING_PROMPT))
         coding_msgs.append(ChatMessage(role="assistant", content=coding_text))
         rollout_log.append(
@@ -259,12 +245,9 @@ async def evaluate_general_capability(
                 if passed:
                     passes += 1
                 if rollout_log is not None:
-                    probe_msgs: list[ChatMessage] = list(prompt_preamble or [])
-                    if system_prompt and not any(
-                        m.get("role") == "system" and m.get("content") == system_prompt
-                        for m in probe_msgs
-                    ):
-                        probe_msgs.append(ChatMessage(role="system", content=system_prompt))
+                    probe_msgs: list[ChatMessage] = []
+                    if not openclaw_url:
+                        probe_msgs.append(ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
                     probe_msgs.append(ChatMessage(role="user", content=probe.prompt))
                     probe_msgs.append(ChatMessage(role="assistant", content=text))
                     rollout_log.append(
@@ -281,12 +264,9 @@ async def evaluate_general_capability(
             except (httpx.HTTPError, KeyError, ValueError) as e:
                 logger.warning("IFEval probe failed: %s", e)
                 if rollout_log is not None:
-                    err_msgs: list[ChatMessage] = list(prompt_preamble or [])
-                    if system_prompt and not any(
-                        m.get("role") == "system" and m.get("content") == system_prompt
-                        for m in err_msgs
-                    ):
-                        err_msgs.append(ChatMessage(role="system", content=system_prompt))
+                    err_msgs: list[ChatMessage] = []
+                    if not openclaw_url:
+                        err_msgs.append(ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
                     err_msgs.append(ChatMessage(role="user", content=probe.prompt))
                     rollout_log.append(
                         EvalRollout(

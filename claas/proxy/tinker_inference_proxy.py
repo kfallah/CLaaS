@@ -53,6 +53,21 @@ def _base_model() -> str:
 # Fallback renderer using the tokenizer's built-in chat template
 # ---------------------------------------------------------------------------
 
+
+def _apply_chat_template_ids(tokenizer: Any, dicts: list[dict[str, str]]) -> list[int]:
+    """Tokenize messages via apply_chat_template, returning token ids.
+
+    The tokenizer parameter is typed as ``Any`` so that ty doesn't try to
+    narrow the complex union return type of ``apply_chat_template``.
+    """
+    result = tokenizer.apply_chat_template(
+        dicts, add_generation_prompt=True, tokenize=True,
+    )
+    if isinstance(result, list):
+        return result
+    return result["input_ids"]
+
+
 class _TokenizerChatRenderer:
     """Minimal renderer that delegates to ``tokenizer.apply_chat_template``.
 
@@ -64,15 +79,8 @@ class _TokenizerChatRenderer:
 
     def build_generation_prompt(self, messages: list[Message]) -> T.ModelInput:
         dicts = [{"role": m["role"], "content": m.get("content", "")} for m in messages]
-        result = self._tokenizer.apply_chat_template(
-            dicts, add_generation_prompt=True, tokenize=True,
-        )
-        # apply_chat_template may return a plain list[int] or a BatchEncoding
-        if isinstance(result, list):
-            token_ids: list[int] = result  # type: ignore[assignment]
-        else:
-            token_ids = result["input_ids"]  # type: ignore[index]
-        return T.ModelInput.from_ints(token_ids)  # type: ignore[arg-type]
+        token_ids = _apply_chat_template_ids(self._tokenizer, dicts)
+        return T.ModelInput.from_ints(token_ids)
 
     def parse_response(self, tokens: list[int]) -> tuple[dict[str, str], list[Any]]:
         text = self._tokenizer.decode(tokens, skip_special_tokens=True)
@@ -119,7 +127,11 @@ class _SamplerHolder:
 
     def _ensure(self) -> None:
         with self._lock:
-            if self._sampler is not None:
+            if (
+                self._sampler is not None
+                and self._tokenizer is not None
+                and self._renderer is not None
+            ):
                 return
             proxy_cfg = get_proxy_config()
             api_key = proxy_cfg.tinker_api_key
@@ -229,8 +241,25 @@ class _CompletionCache:
                 return None
             return entry
 
-
 _completion_cache = _CompletionCache()
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove thinking blocks before hashing content.
+
+    Handles two cases:
+    1. Proper ``<think>...</think>`` blocks.
+    2. Orphaned ``</think>`` when the opening ``<think>`` was consumed as a
+       special token by the tokenizer (Qwen3).  Everything before the first
+       orphaned ``</think>`` is thinking text and is stripped.
+    """
+    text = _THINK_RE.sub("", text)
+    idx = text.find("</think>")
+    if idx >= 0:
+        text = text[idx + len("</think>"):]
+    return text.strip()
 
 
 async def _sample_async(
@@ -277,6 +306,11 @@ class CompletionRequest(BaseModel):
     stop: list[str] | None = None
 
 
+class ScoreRequest(BaseModel):
+    prompt: str
+    completion: str
+
+
 class RefreshRequest(BaseModel):
     model_path: str | None = None
 
@@ -317,12 +351,13 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
     text_msg, _ = renderer.parse_response(seq.tokens)
     content = text_msg.get("content", "") if isinstance(text_msg, dict) else str(text_msg)
     content = _extract_final_channel(content)
+    content = _strip_thinking(content)
 
     # Cache raw completion for training pipeline retrieval
     tokenizer = _holder.tokenizer
     raw_completion_text = tokenizer.decode(seq.tokens, skip_special_tokens=False)
     prompt_text = tokenizer.decode(model_input.to_ints(), skip_special_tokens=False)
-    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    content_hash = hashlib.sha256(_strip_thinking(content).encode("utf-8")).hexdigest()
     _completion_cache.put(
         content_hash,
         _CompletionCacheEntry(
@@ -444,6 +479,41 @@ async def get_raw_completion(content_hash: str) -> dict[str, object]:
         "response": entry.response,
         "token_ids": entry.token_ids,
         "logprobs": entry.logprobs,
+    }
+
+
+@app.post("/v1/score")
+async def score_completion(req: ScoreRequest) -> dict[str, object]:
+    """Score a prompt+completion pair and return per-token completion logprobs."""
+    tokenizer = _holder.tokenizer
+    sampler = _holder.sampler
+
+    prompt_tokens: list[int] = list(tokenizer.encode(req.prompt, add_special_tokens=True))
+    completion_tokens: list[int] = tokenizer.encode(
+        req.completion, add_special_tokens=False,
+    )
+    full_tokens = prompt_tokens + completion_tokens
+    prompt_len = len(prompt_tokens)
+    completion_len = len(completion_tokens)
+
+    model_input = T.ModelInput.from_ints(full_tokens)
+    logprobs_full = await asyncio.to_thread(
+        lambda: sampler.compute_logprobs(model_input).result(),
+    )
+
+    # Slice completion logprobs (same pattern as engine.py _slice_completion_logprobs)
+    raw = logprobs_full[prompt_len : prompt_len + completion_len]
+    logprobs = [lp if lp is not None else 0.0 for lp in raw]
+
+    token_strings = [tokenizer.decode([t]) for t in completion_tokens]
+    logprob_sum = sum(logprobs)
+
+    return {
+        "logprobs": logprobs,
+        "tokens": token_strings,
+        "prompt_tokens": prompt_len,
+        "completion_tokens": completion_len,
+        "logprob_sum": logprob_sum,
     }
 
 

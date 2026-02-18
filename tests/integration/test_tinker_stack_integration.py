@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import uuid
 from typing import TYPE_CHECKING
 
@@ -17,16 +18,14 @@ import pytest
 
 from claas.training.teacher_helpers import build_teacher_messages
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
 if TYPE_CHECKING:
     from conftest import TinkerStack
 
 pytestmark = pytest.mark.integration
 
 logger = logging.getLogger(__name__)
-
-
-_ASSISTANT_PREFIX = "<|im_start|>assistant\n"
-_IM_END = "<|im_end|>"
 
 
 def _fetch_raw_completion(
@@ -39,13 +38,14 @@ def _fetch_raw_completion(
     Mirrors the OpenClaw feedback plugin: hash the parsed content, hit
     ``/v1/completions/raw``, and return ``(raw_text, logprobs)``.
 
-    The proxy stores the response wrapped in a chat template
-    (``<|im_start|>assistant\\n…<|im_end|>``).  We strip that wrapper so
-    the raw text — when re-tokenized by the Tinker engine with
-    ``add_special_tokens=False`` — reproduces exactly the generated
-    token sequence whose logprobs we're returning.
+    Returns the raw response and logprobs as-is from the proxy cache.
     """
-    content_hash = hashlib.sha256(response_content.encode("utf-8")).hexdigest()
+    visible = _THINK_RE.sub("", response_content)
+    idx = visible.find("</think>")
+    if idx >= 0:
+        visible = visible[idx + len("</think>"):]
+    visible = visible.strip()
+    content_hash = hashlib.sha256(visible.encode("utf-8")).hexdigest()
     resp = client.get(
         f"{proxy_url}/v1/completions/raw",
         params={"content_hash": content_hash},
@@ -58,14 +58,7 @@ def _fetch_raw_completion(
     logprobs = data["logprobs"]
     assert logprobs is not None, "Proxy returned null logprobs"
 
-    # Unwrap the chat-template wrapper added by the proxy.
-    raw_text: str = data["response"]
-    if raw_text.startswith(_ASSISTANT_PREFIX):
-        raw_text = raw_text[len(_ASSISTANT_PREFIX) :]
-    if raw_text.endswith(_IM_END):
-        raw_text = raw_text[: -len(_IM_END)]
-
-    return raw_text, logprobs
+    return data["response"], logprobs
 
 
 # ---------------------------------------------------------------------------
@@ -133,8 +126,8 @@ class TestTinkerStackRoundTrip:
                 init_payload = {
                     "lora_id": lora_id,
                     "base_model": tinker_stack.model,
-                    "lora_r": 8,
-                    "lora_alpha": 16,
+                    "lora_r": 32,
+                    "lora_alpha": 64,
                 }
                 logger.info("POST /v1/lora/init:\n%s", json.dumps(init_payload, indent=2))
                 init_resp = client.post(
@@ -321,8 +314,8 @@ class TestOpenClawEndToEnd:
                 init_payload = {
                     "lora_id": lora_id,
                     "base_model": tinker_stack.model,
-                    "lora_r": 8,
-                    "lora_alpha": 16,
+                    "lora_r": 32,
+                    "lora_alpha": 64,
                 }
                 logger.info("POST /v1/lora/init:\n%s", json.dumps(init_payload, indent=2))
                 init_resp = client.post(

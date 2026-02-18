@@ -6,7 +6,58 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from claas.core.config import DEFAULT_SYSTEM_PROMPT
 from claas.core.types import ChatMessage
+
+
+@dataclass
+class ChatRequestParams:
+    """Resolved parameters for a /v1/chat/completions request."""
+
+    base_url: str
+    headers: dict[str, str]
+    model: str
+    messages: list[dict[str, str]]
+
+
+def openclaw_chat_params(
+    openclaw_url: str,
+    openclaw_api_key: str,
+    prompt: str,
+) -> ChatRequestParams:
+    """Build chat completion params routed through OpenClaw.
+
+    OpenClaw injects the full agent system prompt and context, so we only
+    send the bare user message.
+    """
+    return ChatRequestParams(
+        base_url=openclaw_url,
+        headers={"Authorization": f"Bearer {openclaw_api_key}"},
+        model="openclaw",
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+
+def direct_vllm_chat_params(
+    vllm_url: str,
+    vllm_api_key: str,
+    model: str,
+    prompt: str,
+) -> ChatRequestParams:
+    """Build chat completion params for direct vLLM communication.
+
+    Manually prepends the default system prompt since there is no
+    gateway to inject it.
+    """
+    return ChatRequestParams(
+        base_url=vllm_url,
+        headers={"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {},
+        model=model,
+        messages=[
+            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+    )
 
 
 @dataclass
@@ -22,23 +73,25 @@ class EvalRollout:
 class HarnessConfig:
     """Top-level configuration for an evaluation run."""
 
+    mode: str = "local"  # "local" (GPU + vLLM) or "tinker" (no GPU, Tinker proxy)
     claas_url: str = "http://localhost:8080"
     vllm_url: str = "http://localhost:8000"
     vllm_api_key: str = "sk-local"
     vllm_model_name: str = "qwen3-8b"
     preferences: list[str] = field(default_factory=lambda: ["no_emoji", "concise", "identity"])
     num_steps: int = 20
-    output_dir: str = "./eval_results"
+    output_dir: str = "./data/evals"
     gemini_api_key: str | None = None
     metrics: list[str] = field(default_factory=lambda: ["logprob"])
-    plots: bool = False
+    plots: bool = True
     collapse_steps: set[int] | None = None
     lora_id_prefix: str = "eval"
     seed: int = 42
-    system_prompt: str | None = None
-    prompt_preamble: list[ChatMessage] = field(default_factory=list)
     openclaw_url: str | None = None
     openclaw_api_key: str = "openclaw-local-dev-token"
+    proxy_url: str | None = None
+    base_model: str = "Qwen/Qwen3-8B"
+    batch_size: int = 4
 
 
 @dataclass
@@ -52,22 +105,37 @@ class LogprobMargin:
 
 
 @dataclass
-class SDPOMetrics:
+class LocalDistillMetrics:
     """Metrics returned by a single SDPO distillation step."""
 
-    distill_loss: float
-    kl_reg: float
-    mean_is_ratio: float
-    clip_fraction: float
+    distill_loss: float | None
+    kl_reg: float | None
+    mean_is_ratio: float | None
+    clip_fraction: float | None
+
+
+@dataclass
+class TinkerDistillMetrics:
+    """Metrics returned by the Tinker engine's importance-sampling training step."""
+
+    adv_mean: float
+    kl_mean: float
+    effective_kl_coef: float
+    kl_gain: float
+    adv_abs_mean: float
+    adv_abs_mean_raw: float
+    completion_len: int = 0
+    batch_size: int = 0
 
 
 @dataclass
 class CollapseMetrics:
     """Collapse detection metrics."""
 
-    mean_entropy: float = 0.0
+    # None in Tinker mode — proxy doesn't expose the full token distribution
+    mean_entropy: float | None = None
     mean_logprob: float = 0.0
-    entropy_ratio_to_baseline: float = 1.0
+    entropy_ratio_to_baseline: float | None = None
     self_rouge_l: float = 0.0
     mean_logprob_drift: float = 0.0
     alert: bool = False
@@ -102,7 +170,7 @@ class StepResult:
     step: int
     timestamp: str
     feedback_given: str
-    sdpo_metrics: SDPOMetrics | None
+    sdpo_metrics: LocalDistillMetrics | TinkerDistillMetrics | None
     eval: EvalMetrics
     prompt_used: str
     response_text: str | None = None
@@ -120,49 +188,22 @@ class ExperimentResult:
 
 
 @dataclass
+class ExperimentSummary:
+    """Summary entry for a single preference experiment."""
+
+    preference: str
+    lora_id: str
+    logprob_margin_delta: float | None = None
+    final_compliance: float | None = None
+    capability_ratio: float | None = None
+
+
+@dataclass
 class GeminiEvalResult:
     """Result from Gemini's evaluation of a chatbot response."""
 
     satisfied: bool
     feedback: str | None = None
-
-
-@dataclass
-class CriteriaResult:
-    """Pass/marginal/fail verdicts for each success criterion."""
-
-    logprob_margin_increase: str | None = None
-    preference_compliance: str | None = None
-    capability_retention: str | None = None
-    entropy_ratio: str | None = None
-    self_rouge_l: str | None = None
-
-    def verdicts(self) -> list[str]:
-        """Return all non-None verdict values."""
-        return [
-            v
-            for v in [
-                self.logprob_margin_increase,
-                self.preference_compliance,
-                self.capability_retention,
-                self.entropy_ratio,
-                self.self_rouge_l,
-            ]
-            if v is not None
-        ]
-
-
-@dataclass
-class PreferenceSummary:
-    """Summary result for a single preference experiment."""
-
-    preference: str
-    lora_id: str
-    criteria: CriteriaResult = field(default_factory=CriteriaResult)
-    logprob_margin_delta: float | None = None
-    final_compliance: float | None = None
-    capability_ratio: float | None = None
-    overall: str = "pending"
 
 
 @dataclass
@@ -177,10 +218,9 @@ class MetricContext:
     baseline: EvalMetrics
     response_text: str | None = None
     generate: Callable[[str], Awaitable[str]] | None = None
-    system_prompt: str | None = None
-    prompt_preamble: list[ChatMessage] = field(default_factory=list)
     openclaw_url: str | None = None
     openclaw_api_key: str = "openclaw-local-dev-token"
+    proxy_url: str | None = None
 
 
 def step_result_from_dict(data: dict[str, object]) -> StepResult:
@@ -216,10 +256,13 @@ def step_result_from_dict(data: dict[str, object]) -> StepResult:
             if isinstance(item, dict)
         ]
 
-    sdpo = None
+    sdpo: LocalDistillMetrics | TinkerDistillMetrics | None = None
     sdpo_data = data.get("sdpo_metrics")
     if sdpo_data:
-        sdpo = SDPOMetrics(**sdpo_data)  # type: ignore[arg-type]
+        if "adv_mean" in sdpo_data:  # type: ignore[operator]
+            sdpo = TinkerDistillMetrics(**sdpo_data)  # type: ignore[arg-type]
+        else:
+            sdpo = LocalDistillMetrics(**sdpo_data)  # type: ignore[arg-type]
 
     return StepResult(
         preference=data["preference"],  # type: ignore[arg-type]

@@ -10,7 +10,7 @@ import json
 import logging
 import os
 
-from .types import StepResult, step_result_from_dict
+from .types import StepResult, TinkerDistillMetrics, step_result_from_dict
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,6 @@ def _plot_learning_curves(
     ax.set_ylabel("Preference Compliance")
     ax.set_title("Learning Curves: Preference Compliance Over Steps")
     ax.set_ylim(-0.05, 1.05)
-    ax.axhline(y=0.8, color="green", linestyle="--", alpha=0.5, label="Pass threshold")
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -169,26 +168,18 @@ def _plot_collapse_dashboard(
     # Entropy ratio
     axes[0].set_title("Entropy Ratio to Baseline")
     axes[0].set_xlabel("Step")
-    axes[0].axhline(y=0.6, color="orange", linestyle="--", alpha=0.5)
-    axes[0].axhline(y=0.4, color="red", linestyle="--", alpha=0.5)
-    axes[0].axhspan(0.6, 1.5, alpha=0.1, color="green")
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
 
     # Self-ROUGE-L
     axes[1].set_title("Self-ROUGE-L")
     axes[1].set_xlabel("Step")
-    axes[1].axhline(y=0.85, color="orange", linestyle="--", alpha=0.5)
-    axes[1].axhline(y=0.95, color="red", linestyle="--", alpha=0.5)
-    axes[1].axhspan(0.0, 0.85, alpha=0.1, color="green")
     axes[1].legend()
     axes[1].grid(True, alpha=0.3)
 
     # Logprob drift
     axes[2].set_title("Logprob Drift from Baseline")
     axes[2].set_xlabel("Step")
-    axes[2].axhline(y=2.0, color="red", linestyle="--", alpha=0.5)
-    axes[2].axhspan(0.0, 2.0, alpha=0.1, color="green")
     axes[2].legend()
     axes[2].grid(True, alpha=0.3)
 
@@ -223,7 +214,6 @@ def _plot_forgetting(
     ax.set_ylabel("General Capability Score")
     ax.set_title("Forgetting: General Capability Over Training Steps")
     ax.set_ylim(-0.05, 1.05)
-    ax.axhline(y=0.9, color="green", linestyle="--", alpha=0.5, label="0.9x threshold")
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -234,7 +224,22 @@ def _plot_forgetting(
 def _plot_sdpo_diagnostics(
     all_steps: dict[str, list[StepResult]], plots_dir: str, plt: object,
 ) -> None:
-    """Plot SDPO training metrics (distill_loss, kl_reg) over steps."""
+    """Plot distillation training metrics over steps.
+
+    Handles both LocalDistillMetrics (distill_loss, kl_reg) and
+    TinkerDistillMetrics (adv_mean only — kl_mean is a signed log-prob
+    delta, not a true KL divergence, so the right panel is left blank).
+    """
+    # Detect engine type from the first non-None metric.
+    is_tinker = False
+    for steps in all_steps.values():
+        for s in steps:
+            if isinstance(s.sdpo_metrics, TinkerDistillMetrics):
+                is_tinker = True
+                break
+        if is_tinker:
+            break
+
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))  # type: ignore[union-attr]
     has_data = False
 
@@ -243,14 +248,22 @@ def _plot_sdpo_diagnostics(
         x_kl, y_kl = [], []
 
         for s in steps:
-            sdpo = s.sdpo_metrics
-            if not sdpo:
+            m = s.sdpo_metrics
+            if not m:
                 continue
-            x_loss.append(s.step)
-            y_loss.append(sdpo.distill_loss)
-            x_kl.append(s.step)
-            y_kl.append(sdpo.kl_reg)
-            has_data = True
+            if isinstance(m, TinkerDistillMetrics):
+                x_loss.append(s.step)
+                y_loss.append(m.adv_mean)
+                has_data = True
+            else:
+                if m.distill_loss is not None:
+                    x_loss.append(s.step)
+                    y_loss.append(m.distill_loss)
+                    has_data = True
+                if m.kl_reg is not None:
+                    x_kl.append(s.step)
+                    y_kl.append(m.kl_reg)
+                    has_data = True
 
         if x_loss:
             ax1.plot(x_loss, y_loss, marker="o", label=pref)
@@ -261,19 +274,28 @@ def _plot_sdpo_diagnostics(
         plt.close(fig)  # type: ignore[union-attr]
         return
 
-    ax1.set_xlabel("Step")
-    ax1.set_ylabel("Distillation Loss")
-    ax1.set_title("SDPO Distillation Loss")
+    if is_tinker:
+        ax1.set_xlabel("Step")
+        ax1.set_ylabel("Advantage")
+        ax1.set_title("Mean Advantage (teacher - student)")
+        ax1.axhline(y=0, color="k", linestyle="--", alpha=0.3)
+    else:
+        ax1.set_xlabel("Step")
+        ax1.set_ylabel("Loss")
+        ax1.set_title("Distillation Loss (GJS)")
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
-    ax2.set_xlabel("Step")
-    ax2.set_ylabel("KL Regularization")
-    ax2.set_title("KL Regularization Term")
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+    if is_tinker:
+        ax2.set_visible(False)
+    else:
+        ax2.set_xlabel("Step")
+        ax2.set_ylabel("KL Divergence")
+        ax2.set_title("KL Regularization")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
 
-    fig.suptitle("SDPO Training Diagnostics")
+    fig.suptitle("Training Diagnostics")
     fig.tight_layout()
     fig.savefig(os.path.join(plots_dir, "sdpo_diagnostics.png"), dpi=150)
     plt.close(fig)  # type: ignore[union-attr]

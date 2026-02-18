@@ -38,7 +38,7 @@ class TestBuildTeacherMessages:
 
     def test_default_system_prompt(self):
         msgs = build_teacher_messages("x")
-        assert "expert coding assistant" in msgs[0]["content"]
+        assert "helpful assistant" in msgs[0]["content"]
 
 
 class TestTeacherMessagesToChatTemplate:
