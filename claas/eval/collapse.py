@@ -66,7 +66,13 @@ import math
 
 import httpx
 
-from .types import DEFAULT_SYSTEM_PROMPT, ChatMessage, CollapseMetrics, EvalRollout
+from .types import (
+    ChatMessage,
+    CollapseMetrics,
+    EvalRollout,
+    direct_vllm_chat_params,
+    openclaw_chat_params,
+)
 from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
@@ -136,42 +142,24 @@ async def measure_entropy_and_mean_logprob(
     openclaw_url: str | None = None,
     openclaw_api_key: str = "openclaw-local-dev-token",
 ) -> tuple[float | None, float]:
-    """Generate one response and return (mean_entropy, mean_logprob).
-
-    Routing:
-    - **OpenClaw** (openclaw_url set): Generate through OpenClaw which
-      forwards to the backend. Uses logprobs and top_logprobs from the
-      chat completion response.
-    - **Direct vLLM** (no openclaw_url): Legacy direct-to-vLLM path.
-    """
+    """Generate one response and return (mean_entropy, mean_logprob)."""
     if openclaw_url:
-        # Local mode via OpenClaw: route through OpenClaw → vLLM
-        base_url = openclaw_url
-        headers = {"Authorization": f"Bearer {openclaw_api_key}"}
-        messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
-        req_model = "openclaw"
+        params = openclaw_chat_params(openclaw_url, openclaw_api_key, prompt)
     else:
-        # Fallback: direct to vLLM
-        base_url = vllm_url
-        headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
-        messages = [
-            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ]
-        req_model = model
+        params = direct_vllm_chat_params(vllm_url, vllm_api_key, model, prompt)
 
-    async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
+    async with httpx.AsyncClient(base_url=params.base_url, timeout=timeout_s) as client:
         resp = await client.post(
             "/v1/chat/completions",
             json={
-                "model": req_model,
-                "messages": messages,
+                "model": params.model,
+                "messages": params.messages,
                 "temperature": 0,
                 "max_tokens": 2048,
                 "logprobs": True,
                 "top_logprobs": 20,
             },
-            headers=headers,
+            headers=params.headers,
         )
         resp.raise_for_status()
 
@@ -210,10 +198,10 @@ async def measure_entropy_and_mean_logprob(
         else 0.0
     )
     if rollout_log is not None:
-        rollout_msgs: list[ChatMessage] = []
-        if not openclaw_url:
-            rollout_msgs.append(ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
-        rollout_msgs.append(ChatMessage(role="user", content=prompt))
+        rollout_msgs: list[ChatMessage] = [
+            ChatMessage(role=m["role"], content=m["content"])  # type: ignore[arg-type]
+            for m in params.messages
+        ]
         rollout_msgs.append(ChatMessage(role="assistant", content=response_text))
         rollout_log.append(
             EvalRollout(
@@ -242,34 +230,24 @@ async def measure_self_rouge_l(
     openclaw_api_key: str = "openclaw-local-dev-token",
 ) -> float:
     """Generate n_samples responses at temperature=0.7 and compute mean pairwise ROUGE-L."""
-    # Route through OpenClaw when configured (injects full agent context)
     if openclaw_url:
-        base_url = openclaw_url
-        headers = {"Authorization": f"Bearer {openclaw_api_key}"}
-        messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
-        req_model = "openclaw"
+        params = openclaw_chat_params(openclaw_url, openclaw_api_key, prompt)
     else:
-        base_url = vllm_url
-        headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
-        messages = [
-            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ]
-        req_model = model
+        params = direct_vllm_chat_params(vllm_url, vllm_api_key, model, prompt)
 
     responses = []
 
-    async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
+    async with httpx.AsyncClient(base_url=params.base_url, timeout=timeout_s) as client:
         for _ in range(n_samples):
             resp = await client.post(
                 "/v1/chat/completions",
                 json={
-                    "model": req_model,
-                    "messages": messages,
+                    "model": params.model,
+                    "messages": params.messages,
                     "temperature": 0.7,
                     "max_tokens": 2048,
                 },
-                headers=headers,
+                headers=params.headers,
             )
             resp.raise_for_status()
             text = resp.json()["choices"][0]["message"]["content"]
@@ -286,12 +264,12 @@ async def measure_self_rouge_l(
             scores.append(rouge_l_score(clean_responses[i], clean_responses[j]))
 
     if rollout_log is not None:
-        base_msgs: list[ChatMessage] = []
-        if not openclaw_url:
-            base_msgs.append(ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
+        base_msgs: list[ChatMessage] = [
+            ChatMessage(role=m["role"], content=m["content"])  # type: ignore[arg-type]
+            for m in params.messages
+        ]
         for idx, response in enumerate(responses):
             sample_msgs = list(base_msgs)
-            sample_msgs.append(ChatMessage(role="user", content=prompt))
             sample_msgs.append(ChatMessage(role="assistant", content=response))
             rollout_log.append(
                 EvalRollout(

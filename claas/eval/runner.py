@@ -29,8 +29,6 @@ from .metrics import Metric, build_metrics
 from .plotting import generate_plots
 from .preferences import PreferenceConfig, get_preference_configs
 from .types import (
-    DEFAULT_SYSTEM_PROMPT,
-    ChatMessage,
     EvalMetrics,
     ExperimentResult,
     ExperimentSummary,
@@ -38,20 +36,12 @@ from .types import (
     MetricContext,
     SDPOMetrics,
     StepResult,
+    direct_vllm_chat_params,
+    openclaw_chat_params,
 )
 from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
-
-
-def _build_messages(
-    prompt: str,
-) -> list[ChatMessage]:
-    """Build direct-vLLM messages with a default system prompt."""
-    return [
-        ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT),
-        ChatMessage(role="user", content=prompt),
-    ]
 
 
 async def _init_lora(config: HarnessConfig, lora_id: str) -> str:
@@ -141,43 +131,22 @@ async def _generate_response(
     temperature: float = 0,
     max_tokens: int = 2048,
 ) -> str:
-    """Generate a response via OpenClaw gateway (if configured) or direct vLLM.
-
-    When ``config.openclaw_url`` is set the request is routed through the
-    OpenClaw ``/v1/chat/completions`` endpoint which prepends the full agent
-    system prompt and context automatically.  Otherwise the request goes
-    directly to vLLM with manually-constructed messages.
-    """
+    """Generate a response via OpenClaw or direct vLLM."""
     if config.openclaw_url:
-        headers = {"Authorization": f"Bearer {config.openclaw_api_key}"}
-        base_url = config.openclaw_url
-        body: dict[str, object] = {
-            "model": "openclaw",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }
+        params = openclaw_chat_params(config.openclaw_url, config.openclaw_api_key, prompt)
     else:
-        headers = (
-            {"Authorization": f"Bearer {config.vllm_api_key}"}
-            if config.vllm_api_key
-            else {}
-        )
-        base_url = config.vllm_url
-        messages = _build_messages(prompt=prompt)
-        body = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
+        params = direct_vllm_chat_params(config.vllm_url, config.vllm_api_key, model, prompt)
 
-    async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
+    async with httpx.AsyncClient(base_url=params.base_url, timeout=120.0) as client:
         resp = await client.post(
             "/v1/chat/completions",
-            json=body,
-            headers=headers,
+            json={
+                "model": params.model,
+                "messages": params.messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            headers=params.headers,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
@@ -247,7 +216,8 @@ async def _fetch_rollout_logprobs_vllm(
     chat template is applied server-side (no manual ChatML construction).
     """
     headers = {"Authorization": f"Bearer {config.vllm_api_key}"} if config.vllm_api_key else {}
-    messages = _build_messages(prompt=prompt)
+    params = direct_vllm_chat_params(config.vllm_url, config.vllm_api_key, model, prompt)
+    messages = params.messages
 
     async with httpx.AsyncClient(base_url=config.vllm_url, timeout=60.0) as client:
         # Tokenize prompt messages to learn token count

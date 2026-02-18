@@ -12,6 +12,56 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
 
 @dataclass
+class ChatRequestParams:
+    """Resolved parameters for a /v1/chat/completions request."""
+
+    base_url: str
+    headers: dict[str, str]
+    model: str
+    messages: list[dict[str, str]]
+
+
+def openclaw_chat_params(
+    openclaw_url: str,
+    openclaw_api_key: str,
+    prompt: str,
+) -> ChatRequestParams:
+    """Build chat completion params routed through OpenClaw.
+
+    OpenClaw injects the full agent system prompt and context, so we only
+    send the bare user message.
+    """
+    return ChatRequestParams(
+        base_url=openclaw_url,
+        headers={"Authorization": f"Bearer {openclaw_api_key}"},
+        model="openclaw",
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+
+def direct_vllm_chat_params(
+    vllm_url: str,
+    vllm_api_key: str,
+    model: str,
+    prompt: str,
+) -> ChatRequestParams:
+    """Build chat completion params for direct vLLM communication.
+
+    Manually prepends the default system prompt since there is no
+    gateway to inject it.
+    """
+    return ChatRequestParams(
+        base_url=vllm_url,
+        headers={"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {},
+        model=model,
+        messages=[
+            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+    )
+
+
+@dataclass
 class EvalRollout:
     """Logged prompt/response transcript with metric-specific metadata."""
 
