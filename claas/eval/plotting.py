@@ -227,8 +227,19 @@ def _plot_sdpo_diagnostics(
     """Plot distillation training metrics over steps.
 
     Handles both LocalDistillMetrics (distill_loss, kl_reg) and
-    TinkerDistillMetrics (adv_mean, kl_mean).
+    TinkerDistillMetrics (adv_mean only — kl_mean is a signed log-prob
+    delta, not a true KL divergence, so the right panel is left blank).
     """
+    # Detect engine type from the first non-None metric.
+    is_tinker = False
+    for steps in all_steps.values():
+        for s in steps:
+            if isinstance(s.sdpo_metrics, TinkerDistillMetrics):
+                is_tinker = True
+                break
+        if is_tinker:
+            break
+
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))  # type: ignore[union-attr]
     has_data = False
 
@@ -243,9 +254,6 @@ def _plot_sdpo_diagnostics(
             if isinstance(m, TinkerDistillMetrics):
                 x_loss.append(s.step)
                 y_loss.append(m.adv_mean)
-                has_data = True
-                x_kl.append(s.step)
-                y_kl.append(m.kl_mean)
                 has_data = True
             else:
                 if m.distill_loss is not None:
@@ -266,17 +274,26 @@ def _plot_sdpo_diagnostics(
         plt.close(fig)  # type: ignore[union-attr]
         return
 
-    ax1.set_xlabel("Step")
-    ax1.set_ylabel("Loss / Advantage")
-    ax1.set_title("Distillation Loss")
+    if is_tinker:
+        ax1.set_xlabel("Step")
+        ax1.set_ylabel("Advantage")
+        ax1.set_title("Mean Advantage (teacher - student)")
+        ax1.axhline(y=0, color="k", linestyle="--", alpha=0.3)
+    else:
+        ax1.set_xlabel("Step")
+        ax1.set_ylabel("Loss")
+        ax1.set_title("Distillation Loss (GJS)")
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
-    ax2.set_xlabel("Step")
-    ax2.set_ylabel("KL Divergence")
-    ax2.set_title("KL Regularization")
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+    if is_tinker:
+        ax2.set_visible(False)
+    else:
+        ax2.set_xlabel("Step")
+        ax2.set_ylabel("KL Divergence")
+        ax2.set_title("KL Regularization")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
 
     fig.suptitle("Training Diagnostics")
     fig.tight_layout()
