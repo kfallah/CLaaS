@@ -15,7 +15,6 @@ import time
 
 import httpx
 
-
 from .gemini import GeminiUser
 from .logprob import derive_vllm_model_name
 from .metrics import Metric, build_metrics

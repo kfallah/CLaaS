@@ -13,8 +13,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from .types import DEFAULT_SYSTEM_PROMPT
-from .types import ChatMessage, EvalRollout, GeneralCapability
+from .types import DEFAULT_SYSTEM_PROMPT, ChatMessage, EvalRollout, GeneralCapability
 from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
