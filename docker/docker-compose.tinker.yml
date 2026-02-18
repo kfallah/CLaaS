@@ -38,11 +38,10 @@ services:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
       - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
       - CLAAS_TINKER_STATE_PATH=/data/tinker_state.json
-      - FEEDBACK_LOG_DIR=/feedback-logs
       - VLLM_BASE_URL=http://tinker-proxy:8000
       - WAIT_FOR_BACKEND=0
     volumes:
-      - claas-feedback-logs:/feedback-logs
+      - claas-feedback-logs:/app/data/feedback
       - tinker-state:/data
     ports:
       - "${CLAAS_API_PORT:-8080}:8080"
