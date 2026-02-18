@@ -42,7 +42,6 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 
 from .core.config import CLaaSConfig, get_config
-from .core.sdpo_metrics import normalize_sdpo_metrics
 from .core.types import (
     DistillBatchItem,
     DistillBatchRequestPayload,
@@ -464,7 +463,6 @@ async def _run_distill(payload: DistillBatchRequestPayload) -> DistillResponse:
     """Execute a distill request via configured execution backend."""
     engine = _get_training_engine()
     result = await engine.distill(payload)
-    result.metadata.update(normalize_sdpo_metrics(result.metadata))
     return result
 
 
