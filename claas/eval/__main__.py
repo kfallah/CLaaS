@@ -75,10 +75,7 @@ def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output-dir",
         default=None,
-        help=(
-            "Output directory for results "
-            "(default: auto ./data/evals/<UTC timestamp>)"
-        ),
+        help="Output directory for results (auto-generated if omitted)",
     )
     parser.add_argument(
         "--gemini-api-key",

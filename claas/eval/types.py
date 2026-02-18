@@ -68,6 +68,7 @@ class SDPOMetrics:
 class CollapseMetrics:
     """Collapse detection metrics."""
 
+    # None in Tinker mode — proxy doesn't expose the full token distribution
     mean_entropy: float | None = None
     mean_logprob: float = 0.0
     entropy_ratio_to_baseline: float | None = None
