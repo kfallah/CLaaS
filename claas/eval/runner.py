@@ -33,9 +33,10 @@ from .types import (
     ExperimentResult,
     ExperimentSummary,
     HarnessConfig,
+    LocalDistillMetrics,
     MetricContext,
-    SDPOMetrics,
     StepResult,
+    TinkerDistillMetrics,
     direct_vllm_chat_params,
     openclaw_chat_params,
 )
@@ -90,7 +91,7 @@ async def _submit_feedback(
     config: HarnessConfig,
     lora_id: str,
     samples: list[DistillBatchItem],
-) -> SDPOMetrics | None:
+) -> LocalDistillMetrics | TinkerDistillMetrics | None:
     """Submit batched feedback via CLaaS API and return SDPO metrics."""
     payload = FeedbackBatchRequest(
         requests=[
@@ -116,7 +117,20 @@ async def _submit_feedback(
         return None
 
     metadata = distill_result.get("metadata") or {}
-    return SDPOMetrics(
+
+    if config.mode == "tinker" and "adv_mean" in metadata:
+        return TinkerDistillMetrics(
+            adv_mean=metadata["adv_mean"],
+            kl_mean=metadata["kl_mean"],
+            effective_kl_coef=metadata["effective_kl_coef"],
+            kl_gain=metadata["kl_gain"],
+            adv_abs_mean=metadata["adv_abs_mean"],
+            adv_abs_mean_raw=metadata["adv_abs_mean_raw"],
+            completion_len=metadata.get("completion_len", 0),
+            batch_size=metadata.get("batch_size", 0),
+        )
+
+    return LocalDistillMetrics(
         distill_loss=metadata.get("distill_loss"),
         kl_reg=metadata.get("kl_reg"),
         mean_is_ratio=metadata.get("mean_is_ratio"),
@@ -330,7 +344,9 @@ def _load_completed_steps(output_dir: str, preference: str) -> list[StepResult]:
                 timestamp=data["timestamp"],
                 feedback_given=data["feedback_given"],
                 sdpo_metrics=(
-                    SDPOMetrics(**data["sdpo_metrics"])
+                    TinkerDistillMetrics(**data["sdpo_metrics"])
+                    if data.get("sdpo_metrics") and "adv_mean" in data["sdpo_metrics"]
+                    else LocalDistillMetrics(**data["sdpo_metrics"])
                     if data.get("sdpo_metrics")
                     else None
                 ),

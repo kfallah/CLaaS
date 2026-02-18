@@ -6,9 +6,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from claas.core.config import DEFAULT_SYSTEM_PROMPT
 from claas.core.types import ChatMessage
-
-DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
 
 @dataclass
@@ -106,13 +105,27 @@ class LogprobMargin:
 
 
 @dataclass
-class SDPOMetrics:
+class LocalDistillMetrics:
     """Metrics returned by a single SDPO distillation step."""
 
     distill_loss: float | None
     kl_reg: float | None
     mean_is_ratio: float | None
     clip_fraction: float | None
+
+
+@dataclass
+class TinkerDistillMetrics:
+    """Metrics returned by the Tinker engine's importance-sampling training step."""
+
+    adv_mean: float
+    kl_mean: float
+    effective_kl_coef: float
+    kl_gain: float
+    adv_abs_mean: float
+    adv_abs_mean_raw: float
+    completion_len: int = 0
+    batch_size: int = 0
 
 
 @dataclass
@@ -157,7 +170,7 @@ class StepResult:
     step: int
     timestamp: str
     feedback_given: str
-    sdpo_metrics: SDPOMetrics | None
+    sdpo_metrics: LocalDistillMetrics | TinkerDistillMetrics | None
     eval: EvalMetrics
     prompt_used: str
     response_text: str | None = None
@@ -243,10 +256,13 @@ def step_result_from_dict(data: dict[str, object]) -> StepResult:
             if isinstance(item, dict)
         ]
 
-    sdpo = None
+    sdpo: LocalDistillMetrics | TinkerDistillMetrics | None = None
     sdpo_data = data.get("sdpo_metrics")
     if sdpo_data:
-        sdpo = SDPOMetrics(**sdpo_data)  # type: ignore[arg-type]
+        if "adv_mean" in sdpo_data:  # type: ignore[operator]
+            sdpo = TinkerDistillMetrics(**sdpo_data)  # type: ignore[arg-type]
+        else:
+            sdpo = LocalDistillMetrics(**sdpo_data)  # type: ignore[arg-type]
 
     return StepResult(
         preference=data["preference"],  # type: ignore[arg-type]

@@ -18,6 +18,7 @@ from typing import Any
 
 from .types import (
     StepResult,
+    TinkerDistillMetrics,
     step_result_from_dict,
 )
 
@@ -193,7 +194,12 @@ def _step_detail_rows(steps: list[StepResult], preference: str, run_id: str) -> 
             else "-"
         )
         compliance_str = _fmt(step.eval.preference_compliance)
-        loss_str = _fmt(step.sdpo_metrics.distill_loss) if step.sdpo_metrics else "-"
+        if isinstance(step.sdpo_metrics, TinkerDistillMetrics):
+            loss_str = _fmt(step.sdpo_metrics.adv_mean)
+        elif step.sdpo_metrics:
+            loss_str = _fmt(step.sdpo_metrics.distill_loss)
+        else:
+            loss_str = "-"
 
         # Summary row
         rows.append(
@@ -245,12 +251,19 @@ def _step_detail_rows(steps: list[StepResult], preference: str, run_id: str) -> 
                 )
             )
 
-        # SDPO metrics
+        # Training metrics
         if step.sdpo_metrics:
-            sdpo_json = json.dumps(dataclasses.asdict(step.sdpo_metrics), indent=2, sort_keys=True)
+            metrics_label = (
+                "Tinker Distill Metrics"
+                if isinstance(step.sdpo_metrics, TinkerDistillMetrics)
+                else "Local Distill Metrics"
+            )
+            metrics_json = json.dumps(
+                dataclasses.asdict(step.sdpo_metrics), indent=2, sort_keys=True,
+            )
             sections.append(
-                "<section><h3>SDPO Metrics</h3><pre>{}</pre></section>".format(
-                    html.escape(sdpo_json)
+                "<section><h3>{}</h3><pre>{}</pre></section>".format(
+                    metrics_label, html.escape(metrics_json),
                 )
             )
 

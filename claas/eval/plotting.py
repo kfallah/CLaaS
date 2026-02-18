@@ -10,7 +10,7 @@ import json
 import logging
 import os
 
-from .types import StepResult, step_result_from_dict
+from .types import StepResult, TinkerDistillMetrics, step_result_from_dict
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +224,11 @@ def _plot_forgetting(
 def _plot_sdpo_diagnostics(
     all_steps: dict[str, list[StepResult]], plots_dir: str, plt: object,
 ) -> None:
-    """Plot SDPO training metrics (distill_loss, kl_reg) over steps."""
+    """Plot distillation training metrics over steps.
+
+    Handles both LocalDistillMetrics (distill_loss, kl_reg) and
+    TinkerDistillMetrics (adv_mean, kl_mean).
+    """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))  # type: ignore[union-attr]
     has_data = False
 
@@ -233,17 +237,25 @@ def _plot_sdpo_diagnostics(
         x_kl, y_kl = [], []
 
         for s in steps:
-            sdpo = s.sdpo_metrics
-            if not sdpo:
+            m = s.sdpo_metrics
+            if not m:
                 continue
-            if sdpo.distill_loss is not None:
+            if isinstance(m, TinkerDistillMetrics):
                 x_loss.append(s.step)
-                y_loss.append(sdpo.distill_loss)
+                y_loss.append(m.adv_mean)
                 has_data = True
-            if sdpo.kl_reg is not None:
                 x_kl.append(s.step)
-                y_kl.append(sdpo.kl_reg)
+                y_kl.append(m.kl_mean)
                 has_data = True
+            else:
+                if m.distill_loss is not None:
+                    x_loss.append(s.step)
+                    y_loss.append(m.distill_loss)
+                    has_data = True
+                if m.kl_reg is not None:
+                    x_kl.append(s.step)
+                    y_kl.append(m.kl_reg)
+                    has_data = True
 
         if x_loss:
             ax1.plot(x_loss, y_loss, marker="o", label=pref)
@@ -255,18 +267,18 @@ def _plot_sdpo_diagnostics(
         return
 
     ax1.set_xlabel("Step")
-    ax1.set_ylabel("Distillation Loss")
-    ax1.set_title("SDPO Distillation Loss")
+    ax1.set_ylabel("Loss / Advantage")
+    ax1.set_title("Distillation Loss")
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
     ax2.set_xlabel("Step")
-    ax2.set_ylabel("KL Regularization")
-    ax2.set_title("KL Regularization Term")
+    ax2.set_ylabel("KL Divergence")
+    ax2.set_title("KL Regularization")
     ax2.legend()
     ax2.grid(True, alpha=0.3)
 
-    fig.suptitle("SDPO Training Diagnostics")
+    fig.suptitle("Training Diagnostics")
     fig.tight_layout()
     fig.savefig(os.path.join(plots_dir, "sdpo_diagnostics.png"), dpi=150)
     plt.close(fig)  # type: ignore[union-attr]
