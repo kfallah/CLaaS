@@ -26,8 +26,6 @@ class TrainingConfig(BaseModel):
 
     learning_rate: float = Field(
         default=5e-5,
-        ge=1e-6,
-        le=1e-2,
         description="Learning rate for LoRA parameter updates",
     )
     alpha: float = Field(
