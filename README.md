@@ -125,8 +125,8 @@ All configuration is via environment variables. See [`docker/README.md`](docker/
 The eval harness runs automated feedback loops against a live CLaaS stack and measures whether training shifts the model toward preferred behaviours without collapsing. Configuration uses [Hydra](https://hydra.cc/) with YAML configs.
 
 ```bash
-# Install eval + tinker dependencies
-uv sync --extra eval --extra tinker --extra dev
+# Install tinker + dev dependencies
+uv sync --extra tinker --extra dev
 
 # Run conciseness eval for 20 steps (Tinker mode, no GPU)
 CLAAS_TINKER_API_KEY="tml-..." \

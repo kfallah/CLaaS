@@ -22,7 +22,6 @@ from claas.core.types import (
     TrainingConfig,
 )
 
-from .gemini import GeminiUser
 from .logprob import derive_vllm_model_name
 from .metrics import Metric, build_metrics
 from .plotting import generate_plots
@@ -447,7 +446,6 @@ def _write_summary(output_dir: str, results: list[ExperimentResult]) -> None:
 async def run_preference_experiment(
     config: HarnessConfig,
     pref: PreferenceConfig,
-    gemini_user: GeminiUser | None = None,
     enabled_metrics: list[Metric] | None = None,
     needs_generation: bool = False,
 ) -> ExperimentResult:
@@ -602,18 +600,6 @@ async def run_preference_experiment(
         if response_text is None:
             response_text = "I'd be happy to help you with that."
 
-        # Gemini feedback override (optional)
-        if needs_generation and gemini_user:
-            try:
-                gemini_result = await gemini_user.evaluate_response(response_text, prompt)
-                if gemini_result.feedback:
-                    feedback_str = gemini_result.feedback
-                    # Update feedback in all samples
-                    for s in samples:
-                        s.feedback = feedback_str
-            except (httpx.HTTPError, KeyError, ValueError, ImportError) as e:
-                logger.warning("[%s] Gemini feedback failed, using default: %s", pref.name, e)
-
         # Submit feedback — possibly multiple gradient steps on same batch
         sdpo_metrics = None
         sub_steps_completed = 0
@@ -733,17 +719,10 @@ async def run_harness(config: HarnessConfig) -> None:
         [m.name for m in enabled_metrics], [p.name for p in selected], config.num_steps,
     )
 
-    # Resolve secrets from env vars (never stored on config)
-    gemini_api_key = os.environ.get("GEMINI_API_KEY")
-
     results: list[ExperimentResult] = []
     for pref in selected:
-        gemini = None
-        if needs_generation and gemini_api_key:
-            gemini = GeminiUser(gemini_api_key, pref.feedback_string)
-
         result = await run_preference_experiment(
-            config, pref, gemini,
+            config, pref,
             enabled_metrics=enabled_metrics,
             needs_generation=needs_generation,
         )

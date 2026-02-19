@@ -130,7 +130,7 @@ The eval harness uses Hydra for YAML-based configuration. Default config: `claas
 
 ```bash
 # Install eval deps
-uv sync --extra eval --extra tinker --extra dev
+uv sync --extra tinker --extra dev
 
 # Run eval with Hydra overrides
 claas eval 'preferences=[concise]' num_steps=20 base_model=Qwen/Qwen3-30B-A3B
@@ -141,7 +141,7 @@ Key points:
 - Tinker model names differ from HuggingFace: use `Qwen/Qwen3-30B-A3B` not `Qwen/Qwen3-Coder-30B-A3B-Instruct`
 - The API's FastAPI instance is `claas.api:web_app` (not `claas.api:app`, which is the Modal App)
 - Secrets (`CLAAS_TINKER_API_KEY`, `VLLM_API_KEY`) come from env vars, not the config
-- `test_eval_config.py` requires `hydra-core` (install via `--extra eval`)
+- `test_eval_config.py` requires `hydra-core` (now a core dependency)
 
 ## Dependencies
 

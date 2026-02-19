@@ -203,14 +203,6 @@ class ExperimentSummary:
 
 
 @dataclass
-class GeminiEvalResult:
-    """Result from Gemini's evaluation of a chatbot response."""
-
-    satisfied: bool
-    feedback: str | None = None
-
-
-@dataclass
 class MetricContext:
     """Bundled arguments passed to each metric's measure() method."""
 

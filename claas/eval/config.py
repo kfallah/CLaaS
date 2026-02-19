@@ -37,7 +37,7 @@ def load_config(
         cfg = compose(config_name=config_name, overrides=overrides or [])
 
     container = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    eval_cfg = EvalConfig(**container)  # type: ignore[arg-type]
+    eval_cfg = EvalConfig(**container)  # type: ignore[invalid-argument-type]
     return build_harness_config(eval_cfg)
 
 

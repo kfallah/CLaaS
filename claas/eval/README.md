@@ -86,7 +86,7 @@ Secrets are resolved from env vars at runtime, NOT stored in config:
 ### 1. Install dependencies
 
 ```bash
-uv sync --extra eval --extra tinker --extra dev
+uv sync --extra tinker --extra dev
 ```
 
 ### 2. Start the Tinker inference proxy
