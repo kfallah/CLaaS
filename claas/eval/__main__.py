@@ -24,6 +24,10 @@ Local stack (GPU)::
 Can also be invoked via the CLI::
 
     claas eval --mode local --preferences no_emoji --metrics logprob --num-steps 10
+
+YAML config file::
+
+    python -m claas.eval --config claas/eval/configs/example.yaml --num-steps 5
 """
 
 from __future__ import annotations
@@ -33,12 +37,18 @@ import asyncio
 import os
 from datetime import datetime, timezone
 
+from .config import build_config_from_yaml
 from .runner import run_harness
 from .types import HarnessConfig
 
 
 def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
     """Add all eval harness arguments to an argparse parser."""
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to YAML config file (CLI args override YAML values)",
+    )
     parser.add_argument(
         "--mode",
         choices=["local", "tinker"],
@@ -150,10 +160,80 @@ def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
         default=4,
         help="Samples per feedback step (default: 4 = batched)",
     )
+    parser.add_argument(
+        "--steps-per-batch",
+        type=int,
+        default=1,
+        help="Gradient steps per feedback batch; IS ratios recomputed each sub-step (default: 1)",
+    )
 
 
-def build_config(args: argparse.Namespace) -> HarnessConfig:
-    """Build a HarnessConfig from parsed CLI arguments."""
+def _get_explicit_cli_overrides(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> dict:
+    """Return a dict of only the CLI args that were explicitly provided (not defaults).
+
+    Uses argparse default-detection: compares each arg value against the parser
+    defaults. Only args whose value differs from the default (i.e., explicitly set)
+    are included, so YAML values are not clobbered by CLI defaults.
+    """
+    defaults = vars(parser.parse_args([]))
+    overrides: dict = {}
+    args_dict = vars(args)
+
+    # Map of CLI dest names → HarnessConfig field names (where they differ)
+    dest_to_field = {
+        "claas_url": "claas_url",
+        "vllm_url": "vllm_url",
+        "vllm_api_key": "vllm_api_key",
+        "vllm_model_name": "vllm_model_name",
+        "num_steps": "num_steps",
+        "output_dir": "output_dir",
+        "gemini_api_key": "gemini_api_key",
+        "lora_id_prefix": "lora_id_prefix",
+        "openclaw_url": "openclaw_url",
+        "openclaw_api_key": "openclaw_api_key",
+        "proxy_url": "proxy_url",
+        "base_model": "base_model",
+        "batch_size": "batch_size",
+        "steps_per_batch": "steps_per_batch",
+        "mode": "mode",
+        "preferences": "preferences",
+        "seed": "seed",
+        "plots": "plots",
+    }
+
+    for dest, field_name in dest_to_field.items():
+        if dest in args_dict and args_dict[dest] != defaults.get(dest):
+            overrides[field_name] = args_dict[dest]
+
+    # Special handling for metrics (needs comma-split coercion)
+    if "metrics" in args_dict and args_dict["metrics"] != defaults.get("metrics"):
+        raw = args_dict["metrics"]
+        overrides["metrics"] = [m.strip() for m in raw.split(",") if m.strip()]
+
+    # Special handling for collapse_steps (needs comma-split → set coercion)
+    if "collapse_steps" in args_dict and args_dict["collapse_steps"] != defaults.get(
+        "collapse_steps"
+    ):
+        raw = args_dict["collapse_steps"]
+        if raw is not None:
+            overrides["collapse_steps"] = {int(s.strip()) for s in raw.split(",") if s.strip()}
+
+    return overrides
+
+
+def build_config(args: argparse.Namespace, parser: argparse.ArgumentParser | None = None) -> HarnessConfig:
+    """Build a HarnessConfig from parsed CLI arguments.
+
+    If ``args.config`` is set, loads the YAML as the base config and overlays
+    only explicitly-provided CLI args on top.
+    """
+    if args.config:
+        cli_overrides = _get_explicit_cli_overrides(args, parser) if parser else {}
+        return build_config_from_yaml(args.config, cli_overrides)
+
     mode: str = args.mode
 
     # Parse --metrics comma string
@@ -198,6 +278,7 @@ def build_config(args: argparse.Namespace) -> HarnessConfig:
         proxy_url=proxy_url,
         base_model=args.base_model,
         batch_size=args.batch_size,
+        steps_per_batch=args.steps_per_batch,
     )
 
 
@@ -207,7 +288,7 @@ def parse_args() -> HarnessConfig:
     )
     add_eval_arguments(parser)
     args = parser.parse_args()
-    return build_config(args)
+    return build_config(args, parser)
 
 
 def main() -> None:

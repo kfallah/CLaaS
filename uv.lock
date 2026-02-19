@@ -693,6 +693,7 @@ dev = [
 eval = [
     { name = "google-genai" },
     { name = "matplotlib" },
+    { name = "pyyaml" },
 ]
 local = [
     { name = "peft" },
@@ -720,6 +721,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.6.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "pyyaml", marker = "extra == 'eval'", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3.0" },
     { name = "tinker", marker = "extra == 'tinker'", specifier = ">=0.13.0" },
     { name = "tinker-cookbook", marker = "extra == 'tinker'" },

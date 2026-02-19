@@ -34,6 +34,7 @@ teacher = [
 eval = [
     "matplotlib>=3.8.0",
     "google-genai>=1.0.0",
+    "pyyaml>=6.0",
 ]
 local = [
     "torch>=2.1.0",

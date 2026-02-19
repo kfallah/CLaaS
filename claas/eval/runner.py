@@ -5,7 +5,6 @@ Runs feedback steps, measures metrics, writes results to disk.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import hashlib
 import json
@@ -600,22 +599,35 @@ async def run_preference_experiment(
             except (httpx.HTTPError, KeyError, ValueError, ImportError) as e:
                 logger.warning("[%s] Gemini feedback failed, using default: %s", pref.name, e)
 
-        # Submit feedback via CLaaS API
+        # Submit feedback — possibly multiple gradient steps on same batch
         sdpo_metrics = None
+        sub_steps_completed = 0
         if samples:
-            try:
-                sdpo_metrics = await _submit_feedback(
-                    config, actual_lora_id, samples,
-                )
-            except (httpx.HTTPError, KeyError) as e:
-                logger.warning("[%s] Step %d feedback failed: %s — retrying in 5s", pref.name, step, e)
-                await asyncio.sleep(5)
+            for sub_step in range(config.steps_per_batch):
                 try:
                     sdpo_metrics = await _submit_feedback(
                         config, actual_lora_id, samples,
                     )
-                except (httpx.HTTPError, KeyError) as e2:
-                    logger.error("[%s] Step %d feedback failed on retry: %s", pref.name, step, e2)
+                    sub_steps_completed += 1
+                except (httpx.HTTPError, KeyError) as e:
+                    logger.warning(
+                        "[%s] Step %d sub-step %d feedback failed: %s",
+                        pref.name, step, sub_step, e,
+                    )
+                    break
+
+                # Reload LoRA between sub-steps (local mode only, not after last sub-step)
+                if config.mode == "local" and sub_step < config.steps_per_batch - 1:
+                    try:
+                        await _load_lora_into_vllm(config, actual_lora_id, lora_path)
+                    except (httpx.HTTPError, KeyError) as e:
+                        logger.warning("[%s] LoRA reload failed: %s", pref.name, e)
+
+            if config.steps_per_batch > 1:
+                logger.info(
+                    "[%s] Step %d: %d sub-steps completed",
+                    pref.name, step, sub_steps_completed,
+                )
 
         # Reload LoRA into vLLM (skip for Tinker — proxy auto-refreshes)
         if config.mode == "local":
@@ -649,6 +661,7 @@ async def run_preference_experiment(
             ],
             response_text=response_text if needs_generation else None,
             timing_s=timing_s,
+            sub_step_count=sub_steps_completed if sub_steps_completed > 0 else 1,
         )
 
         result.steps.append(step_result)

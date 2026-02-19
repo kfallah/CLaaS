@@ -92,6 +92,7 @@ class HarnessConfig:
     proxy_url: str | None = None
     base_model: str = "Qwen/Qwen3-8B"
     batch_size: int = 4
+    steps_per_batch: int = 1  # gradient steps per feedback batch (>=1)
 
 
 @dataclass
@@ -175,6 +176,7 @@ class StepResult:
     prompt_used: str
     response_text: str | None = None
     timing_s: float = 0.0
+    sub_step_count: int = 1  # number of gradient sub-steps taken
 
 
 @dataclass

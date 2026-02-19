@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from claas.eval.types import (
+    HarnessConfig,
     LocalDistillMetrics,
+    StepResult,
     TinkerDistillMetrics,
     step_result_from_dict,
 )
@@ -100,3 +102,54 @@ def test_step_result_from_dict_no_metrics():
     """Missing sdpo_metrics deserializes to None."""
     result = step_result_from_dict(_BASE_STEP)
     assert result.sdpo_metrics is None
+
+
+# ── HarnessConfig defaults ───────────────────────────────────────────
+
+
+def test_steps_per_batch_default():
+    """HarnessConfig.steps_per_batch defaults to 1."""
+    config = HarnessConfig()
+    assert config.steps_per_batch == 1
+
+
+def test_steps_per_batch_custom():
+    """HarnessConfig.steps_per_batch can be set."""
+    config = HarnessConfig(steps_per_batch=3)
+    assert config.steps_per_batch == 3
+
+
+# ── StepResult sub_step_count ────────────────────────────────────────
+
+
+def test_sub_step_count_default():
+    """StepResult.sub_step_count defaults to 1."""
+    from claas.eval.types import EvalMetrics
+
+    sr = StepResult(
+        preference="no_emoji",
+        step=0,
+        timestamp="2026-02-19T00:00:00Z",
+        feedback_given="no emojis",
+        sdpo_metrics=None,
+        eval=EvalMetrics(),
+        prompt_used="Hello",
+    )
+    assert sr.sub_step_count == 1
+
+
+def test_sub_step_count_set():
+    """StepResult.sub_step_count can be set explicitly."""
+    from claas.eval.types import EvalMetrics
+
+    sr = StepResult(
+        preference="no_emoji",
+        step=0,
+        timestamp="2026-02-19T00:00:00Z",
+        feedback_given="no emojis",
+        sdpo_metrics=None,
+        eval=EvalMetrics(),
+        prompt_used="Hello",
+        sub_step_count=3,
+    )
+    assert sr.sub_step_count == 3
