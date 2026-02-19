@@ -85,10 +85,14 @@ def cmd_health(args: argparse.Namespace) -> int:
 
 def cmd_eval(args: argparse.Namespace) -> int:
     """Run the evaluation harness."""
-    from .eval.__main__ import build_config
+    from .eval.config import load_config
     from .eval.runner import run_harness
 
-    config = build_config(args)
+    config = load_config(
+        config_dir=args.config_dir,
+        config_name=args.config_name,
+        overrides=args.overrides,
+    )
     asyncio.run(run_harness(config))
     return 0
 
@@ -200,9 +204,9 @@ def main() -> int:
 
     # eval command
     eval_parser = subparsers.add_parser("eval", help="Run the evaluation harness")
-    from .eval.__main__ import add_eval_arguments
-
-    add_eval_arguments(eval_parser)
+    eval_parser.add_argument("--config-dir", default=None, help="Hydra config directory")
+    eval_parser.add_argument("--config-name", default="base", help="Hydra config name")
+    eval_parser.add_argument("overrides", nargs="*", help="Hydra overrides (key=value)")
     eval_parser.set_defaults(func=cmd_eval)
 
     args = parser.parse_args()

@@ -1,89 +1,56 @@
-"""YAML configuration loading for the evaluation harness."""
+"""Hydra-based configuration for the evaluation harness."""
 
 from __future__ import annotations
 
 import dataclasses
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
-from .types import HarnessConfig
+from hydra import compose, initialize_config_dir
+from hydra.core.config_store import ConfigStore
+from omegaconf import OmegaConf
 
-# Valid keys: field names of HarnessConfig
-_VALID_KEYS = {f.name for f in dataclasses.fields(HarnessConfig)}
+from .types import EvalConfig, HarnessConfig
 
+# Register EvalConfig as the structured config schema
+cs = ConfigStore.instance()
+cs.store(name="_eval_schema", node=EvalConfig)
 
-def load_yaml_config(path: str) -> dict:
-    """Read a YAML file and return a raw dict.
-
-    Validates that no unknown keys are present (compared to HarnessConfig fields).
-    Raises ValueError for unknown keys.
-    """
-    import yaml
-
-    with open(path) as f:
-        data = yaml.safe_load(f)
-
-    if not isinstance(data, dict):
-        raise ValueError(f"YAML config must be a mapping, got {type(data).__name__}")
-
-    unknown = set(data.keys()) - _VALID_KEYS
-    if unknown:
-        raise ValueError(f"Unknown config keys: {', '.join(sorted(unknown))}")
-
-    return data
+# Default config directory (relative to this module)
+_DEFAULT_CONFIG_DIR = str(Path(__file__).parent / "configs")
 
 
-def build_config_from_yaml(
-    yaml_path: str,
-    cli_overrides: dict | None = None,
+def load_config(
+    config_dir: str | None = None,
+    config_name: str = "base",
+    overrides: list[str] | None = None,
 ) -> HarnessConfig:
-    """Load a YAML config, apply CLI overrides, and return a HarnessConfig.
+    """Load config via Hydra Compose API and return a HarnessConfig.
 
-    CLI overrides take priority over YAML values. Handles type coercions for
-    metrics (str or list), collapse_steps (str or list → set[int]),
-    and preferences (list).
+    Secrets (API keys) are NOT stored on the config object — they are
+    resolved from env vars at call sites in the runner.
     """
-    data = load_yaml_config(yaml_path)
+    abs_dir = os.path.abspath(config_dir or _DEFAULT_CONFIG_DIR)
 
-    # Apply CLI overrides on top
-    if cli_overrides:
-        data.update(cli_overrides)
+    with initialize_config_dir(version_base=None, config_dir=abs_dir):
+        cfg = compose(config_name=config_name, overrides=overrides or [])
 
-    # Type coercions
-    # metrics: accept comma-separated string or list
-    if "metrics" in data:
-        val = data["metrics"]
-        if isinstance(val, str):
-            data["metrics"] = [m.strip() for m in val.split(",") if m.strip()]
-        elif isinstance(val, list):
-            data["metrics"] = [str(m).strip() for m in val]
+    container = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+    eval_cfg = EvalConfig(**container)  # type: ignore[arg-type]
+    return build_harness_config(eval_cfg)
 
-    # collapse_steps: accept comma-separated string or list → set[int]
-    if "collapse_steps" in data:
-        val = data["collapse_steps"]
-        if isinstance(val, str):
-            data["collapse_steps"] = {int(s.strip()) for s in val.split(",") if s.strip()}
-        elif isinstance(val, list):
-            data["collapse_steps"] = {int(s) for s in val}
 
-    # preferences: ensure list of strings
-    if "preferences" in data and isinstance(data["preferences"], list):
-        data["preferences"] = [str(p) for p in data["preferences"]]
+def build_harness_config(eval_cfg: EvalConfig) -> HarnessConfig:
+    """Post-process EvalConfig → HarnessConfig (no secrets)."""
+    fields = dataclasses.asdict(eval_cfg)
 
-    # Tinker defaults: proxy_url fallback
-    mode = data.get("mode", "local")
-    if mode == "tinker" and not data.get("proxy_url"):
-        data["proxy_url"] = data.get("vllm_url", "http://localhost:8000")
+    # Tinker defaults: proxy_url fallback to vllm_url
+    if fields["mode"] == "tinker" and not fields.get("proxy_url"):
+        fields["proxy_url"] = fields["vllm_url"]
 
-    # openclaw_api_key: env var fallback
-    if "openclaw_api_key" not in data:
-        token = os.environ.get("OPENCLAW_GATEWAY_TOKEN")
-        if token:
-            data["openclaw_api_key"] = token
-
-    # Timestamped subdir under the base output directory
-    base_output = data.get("output_dir", "./data/evals")
+    # Timestamped output subdir
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
-    data["output_dir"] = os.path.join(base_output, run_id)
+    fields["output_dir"] = os.path.join(fields["output_dir"], run_id)
 
-    return HarnessConfig(**data)
+    return HarnessConfig(**fields)

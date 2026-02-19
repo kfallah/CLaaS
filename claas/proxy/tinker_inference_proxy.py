@@ -54,14 +54,19 @@ def _base_model() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _apply_chat_template_ids(tokenizer: Any, dicts: list[dict[str, str]]) -> list[int]:
+def _apply_chat_template_ids(
+    tokenizer: Any,
+    dicts: list[dict[str, str]],
+    *,
+    add_generation_prompt: bool = True,
+) -> list[int]:
     """Tokenize messages via apply_chat_template, returning token ids.
 
     The tokenizer parameter is typed as ``Any`` so that ty doesn't try to
     narrow the complex union return type of ``apply_chat_template``.
     """
     result = tokenizer.apply_chat_template(
-        dicts, add_generation_prompt=True, tokenize=True,
+        dicts, add_generation_prompt=add_generation_prompt, tokenize=True,
     )
     if isinstance(result, list):
         return result
@@ -311,6 +316,11 @@ class ScoreRequest(BaseModel):
     completion: str
 
 
+class ChatScoreRequest(BaseModel):
+    messages: list[ChatCompletionMessage]
+    completion: str
+
+
 class RefreshRequest(BaseModel):
     model_path: str | None = None
 
@@ -502,6 +512,67 @@ async def score_completion(req: ScoreRequest) -> dict[str, object]:
     )
 
     # Slice completion logprobs (same pattern as engine.py _slice_completion_logprobs)
+    raw = logprobs_full[prompt_len : prompt_len + completion_len]
+    logprobs = [lp if lp is not None else 0.0 for lp in raw]
+
+    token_strings = [tokenizer.decode([t]) for t in completion_tokens]
+    logprob_sum = sum(logprobs)
+
+    return {
+        "logprobs": logprobs,
+        "tokens": token_strings,
+        "prompt_tokens": prompt_len,
+        "completion_tokens": completion_len,
+        "logprob_sum": logprob_sum,
+    }
+
+
+@app.post("/v1/score/chat")
+async def score_chat_completion(req: ChatScoreRequest) -> dict[str, object]:
+    """Score a chat messages + completion pair using the tokenizer's chat template.
+
+    Unlike ``/v1/score`` (which tokenizes a raw string), this endpoint applies
+    the model's chat template so that logprob scoring matches how the model
+    sees inputs during generation and training.
+    """
+    tokenizer = _holder.tokenizer
+    sampler = _holder.sampler
+
+    msg_dicts = [
+        {"role": m.role, "content": _coerce_content(m.content)} for m in req.messages
+    ]
+
+    # Prompt tokens: messages with generation prompt appended
+    prompt_tokens = _apply_chat_template_ids(
+        tokenizer, msg_dicts, add_generation_prompt=True,
+    )
+
+    # Full tokens: messages + assistant completion, no generation prompt
+    full_msg_dicts = msg_dicts + [
+        {"role": "assistant", "content": req.completion},
+    ]
+    full_tokens = _apply_chat_template_ids(
+        tokenizer, full_msg_dicts, add_generation_prompt=False,
+    )
+
+    prompt_len = len(prompt_tokens)
+    completion_len = len(full_tokens) - prompt_len
+
+    if completion_len <= 0:
+        return {
+            "logprobs": [],
+            "tokens": [],
+            "prompt_tokens": prompt_len,
+            "completion_tokens": 0,
+            "logprob_sum": 0.0,
+        }
+
+    model_input = T.ModelInput.from_ints(full_tokens)
+    logprobs_full = await asyncio.to_thread(
+        lambda: sampler.compute_logprobs(model_input).result(),
+    )
+
+    completion_tokens = full_tokens[prompt_len:]
     raw = logprobs_full[prompt_len : prompt_len + completion_len]
     logprobs = [lp if lp is not None else 0.0 for lp in raw]
 

@@ -425,20 +425,32 @@ def _render_run(run_dir: str, run_id: str) -> str:
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def eval_dashboard_html(results_dir: str) -> str:
+def eval_dashboard_html(
+    results_dir: str, *, page: int = 1, per_page: int = 20
+) -> str:
     """Discover all runs under *results_dir* and render the dashboard HTML."""
-    runs = _discover_runs(results_dir)
+    from ..pagination import paginate, render_pagination_nav
 
-    if not runs:
+    runs = _discover_runs(results_dir)
+    total = len(runs)
+    info = paginate(total, page, per_page)
+    page_runs = runs[info.offset : info.offset + info.per_page]
+
+    if not page_runs:
         content = "<p>No eval runs found in <code>{}</code>.</p>".format(
             html.escape(results_dir),
         )
     else:
         parts: list[str] = []
-        for run_dir in runs:
+        for run_dir in page_runs:
             run_id = os.path.basename(run_dir) or results_dir
             parts.append(_render_run(run_dir, run_id))
         content = "\n".join(parts)
 
+    extra_params: dict[str, str] = {}
+    if results_dir != "./data/evals":
+        extra_params["results_dir"] = results_dir
+    nav = render_pagination_nav(info, "/v1/eval", extra_params=extra_params or None)
+
     template = EVAL_DASHBOARD_TEMPLATE.read_text(encoding="utf-8")
-    return template.replace("{{CONTENT}}", content)
+    return template.replace("{{CONTENT}}", content).replace("{{PAGINATION}}", nav)

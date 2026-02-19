@@ -119,6 +119,18 @@ def test_steps_per_batch_custom():
     assert config.steps_per_batch == 3
 
 
+def test_feedback_repetitions_default():
+    """HarnessConfig.feedback_repetitions defaults to 1."""
+    config = HarnessConfig()
+    assert config.feedback_repetitions == 1
+
+
+def test_feedback_repetitions_custom():
+    """HarnessConfig.feedback_repetitions can be set."""
+    config = HarnessConfig(feedback_repetitions=4)
+    assert config.feedback_repetitions == 4
+
+
 # ── StepResult sub_step_count ────────────────────────────────────────
 
 
