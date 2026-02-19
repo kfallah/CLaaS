@@ -53,6 +53,23 @@ claas/
 │       ├── modal/engine.py              # Modal remote execution
 │       └── tinker/engine.py, state.py   # Tinker SDK execution
 │
+├── eval/                                # Eval harness (Hydra config)
+│   ├── __init__.py
+│   ├── __main__.py                      # `python -m claas.eval` entry point
+│   ├── config.py                        # Hydra config loading (load_config / build_harness_config)
+│   ├── configs/base.yaml                # Default Hydra YAML config
+│   ├── types.py                         # EvalConfig dataclass, metric types
+│   ├── runner.py                        # Main eval loop (run_harness)
+│   ├── logprob.py                       # Logprob margin scoring
+│   ├── metrics.py                       # Metric registry
+│   ├── preferences.py                   # Preference configs (feedback strings, verifiers)
+│   ├── verifiers.py                     # Programmatic compliance verifiers
+│   ├── capability.py                    # General capability probes
+│   ├── collapse.py                      # Collapse detection
+│   ├── gemini.py                        # Gemini-based evaluation
+│   ├── plotting.py                      # Matplotlib plot generation
+│   └── dashboard.py                     # Web dashboard for results
+│
 └── proxy/                               # Inference proxy
     ├── __init__.py
     └── tinker_inference_proxy.py         # Tinker SDK -> OpenAI-compatible proxy
@@ -106,6 +123,25 @@ loss_dict = compute_sdpo_loss(
     alpha=0.5,  # JSD interpolation
 )
 ```
+
+## Eval Harness
+
+The eval harness uses Hydra for YAML-based configuration. Default config: `claas/eval/configs/base.yaml`.
+
+```bash
+# Install eval deps
+uv sync --extra eval --extra tinker --extra dev
+
+# Run eval with Hydra overrides
+claas eval 'preferences=[concise]' num_steps=20 base_model=Qwen/Qwen3-30B-A3B
+```
+
+Key points:
+- Config is in `claas/eval/configs/base.yaml` — override via `key=value` CLI args
+- Tinker model names differ from HuggingFace: use `Qwen/Qwen3-30B-A3B` not `Qwen/Qwen3-Coder-30B-A3B-Instruct`
+- The API's FastAPI instance is `claas.api:web_app` (not `claas.api:app`, which is the Modal App)
+- Secrets (`CLAAS_TINKER_API_KEY`, `VLLM_API_KEY`) come from env vars, not the config
+- `test_eval_config.py` requires `hydra-core` (install via `--extra eval`)
 
 ## Dependencies
 

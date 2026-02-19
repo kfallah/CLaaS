@@ -2,7 +2,7 @@ mode: tinker
 claas_url: http://localhost:8080
 vllm_url: http://localhost:8000
 vllm_model_name: qwen3-8b
-base_model: Qwen/Qwen3-Coder-30B-A3B-Instruct
+base_model: Qwen/Qwen3-30B-A3B
 
 preferences:
   - no_emoji

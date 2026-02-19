@@ -2,43 +2,144 @@
 
 Automated evaluation for SDPO continual learning. Runs feedback loops against a live CLaaS stack and measures whether training shifts the model toward preferred behaviours without collapsing.
 
-## Running
+## Configuration (Hydra)
 
-Via the CLI:
+The eval harness uses [Hydra](https://hydra.cc/) for configuration. The default config lives in `configs/base.yaml` and can be overridden via CLI arguments using Hydra's `key=value` syntax.
+
+### Config file: `configs/base.yaml`
+
+```yaml
+mode: tinker                         # execution backend: local | tinker | modal
+claas_url: http://localhost:8080     # CLaaS API endpoint
+vllm_url: http://localhost:8000      # vLLM / Tinker proxy endpoint
+vllm_model_name: qwen3-8b           # model identifier for vLLM API calls
+base_model: Qwen/Qwen3-30B-A3B      # base model for LoRA init (Tinker name)
+
+preferences:                         # preferences to train
+  - no_emoji
+  - concise
+  - identity
+
+metrics:                             # metrics to evaluate per step
+  - logprob
+  - compliance
+  - general
+  - collapse
+
+num_steps: 20
+batch_size: 4
+steps_per_batch: 1                   # gradient updates per batch
+feedback_repetitions: 1              # times to repeat feedback string
+collapse_steps: [0, 5, 10, 15, 19]  # steps where collapse metric runs
+plots: true                          # generate matplotlib plots
+seed: 42
+lora_id_prefix: eval
+output_dir: ./data/evals
+
+openclaw_url: null                   # OpenClaw gateway (null = use vllm_url directly)
+proxy_url: null                      # Tinker proxy (auto-set to vllm_url in tinker mode)
+```
+
+### Overriding config via CLI
+
+Hydra overrides are positional arguments after the `eval` subcommand:
 
 ```bash
-claas eval \
-    --openclaw-url http://localhost:18789 \
-    --proxy-url http://localhost:8000 \
-    --preferences no_emoji \
-    --metrics logprob \
-    --num-steps 10
+# Run only conciseness for 10 steps
+claas eval 'preferences=[concise]' num_steps=10
+
+# Override base model and mode
+claas eval base_model=Qwen/Qwen3-30B-A3B mode=tinker
+
+# Use a custom config directory
+claas eval --config-dir ./my_configs --config-name my_config
 ```
 
-Or as a module:
+### Programmatic usage
+
+```python
+from claas.eval.config import load_config
+from claas.eval.runner import run_harness
+import asyncio
+
+config = load_config(
+    overrides=["preferences=[concise]", "num_steps=5"],
+)
+asyncio.run(run_harness(config))
+```
+
+### Environment variables (secrets)
+
+Secrets are resolved from env vars at runtime, NOT stored in config:
+
+| Variable | Required for | Purpose |
+|---|---|---|
+| `CLAAS_TINKER_API_KEY` | Tinker mode | Tinker SDK authentication |
+| `CLAAS_TINKER_BASE_MODEL` | Tinker mode | Must match `base_model` in config |
+| `CLAAS_DISTILL_EXECUTION_MODE` | API server | `tinker`, `local`, or `modal` |
+| `CLAAS_ALLOWED_INIT_BASE_MODELS` | API server | Comma-separated allowed models for LoRA init |
+| `VLLM_API_KEY` | Local mode | vLLM server auth token |
+| `GEMINI_API_KEY` | `general` metric | Gemini-based capability evaluation |
+
+## Running (Tinker mode, no GPU)
+
+### 1. Install dependencies
 
 ```bash
-python -m claas.eval --preferences no_emoji --metrics all --num-steps 20
+uv sync --extra eval --extra tinker --extra dev
 ```
 
-Results are written to `--output-dir` (default `./data/evals/<UTC timestamp>`). View them in the browser:
+### 2. Start the Tinker inference proxy
 
-```http
-GET /v1/eval?results_dir=./data/evals
+```bash
+CLAAS_TINKER_API_KEY="tml-..." \
+CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
+  uv run uvicorn claas.proxy.tinker_inference_proxy:app \
+    --host 0.0.0.0 --port 8000
 ```
+
+### 3. Start the CLaaS API
+
+Note: the FastAPI instance is `web_app`, not `app` (which is the Modal object).
+
+```bash
+CLAAS_DISTILL_EXECUTION_MODE=tinker \
+CLAAS_TINKER_API_KEY="tml-..." \
+CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
+CLAAS_ALLOWED_INIT_BASE_MODELS="Qwen/Qwen3-30B-A3B" \
+  uv run uvicorn claas.api:web_app \
+    --host 0.0.0.0 --port 8080
+```
+
+### 4. Run the eval
+
+```bash
+CLAAS_DISTILL_EXECUTION_MODE=tinker \
+CLAAS_TINKER_API_KEY="tml-..." \
+CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
+  claas eval 'preferences=[concise]' num_steps=20
+```
+
+## Known gotchas
+
+**Tinker model naming**: Tinker uses its own model identifiers that differ from HuggingFace names. For example, the HuggingFace model `Qwen/Qwen3-Coder-30B-A3B-Instruct` is `Qwen/Qwen3-30B-A3B` in Tinker. Sampling will work with either name, but LoRA training init will reject the HuggingFace name with a 400 error. Always use the Tinker name in `base_model`.
+
+**API entry point**: When running the CLaaS API with uvicorn directly (no Docker/Modal), use `claas.api:web_app` — not `claas.api:app`. The `app` object is a Modal `App` and is not ASGI-compatible.
+
+**`CLAAS_TINKER_BASE_MODEL` must match `base_model`**: The proxy reads `CLAAS_TINKER_BASE_MODEL` to initialize its sampling client, and the eval config's `base_model` is passed to the API for LoRA init. If they reference different models, scoring and training will target different models.
+
+**Collapse metric is slow**: The `collapse` metric generates multiple stochastic samples per step. It only runs at steps listed in `collapse_steps` (default `[0, 5, 10, 15, 19]`) to limit overhead.
 
 ## Metrics
 
-Select metrics with `--metrics` (comma-separated or a preset).
+Select metrics with the `metrics` list in config or via override.
 
-| Metric | Preset | Needs generation | What it measures |
-|---|---|---|---|
-| `logprob` | `quick`, `all` | No | Logprob margin between preferred/dispreferred response pairs. Positive margin = model favours the preferred response. Delta from baseline tracks training progress. |
-| `compliance` | `all` | Yes | Generates responses to probe prompts, runs a programmatic verifier (e.g. emoji count, sentence count, keyword presence), and averages the pass rate. |
-| `general` | `all` | Yes | Coding task (fibonacci, exec + verify) + 3 IFEval-style instruction-following probes. Measures capability retention during training. |
-| `collapse` | `all` | Yes | Three collapse detectors: **token entropy** (distribution confidence), **self-ROUGE-L** (output diversity across stochastic samples), and **logprob drift** (mean logprob shift from baseline). |
-
-Presets: `all` = logprob,compliance,general,collapse. `quick` = logprob.
+| Metric | What it measures |
+|---|---|
+| `logprob` | Logprob margin between preferred/dispreferred response pairs. Positive margin = model favours the preferred response. Delta from baseline tracks training progress. |
+| `compliance` | Generates responses to probe prompts, runs a programmatic verifier (e.g. emoji count, sentence count, keyword presence), and averages the pass rate. |
+| `general` | Coding task (fibonacci, exec + verify) + 3 IFEval-style instruction-following probes. Measures capability retention during training. |
+| `collapse` | Three collapse detectors: **token entropy** (distribution confidence), **self-ROUGE-L** (output diversity across stochastic samples), and **logprob drift** (mean logprob shift from baseline). |
 
 ### Collapse thresholds
 
@@ -68,3 +169,5 @@ data/evals/<run-id>/
 ```
 
 Each line in `steps.jsonl` contains: step number, timestamp, feedback given, SDPO training metrics, eval metrics (logprob margin, compliance, general capability, collapse), and rollout transcripts.
+
+Results can be viewed in the browser at `GET /v1/eval?results_dir=./data/evals`.

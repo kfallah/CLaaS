@@ -120,6 +120,25 @@ For the full supervised local stack (vLLM + gateway + auto-restart, multi-LoRA, 
 
 All configuration is via environment variables. See [`docker/README.md`](docker/README.md#configuration) for the full reference.
 
+## Eval Harness
+
+The eval harness runs automated feedback loops against a live CLaaS stack and measures whether training shifts the model toward preferred behaviours without collapsing. Configuration uses [Hydra](https://hydra.cc/) with YAML configs.
+
+```bash
+# Install eval + tinker dependencies
+uv sync --extra eval --extra tinker --extra dev
+
+# Run conciseness eval for 20 steps (Tinker mode, no GPU)
+CLAAS_TINKER_API_KEY="tml-..." \
+CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
+CLAAS_DISTILL_EXECUTION_MODE=tinker \
+  claas eval 'preferences=[concise]' num_steps=20
+```
+
+Override any config field via Hydra's `key=value` syntax. The default config is in [`claas/eval/configs/base.yaml`](claas/eval/configs/base.yaml). See [`claas/eval/README.md`](claas/eval/README.md) for full documentation including metrics, config reference, setup steps, and known gotchas.
+
+**Important**: When using Tinker mode, `base_model` must use Tinker's model name (e.g. `Qwen/Qwen3-30B-A3B`), not the HuggingFace name (`Qwen/Qwen3-Coder-30B-A3B-Instruct`). Tinker's sampling API accepts either, but the LoRA training API only accepts the Tinker name.
+
 ## Dashboard
 
 The CLaaS API serves a built-in dashboard at `/v1/dashboard` showing recent feedback batches, training metrics, and timing breakdowns. Each row is a batch — expand it to see individual samples and detailed metrics.
