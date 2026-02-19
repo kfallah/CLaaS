@@ -61,6 +61,56 @@ def _fetch_raw_completion(
     return data["response"], logprobs
 
 
+def _fetch_raw_completion_or_score(
+    client: httpx.Client,
+    proxy_url: str,
+    response_content: str,
+    prompt: str,
+) -> tuple[str, list[float]]:
+    """Try cache lookup first; fall back to ``/v1/score`` on miss.
+
+    When responses flow through OpenClaw's agent pipeline, the content
+    returned to the caller may differ from what the proxy cached (e.g.
+    the agent's system prompt changes the generation, or the agent
+    truncates/reformats the output).  In that case the hash won't match,
+    so we fall back to scoring the visible content directly via the plain-
+    text ``/v1/score`` endpoint (which tokenizes identically to the Tinker
+    engine: ``encode(prompt, add_special_tokens=True) + encode(completion,
+    add_special_tokens=False)``).
+    """
+    visible = _THINK_RE.sub("", response_content)
+    idx = visible.find("</think>")
+    if idx >= 0:
+        visible = visible[idx + len("</think>"):]
+    visible = visible.strip()
+    content_hash = hashlib.sha256(visible.encode("utf-8")).hexdigest()
+
+    # Try cache first
+    resp = client.get(
+        f"{proxy_url}/v1/completions/raw",
+        params={"content_hash": content_hash},
+        timeout=15.0,
+    )
+    if resp.status_code == 200:
+        data = resp.json()
+        logprobs = data["logprobs"]
+        if logprobs is not None:
+            return data["response"], logprobs
+
+    # Fallback: score via /v1/score (plain-text tokenization, matches engine)
+    logger.info("Cache miss (hash=%s…), falling back to /v1/score", content_hash[:12])
+    score_resp = client.post(
+        f"{proxy_url}/v1/score",
+        json={"prompt": prompt, "completion": visible},
+        timeout=60.0,
+    )
+    assert score_resp.status_code == 200, (
+        f"Score fallback failed: {score_resp.text}"
+    )
+    score_data = score_resp.json()
+    return visible, score_data["logprobs"]
+
+
 # ---------------------------------------------------------------------------
 # Reachability
 # ---------------------------------------------------------------------------
@@ -351,9 +401,15 @@ class TestOpenClawEndToEnd:
                 assert len(response_content) > 0
                 logger.info("OpenClaw response: %s", response_content[:500])
 
-                # 2b. Fetch raw response + rollout logprobs from proxy cache
-                raw_response, rollout_logprobs = _fetch_raw_completion(
-                    client, tinker_stack.proxy_url, response_content,
+                # 2b. Fetch raw response + rollout logprobs from proxy cache.
+                # OpenClaw's agent pipeline may modify the response (persona,
+                # system prompt, etc.), causing a hash mismatch on the proxy
+                # cache.  The fallback re-scores the visible content directly.
+                raw_response, rollout_logprobs = _fetch_raw_completion_or_score(
+                    client,
+                    tinker_stack.proxy_url,
+                    response_content,
+                    prompt=user_prompt,
                 )
                 logger.info(
                     "Fetched %d rollout logprobs from proxy cache",
