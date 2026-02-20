@@ -10,20 +10,16 @@ Continual learning as-a-service (CLaaS) via self-distillation for OpenClaw. Pers
   <img src="assets/telegram.png" alt="Telegram demo" width="400">
 </p>
 
-## Hybrid engine
-
-The locally hosted request path is driven by a hybrid engine that switches between:
-
-- **Serving mode**: route request traffic through vLLM (local or remote) for low-latency generation.
-- **Update mode**: run a single self-distillation LoRA step using the provided feedback to adapt the adapter.
-
-In practice, the flow is: request is answered by vLLM, then the engine performs (or schedules) the training step, and subsequent requests can use the updated adapter. The engine can prefer local or remote teacher inference depending on `teacher_mode`.
-
-![Hybrid engine diagram](assets/image.png)
-
 ## Installation
 
 **Prerequisites:** Python 3.11+, `uv`, and [Docker](https://docs.docker.com/get-docker/).
+
+```mermaid
+flowchart TD
+    A[Do you have a GPU?] -->|Yes| B[Local]
+    A -->|No| D["Tinker (Recommended)"]
+    A -->|No| E[Modal]
+```
 
 ### Local (GPU)
 
@@ -124,9 +120,16 @@ curl -X POST http://localhost:8080/v1/feedback \
 
 For the full supervised local stack (vLLM + gateway + auto-restart, multi-LoRA, Telegram), see [`scripts/openclaw-local/README.md`](scripts/openclaw-local/README.md).
 
-## Configuration
+## Hybrid engine
 
-All configuration is via environment variables. See [`docker/README.md`](docker/README.md#configuration) for the full reference.
+The locally hosted request path is driven by a hybrid engine that switches between:
+
+- **Serving mode**: route request traffic through vLLM (local or remote) for low-latency generation.
+- **Update mode**: run a single self-distillation LoRA step using the provided feedback to adapt the adapter.
+
+In practice, the flow is: request is answered by vLLM, then the engine performs (or schedules) the training step, and subsequent requests can use the updated adapter. The engine can prefer local or remote teacher inference depending on `teacher_mode`.
+
+![Hybrid engine diagram](assets/image.png)
 
 ## Eval Harness
 
