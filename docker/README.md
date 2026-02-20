@@ -41,7 +41,7 @@ docker compose -f docker-compose.tinker.yml --env-file .env.tinker up --build
 
 This stack brings up:
 - `tinker-proxy` (OpenAI-compatible `/v1/chat/completions` + `/v1/completions`)
-- `claas-api` in `CLAAS_DISTILL_EXECUTION_MODE=tinker`
+- `claas-api` in `CLAAS_CONFIG_NAME=tinker`
 - `init` (creates `{LORA_NAME}-latest` through the API + writes OpenClaw config)
 - `openclaw` (Telegram gateway pointed at `tinker-proxy`)
 
@@ -155,7 +155,7 @@ These are set inside the containers (via `docker-compose.yml`) and generally don
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CLAAS_DISTILL_EXECUTION_MODE` | `local` | Training engine: `local`, `modal`, or `tinker` |
+| `CLAAS_CONFIG_NAME` | `local` | Config profile: `local`, `modal`, or `tinker` (selects YAML from `claas/core/configs/`) |
 | `CLAAS_BASE_MODEL_ID` | `Qwen/Qwen3-8B` | Base model for LoRA training |
 | `CLAAS_LORA_ROOT` | `/loras` | Root directory for LoRA adapter storage |
 | `CLAAS_STORAGE_BACKEND` | `modal_volume` | Storage backend: `local_fs`, `modal_volume`, or `tinker_json` |

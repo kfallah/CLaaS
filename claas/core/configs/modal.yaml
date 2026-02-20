@@ -1,0 +1,11 @@
+defaults:
+  - base
+  - _self_
+
+mode: modal
+vllm_base_url: http://127.0.0.1:8000
+feedback_lock_timeout_s: 120.0
+feedback_wake_on_failure: true
+feedback_min_free_vram_gb: 20.0
+feedback_sleep_verify_timeout_s: 30.0
+feedback_drain_timeout_s: 30.0

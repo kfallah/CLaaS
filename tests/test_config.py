@@ -26,22 +26,22 @@ class TestGetConfig:
         assert cfg.mode == "local"
 
     def test_local_mode(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_DISTILL_EXECUTION_MODE", "local")
+        monkeypatch.setenv("CLAAS_CONFIG_NAME", "local")
         cfg = get_config()
         assert isinstance(cfg, LocalConfig)
 
     def test_modal_mode(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_DISTILL_EXECUTION_MODE", "modal")
+        monkeypatch.setenv("CLAAS_CONFIG_NAME", "modal")
         cfg = get_config()
         assert isinstance(cfg, ModalConfig)
 
     def test_tinker_mode(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_DISTILL_EXECUTION_MODE", "tinker")
+        monkeypatch.setenv("CLAAS_CONFIG_NAME", "tinker")
         cfg = get_config()
         assert isinstance(cfg, TinkerConfig)
 
     def test_unknown_mode_raises(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_DISTILL_EXECUTION_MODE", "bogus")
+        monkeypatch.setenv("CLAAS_CONFIG_NAME", "bogus")
         with pytest.raises(ValueError, match="bogus"):
             get_config()
 
@@ -63,7 +63,7 @@ class TestEnvVarOverrides:
         assert cfg.vllm_base_url == "http://gpu:9000"
 
     def test_tinker_api_key(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_DISTILL_EXECUTION_MODE", "tinker")
+        monkeypatch.setenv("CLAAS_CONFIG_NAME", "tinker")
         monkeypatch.setenv("CLAAS_TINKER_API_KEY", "tk-secret")
         cfg = get_config()
         assert isinstance(cfg, TinkerConfig)

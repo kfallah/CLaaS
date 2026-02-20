@@ -1,0 +1,6 @@
+mode: local
+feedback_log_dir: ./data/feedback
+lora_root: /loras
+storage_backend: modal_volume
+allowed_init_base_models:
+  - Qwen/Qwen3-8B

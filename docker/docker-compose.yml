@@ -50,9 +50,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.claas-api
     environment:
-      - CLAAS_STORAGE_BACKEND=local_fs
-      - CLAAS_LORA_ROOT=/loras
-      - CLAAS_DISTILL_EXECUTION_MODE=local
+      - CLAAS_CONFIG_NAME=local
       - CLAAS_BASE_MODEL_ID=${MODEL:-Qwen/Qwen3-8B}
       - VLLM_BASE_URL=http://vllm:8000
       - VLLM_API_KEY=sk-local
@@ -80,9 +78,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.init
     environment:
-      - CLAAS_STORAGE_BACKEND=local_fs
-      - CLAAS_LORA_ROOT=/loras
-      - CLAAS_DISTILL_EXECUTION_MODE=local
+      - CLAAS_CONFIG_NAME=local
       - LORA_NAME=${LORA_NAME:-openclaw/assistant}
       - MODEL=${MODEL:-Qwen/Qwen3-8B}
       - VLLM_BASE_URL=http://vllm:8000/v1
@@ -141,9 +137,7 @@ services:
         aliases:
           - claas-api
     environment:
-      - CLAAS_STORAGE_BACKEND=local_fs
-      - CLAAS_DISTILL_EXECUTION_MODE=tinker
-      - CLAAS_BASE_MODEL_ID=${MODEL:-gpt-oss/GPT-OSS-120B}
+      - CLAAS_CONFIG_NAME=tinker
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:-}
       - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
       - CLAAS_TINKER_STATE_PATH=/data/tinker_state.json
@@ -167,7 +161,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.init
     environment:
-      - CLAAS_DISTILL_EXECUTION_MODE=tinker
+      - CLAAS_CONFIG_NAME=tinker
       - LORA_NAME=${LORA_NAME:-openclaw/assistant}
       - MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
       - VLLM_BASE_URL=http://tinker-proxy:8000/v1

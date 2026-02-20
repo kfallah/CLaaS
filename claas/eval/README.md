@@ -76,7 +76,7 @@ Secrets are resolved from env vars at runtime, NOT stored in config:
 |---|---|---|
 | `CLAAS_TINKER_API_KEY` | Tinker mode | Tinker SDK authentication |
 | `CLAAS_TINKER_BASE_MODEL` | Tinker mode | Must match `base_model` in config |
-| `CLAAS_DISTILL_EXECUTION_MODE` | API server | `tinker`, `local`, or `modal` |
+| `CLAAS_CONFIG_NAME` | API server | `tinker`, `local`, or `modal` |
 | `CLAAS_ALLOWED_INIT_BASE_MODELS` | API server | Comma-separated allowed models for LoRA init |
 | `VLLM_API_KEY` | Local mode | vLLM server auth token |
 | `GEMINI_API_KEY` | `general` metric | Gemini-based capability evaluation |
@@ -103,7 +103,7 @@ CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
 Note: the FastAPI instance is `web_app`, not `app` (which is the Modal object).
 
 ```bash
-CLAAS_DISTILL_EXECUTION_MODE=tinker \
+CLAAS_CONFIG_NAME=tinker \
 CLAAS_TINKER_API_KEY="tml-..." \
 CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
 CLAAS_ALLOWED_INIT_BASE_MODELS="Qwen/Qwen3-30B-A3B" \
@@ -114,7 +114,7 @@ CLAAS_ALLOWED_INIT_BASE_MODELS="Qwen/Qwen3-30B-A3B" \
 ### 4. Run the eval
 
 ```bash
-CLAAS_DISTILL_EXECUTION_MODE=tinker \
+CLAAS_CONFIG_NAME=tinker \
 CLAAS_TINKER_API_KEY="tml-..." \
 CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
   claas eval 'preferences=[concise]' num_steps=20

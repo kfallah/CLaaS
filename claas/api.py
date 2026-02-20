@@ -1,7 +1,7 @@
 """CLaaS API: FastAPI web endpoint for SDPO continual distillation.
 
 This module provides the REST API for the distillation service.  The
-training backend is selected via ``CLAAS_DISTILL_EXECUTION_MODE``
+training backend is selected via ``CLAAS_CONFIG_NAME``
 (local | modal | tinker).
 
 Endpoints:
@@ -87,7 +87,7 @@ def _get_engine_kind() -> EngineKind:
     mode = cfg.mode
     if mode in {"local", "modal", "tinker"}:
         return mode  # type: ignore[return-value]
-    raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {mode}")
+    raise ValueError(f"Unsupported CLAAS_CONFIG_NAME: {mode}")
 
 def _uses_modal_teacher() -> bool:
     """Return whether API should fetch teacher scores from Modal TeacherService."""

@@ -7,7 +7,7 @@ Usage:
     claas deploy          # Modal deployment
     claas eval --preferences no_emoji --metrics logprob --num-steps 10
 
-Set CLAAS_DISTILL_EXECUTION_MODE (local | modal | tinker) to select backend.
+Set CLAAS_CONFIG_NAME (local | modal | tinker) to select backend.
 """
 
 from __future__ import annotations

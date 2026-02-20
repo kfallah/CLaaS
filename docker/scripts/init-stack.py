@@ -21,7 +21,7 @@ import httpx
 # ---------------------------------------------------------------------------
 LORA_NAME = os.environ.get("LORA_NAME", "openclaw/assistant")
 BASE_MODEL = os.environ.get("MODEL", "Qwen/Qwen3-8B")
-DISTILL_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local").strip().lower()
+DISTILL_MODE = os.environ.get("CLAAS_CONFIG_NAME", "local").strip().lower()
 LORA_ROOT = os.environ.get("CLAAS_LORA_ROOT", "/loras")
 OPENCLAW_HOME = Path(os.environ.get("OPENCLAW_HOME", "/openclaw-config"))
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://vllm:8000/v1")
