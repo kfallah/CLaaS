@@ -23,8 +23,9 @@ ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 RUN uv pip install --index-url "$TORCH_INDEX_URL" torch && \
     uv pip install ".[local]" modal
 
-# Now copy the full source (this layer invalidates on code changes but deps are cached)
+# Now copy the full source and reinstall the package (no-deps: deps cached above)
 COPY . /app
+RUN uv pip install --no-deps --reinstall "."
 
 COPY docker/scripts/claas-api-entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
