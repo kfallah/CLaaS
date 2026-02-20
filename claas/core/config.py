@@ -232,10 +232,10 @@ def get_config() -> CLaaSConfig:
     The result is cached; call ``get_config.cache_clear()`` to re-read
     (useful in tests).
     """
-    config_name = _env("CLAAS_CONFIG_NAME", "local")
+    config_name = _env("CLAAS_CONFIG_NAME", "local").lower()
     yaml = _load_yaml_config(config_name)
 
-    mode = _env("CLAAS_CONFIG_NAME", "local").lower()
+    mode = config_name
     # The YAML `mode` field is authoritative when present
     yaml_mode = yaml.get("mode")
     if yaml_mode is not None:
