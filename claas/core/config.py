@@ -18,7 +18,6 @@ from omegaconf import OmegaConf
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
 _CONFIG_DIR = str(Path(__file__).parent / "configs")
-_DEFAULT_ALLOWED_MODELS = ("Qwen/Qwen3-8B",)
 _SCHEMAS_REGISTERED = False
 
 CoreConfigName = Literal["local", "modal", "tinker"]
@@ -32,17 +31,13 @@ class CLaaSConfig:
     feedback_log_dir: str = "./data/feedback"
     lora_root: str = "/loras"
     storage_backend: str = "local_fs"
-    allowed_init_base_models: list[str] = field(
-        default_factory=lambda: list(_DEFAULT_ALLOWED_MODELS),
-    )
+    allowed_init_base_models: list[str] = field(default_factory=list)
 
 
 @dataclass
 class LocalConfig(CLaaSConfig):
     """Configuration for local GPU execution."""
 
-    mode: str = "local"
-    storage_backend: str = "local_fs"
     vllm_base_url: str = "http://127.0.0.1:8000"
     feedback_lock_timeout_s: float = 120.0
     feedback_wake_on_failure: bool = True

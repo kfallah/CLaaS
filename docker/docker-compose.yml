@@ -125,6 +125,7 @@ services:
       dockerfile: docker/Dockerfile.tinker-proxy
     environment:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:-}
+      - HF_TOKEN=${HF_TOKEN:-}
     ports:
       - "${TINKER_PROXY_PORT:-8000}:8000"
     healthcheck:

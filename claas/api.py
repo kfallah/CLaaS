@@ -971,10 +971,7 @@ def fastapi_app():
 @hydra.main(version_base=None, config_path="core/configs", config_name="local")
 def main(cfg: LocalConfig | ModalConfig | TinkerConfig) -> None:
     """Hydra entry point for running the API locally with explicit config profile."""
-    cfg_obj = OmegaConf.to_object(cfg)
-    if not isinstance(cfg_obj, (LocalConfig, ModalConfig, TinkerConfig)):
-        raise TypeError("Hydra did not produce a supported CLaaS runtime config")
-    configure_web_app(cfg_obj)
+    configure_web_app(OmegaConf.to_object(cfg))  # type: ignore[arg-type]
     host = os.environ.get("CLAAS_API_HOST", "0.0.0.0")
     port = int(os.environ.get("CLAAS_API_PORT", "8080"))
     uvicorn.run(web_app, host=host, port=port)

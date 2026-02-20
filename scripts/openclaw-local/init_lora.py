@@ -4,7 +4,7 @@
 Idempotent — skips creation if the adapter already exists with weights.
 
 Usage:
-    python3 scripts/openclaw-local/init_lora.py
+    uv run python3 scripts/openclaw-local/init_lora.py
 """
 
 from __future__ import annotations

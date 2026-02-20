@@ -6,7 +6,7 @@ without a local GPU.
 
 Usage::
 
-    TINKER_API_KEY=... CLAAS_TINKER_BASE_MODEL=gpt-oss/GPT-OSS-120B \
+    CLAAS_TINKER_API_KEY=... \
         uvicorn claas.proxy.tinker_inference_proxy:app --host 0.0.0.0 --port 8000
 """
 
