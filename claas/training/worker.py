@@ -238,6 +238,9 @@ class DistillWorker:
             return_tensors="pt",
             tokenize=True,
         )
+        # transformers >=5.x returns BatchEncoding; extract input_ids tensor
+        if hasattr(teacher_prompt_ids_raw, "input_ids"):
+            teacher_prompt_ids_raw = teacher_prompt_ids_raw.input_ids
         teacher_prompt_ids = cast("torch.Tensor", teacher_prompt_ids_raw).to(self.device)
         teacher_full_ids = torch.cat([teacher_prompt_ids, response_ids], dim=-1)
         teacher_resp_start = teacher_prompt_ids.shape[-1]
