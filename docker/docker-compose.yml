@@ -79,8 +79,7 @@ services:
     profiles: [local]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tinker
-      target: init
+      dockerfile: docker/Dockerfile.init
     command:
       [
         "--config-name",
@@ -173,8 +172,7 @@ services:
     profiles: [tinker]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tinker
-      target: init
+      dockerfile: docker/Dockerfile.init
     command:
       [
         "--config-name",

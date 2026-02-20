@@ -52,8 +52,3 @@ EXPOSE 8080
 RUN chmod +x /app/docker/scripts/claas-api-entrypoint.sh
 
 ENTRYPOINT ["/app/docker/scripts/claas-api-entrypoint.sh"]
-
-# ---- Init target ----
-FROM base AS init
-
-ENTRYPOINT ["python", "/app/docker/scripts/init-stack.py"]
