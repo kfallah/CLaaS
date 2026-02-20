@@ -11,4 +11,4 @@ feedback_min_free_vram_gb: 20.0
 feedback_sleep_verify_timeout_s: 30.0
 feedback_drain_timeout_s: 30.0
 base_model_id: Qwen/Qwen3-8B
-attn_implementation: sdpa
+attn_implementation: flash_attention_2
