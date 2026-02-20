@@ -270,4 +270,5 @@ def step_result_from_dict(data: dict[str, object]) -> StepResult:
         prompt_used=data["prompt_used"],  # type: ignore[arg-type]
         response_text=data.get("response_text"),  # type: ignore[arg-type]
         timing_s=data.get("timing_s", 0.0),  # type: ignore[arg-type]
+        sub_step_count=data.get("sub_step_count", 1),  # type: ignore[arg-type]
     )
