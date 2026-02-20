@@ -22,7 +22,7 @@ services:
       - INCLUDE_ALIAS_LORAS=1
       - HF_TOKEN=${HF_TOKEN:-}
     volumes:
-      - ../scripts/openclaw-local/start_vllm_qwen3_8b.sh:/scripts/start_vllm_qwen3_8b.sh:ro
+      - ./scripts/start_vllm_qwen3_8b.sh:/scripts/start_vllm_qwen3_8b.sh:ro
       - hf-cache:/root/.cache/huggingface
       - lora-storage:/loras
     ports:
