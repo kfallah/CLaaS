@@ -66,7 +66,7 @@ class TinkerConfig(CLaaSConfig):
 
     mode: str = "tinker"
     storage_backend: str = "local_fs"
-    tinker_base_model: str = "gpt-oss/GPT-OSS-120B"
+    tinker_base_model: str = "Qwen/Qwen3-30B-A3B"
     tinker_state_path: str = "~/.claas/tinker_state.json"
     vllm_base_url: str = "http://127.0.0.1:8000"
 
@@ -78,7 +78,7 @@ CoreConfig = LocalConfig | ModalConfig | TinkerConfig
 class ProxyConfig:
     """Standalone configuration for the Tinker inference proxy."""
 
-    tinker_base_model: str = "gpt-oss/GPT-OSS-120B"
+    tinker_base_model: str = "Qwen/Qwen3-30B-A3B"
     completion_cache_size: int = 100
 
 
@@ -141,8 +141,12 @@ def load_proxy_config(
     """Compose and return the standalone proxy config."""
     register_config_schemas()
     abs_dir = os.path.abspath(config_dir or _CONFIG_DIR)
+    all_overrides = list(overrides or [])
+    base_model_env = os.environ.get("CLAAS_TINKER_BASE_MODEL")
+    if base_model_env:
+        all_overrides.append(f"tinker_base_model={base_model_env}")
     with initialize_config_dir(version_base=None, config_dir=abs_dir):
-        cfg = compose(config_name="proxy", overrides=overrides or [])
+        cfg = compose(config_name="proxy", overrides=all_overrides)
 
     typed_cfg = OmegaConf.merge(OmegaConf.structured(ProxyConfig), cfg)
     obj = OmegaConf.to_object(typed_cfg)

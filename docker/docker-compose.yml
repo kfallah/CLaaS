@@ -126,6 +126,7 @@ services:
       target: proxy
     environment:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY in docker/.env.tinker}
+      - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
       - HF_TOKEN=${HF_TOKEN:-}
     ports:
       - "${TINKER_PROXY_PORT:-8000}:8000"
