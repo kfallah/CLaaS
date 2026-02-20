@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import gc
+import os
 import re
 
 from claas.core.types import (
@@ -29,7 +29,7 @@ from claas.training.storage import (
     lora_exists,
     resolve_lora_id,
 )
-from claas.training.worker import DistillWorker
+from claas.training.distillation import DistillationTrainer
 
 
 class LocalTrainingEngine(TrainingEngine):
@@ -50,18 +50,15 @@ class LocalTrainingEngine(TrainingEngine):
         Returns:
             Distillation response.
         """
-        worker = DistillWorker()
+        trainer = DistillationTrainer(
+            base_model_id=os.environ["CLAAS_BASE_MODEL_ID"],
+            attn_implementation=os.environ["CLAAS_ATTN_IMPLEMENTATION"],
+        )
+        await asyncio.to_thread(trainer.load_base_model)
         try:
-            result = await asyncio.to_thread(worker.distill.local, payload.model_dump())
-            return DistillResponse.model_validate(result)
+            return await asyncio.to_thread(trainer.distill, payload)
         finally:
-            try:
-                await asyncio.to_thread(worker._offload_base_model)
-            except (RuntimeError, OSError, ValueError):
-                # Training already completed; cleanup failures should not fail the request.
-                pass
-            del worker
-            gc.collect()
+            await asyncio.to_thread(trainer.offload_base_model)
 
     async def init_lora(self, request: LoraInitRequest) -> LoraInitResponse:
         """Initialize a LoRA adapter locally.

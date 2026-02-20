@@ -12,6 +12,7 @@ torch = pytest.importorskip("torch")
 from claas.core.types import (  # noqa: E402
     DistillBatchItem,
     DistillBatchRequestPayload,
+    DistillResponse,
     LoraInitRequest,
     TrainingConfig,
 )
@@ -20,47 +21,39 @@ from claas.training.engine.local.engine import LocalTrainingEngine  # noqa: E402
 
 
 @dataclass
-class WorkerState:
-    """Tracks calls made to the fake worker.
+class TrainerState:
+    """Tracks calls made to the fake trainer."""
 
-    Attributes:
-        payload: Distillation payload forwarded by the engine.
-        cleaned_up: Whether cleanup was triggered.
-    """
-
-    payload: dict[str, object] | None = None
+    payload: DistillBatchRequestPayload | None = None
+    loaded: bool = False
     cleaned_up: bool = False
 
 
-class _WorkerStub:
-    """Distill worker test double with deterministic behavior."""
+class _TrainerStub:
+    """Distillation trainer test double with deterministic behavior."""
 
-    def __init__(self, state: WorkerState):
-        self.distill = self
+    def __init__(self, base_model_id: str, attn_implementation: str, state: TrainerState):
+        self.base_model_id = base_model_id
+        self.attn_implementation = attn_implementation
         self._state = state
 
-    def local(self, payload: dict[str, object]) -> dict[str, object]:
-        """Return a valid distill response payload.
+    def load_base_model(self) -> None:
+        self._state.loaded = True
 
-        Args:
-            payload: Incoming request payload.
-
-        Returns:
-            Distill response payload.
-        """
+    def distill(self, payload: DistillBatchRequestPayload) -> DistillResponse:
         self._state.payload = payload
-        return {"lora_id": payload["lora_id"], "metadata": {"tokens_processed": 5}}
+        return DistillResponse.model_validate(
+            {"lora_id": payload.lora_id, "metadata": {"tokens_processed": 5}}
+        )
 
-    def _offload_base_model(self) -> None:
-        """Track cleanup calls from the engine."""
+    def offload_base_model(self) -> None:
         self._state.cleaned_up = True
 
 
-class _WorkerWithCleanupFailure(_WorkerStub):
-    """Distill worker test double that raises on cleanup."""
+class _TrainerWithCleanupFailure(_TrainerStub):
+    """Distillation trainer test double that raises on cleanup."""
 
-    def _offload_base_model(self) -> None:
-        """Raise a deterministic cleanup error."""
+    def offload_base_model(self) -> None:
         raise RuntimeError("cleanup failure")
 
 
@@ -69,10 +62,20 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
     from claas.training.engine.local import engine as engine_module
 
     monkeypatch.setenv("CLAAS_LORA_ROOT", str(tmp_path))
+    monkeypatch.setenv("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3-8B")
+    monkeypatch.setenv("CLAAS_ATTN_IMPLEMENTATION", "sdpa")
     monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
 
-    state = WorkerState()
-    monkeypatch.setattr(engine_module, "DistillWorker", lambda: _WorkerStub(state))
+    state = TrainerState()
+    monkeypatch.setattr(
+        engine_module,
+        "DistillationTrainer",
+        lambda base_model_id, attn_implementation: _TrainerStub(
+            base_model_id,
+            attn_implementation,
+            state,
+        ),
+    )
     local_engine = LocalTrainingEngine()
 
     init_response = asyncio.run(local_engine.init_lora(LoraInitRequest(lora_id="user/integration")))
@@ -106,6 +109,7 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
     )
     assert distill_response.lora_id == lora_id
     assert state.payload is not None
+    assert state.loaded is True
     assert state.cleaned_up is True
 
     export_payload = asyncio.run(local_engine.export_lora(lora_id))
@@ -116,32 +120,37 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
     assert health.status == "healthy"
 
 
-def test_local_engine_cleanup_failure_is_ignored(monkeypatch):
-    """Cleanup errors do not fail distillation requests."""
+def test_local_engine_cleanup_failure_propagates(monkeypatch):
+    """Cleanup errors fail distillation requests."""
     from claas.training.engine.local import engine as engine_module
 
-    state = WorkerState()
+    monkeypatch.setenv("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3-8B")
+    monkeypatch.setenv("CLAAS_ATTN_IMPLEMENTATION", "sdpa")
+    state = TrainerState()
     monkeypatch.setattr(
         engine_module,
-        "DistillWorker",
-        lambda: _WorkerWithCleanupFailure(state),
+        "DistillationTrainer",
+        lambda base_model_id, attn_implementation: _TrainerWithCleanupFailure(
+            base_model_id,
+            attn_implementation,
+            state,
+        ),
     )
 
-    result = asyncio.run(
-        LocalTrainingEngine().distill(
-            DistillBatchRequestPayload(
-                lora_id="user/integration",
-                training=TrainingConfig(),
-                samples=[
-                    DistillBatchItem(
-                        prompt="prompt",
-                        response="response",
-                        feedback="feedback",
-                        rollout_logprobs=[-0.1],
-                    )
-                ],
+    with pytest.raises(RuntimeError, match="cleanup failure"):
+        asyncio.run(
+            LocalTrainingEngine().distill(
+                DistillBatchRequestPayload(
+                    lora_id="user/integration",
+                    training=TrainingConfig(),
+                    samples=[
+                        DistillBatchItem(
+                            prompt="prompt",
+                            response="response",
+                            feedback="feedback",
+                            rollout_logprobs=[-0.1],
+                        )
+                    ],
+                )
             )
         )
-    )
-
-    assert result.lora_id == "user/integration"

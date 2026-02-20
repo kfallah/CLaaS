@@ -51,7 +51,7 @@ class ModalTrainingEngine(TrainingEngine):
             Distillation response.
         """
         distill_fn = modal.Function.from_name("claas-distill", "DistillWorker.distill")
-        result = await distill_fn.remote.aio(payload.model_dump())
+        result = await distill_fn.remote.aio(payload)
         return DistillResponse.model_validate(result)
 
     async def init_lora(self, request: LoraInitRequest) -> LoraInitResponse:

@@ -83,7 +83,7 @@ Deploy:
 # Set HF_TOKEN if using gated models
 export HF_TOKEN=...
 export CLAAS_BASE_MODEL_ID=Qwen/Qwen3-8B
-uv run modal deploy -m claas.deploy
+uv run modal deploy -m claas.modal.deploy
 ```
 
 The deployed app exposes the same API at `https://your-app--claas-distill-fastapi-app.modal.run`. LoRAs are stored in the `claas-loras` Modal Volume.
