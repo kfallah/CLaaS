@@ -10,8 +10,8 @@ services:
       - HOST=0.0.0.0
       - API_KEY=sk-local
       - SERVED_MODEL_NAMES=qwen3-8b
-      - MAX_MODEL_LEN=${MAX_MODEL_LEN:-32768}
-      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.70}
+      - MAX_MODEL_LEN=${MAX_MODEL_LEN:?set MAX_MODEL_LEN in .env}
+      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:?set GPU_MEMORY_UTILIZATION in .env}
       - ENABLE_SLEEP_MODE=1
       - VLLM_SERVER_DEV_MODE=1
       - VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
@@ -186,7 +186,7 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in env file}
       - OPENCLAW_HOME=/openclaw-config
       - CLAAS_API_URL=http://claas-api:8080
-      - FEEDBACK_BATCH_SIZE=${FEEDBACK_BATCH_SIZE:-4}
+      - FEEDBACK_BATCH_SIZE=${FEEDBACK_BATCH_SIZE:?set FEEDBACK_BATCH_SIZE in env file}
     volumes:
       - openclaw-config:/openclaw-config
       - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro
