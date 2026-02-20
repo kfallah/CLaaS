@@ -38,17 +38,20 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx
 import modal
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
 
 from .core.config import CLaaSConfig, get_config
 from .core.types import (
+    ChatCompletionRequest,
+    CompletionRequest,
     DistillBatchItem,
     DistillBatchRequestPayload,
     DistillRequest,
@@ -86,45 +89,32 @@ logger = logging.getLogger(__name__)
 # Modal app for API surface; worker/teacher are resolved by name at runtime.
 app = modal.App("claas-distill")
 
+
+# ---------------------------------------------------------------------------
+# FastAPI lifespan — initializes inference backend on startup
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI) -> AsyncGenerator[None]:
+    """Initialize the inference backend and attach it to app state."""
+    cfg = get_config()
+    backend = get_inference_backend(_get_engine_kind())
+    completion_cache._max_size = cfg.completion_cache_size
+    backend.register_routes(application)
+    application.state.inference_backend = backend
+    yield
+
+
 # FastAPI app
 web_app = FastAPI(
     title="CLaaS API",
     description="Continual Learning as a Service - SDPO-style distillation",
     version="0.1.0",
+    lifespan=_lifespan,
 )
 
 FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "index.html"
 EVAL_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "eval_dashboard.html"
-
-
-# ---------------------------------------------------------------------------
-# Inference request models
-# ---------------------------------------------------------------------------
-
-
-class ChatCompletionMessage(BaseModel):
-    role: str
-    content: Any = ""
-
-
-class ChatCompletionRequest(BaseModel):
-    model: str = ""
-    messages: list[ChatCompletionMessage]
-    max_tokens: int | None = None
-    temperature: float | None = None
-    top_p: float | None = None
-    stream: bool = False
-    stop: list[str] | None = None
-
-
-class CompletionRequest(BaseModel):
-    model: str = ""
-    prompt: str
-    max_tokens: int | None = None
-    temperature: float | None = None
-    top_p: float | None = None
-    stream: bool = False
-    stop: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +206,7 @@ async def _vllm_post(
 
 async def _tinker_sampler_refresh(model_path: str) -> None:
     """Refresh the in-process Tinker sampler to the latest checkpoint."""
-    backend = _get_inference_backend()
+    backend: InferenceBackend = web_app.state.inference_backend
     from .inference.tinker import TinkerBackend
 
     if isinstance(backend, TinkerBackend):
@@ -519,23 +509,9 @@ async def _run_distill(payload: DistillBatchRequestPayload) -> DistillResponse:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Inference backend (lazy singleton)
-# ---------------------------------------------------------------------------
-
-_inference_backend: InferenceBackend | None = None
-
-
-def _get_inference_backend() -> InferenceBackend:
-    global _inference_backend  # noqa: PLW0603
-    if _inference_backend is None:
-        cfg = get_config()
-        _inference_backend = get_inference_backend(_get_engine_kind())
-        # Resize completion cache to configured size
-        completion_cache._max_size = cfg.completion_cache_size
-        # Register backend-specific routes (e.g. tinker refresh/score, vllm catch-all)
-        _inference_backend.register_routes(web_app)
-    return _inference_backend
+def _get_inference_backend(request: Request) -> InferenceBackend:
+    """Retrieve the inference backend from FastAPI app state."""
+    return request.app.state.inference_backend
 
 
 # ---------------------------------------------------------------------------
@@ -546,9 +522,10 @@ def _get_inference_backend() -> InferenceBackend:
 @web_app.post("/v1/chat/completions", response_model=None)
 async def chat_completions(
     req: ChatCompletionRequest,
+    request: Request,
 ) -> dict[str, object] | StreamingResponse:
     """Chat completion endpoint (forwards to configured inference backend)."""
-    backend = _get_inference_backend()
+    backend = _get_inference_backend(request)
 
     messages = [
         {"role": m.role, "content": coerce_content(m.content)}
@@ -610,9 +587,10 @@ async def chat_completions(
 @web_app.post("/v1/completions", response_model=None)
 async def completions(
     req: CompletionRequest,
+    request: Request,
 ) -> dict[str, object] | StreamingResponse:
     """Text completion endpoint (forwards to configured inference backend)."""
-    backend = _get_inference_backend()
+    backend = _get_inference_backend(request)
 
     result = await backend.text_completion(
         prompt=req.prompt,
@@ -667,9 +645,9 @@ async def get_raw_completion(content_hash: str) -> dict[str, object] | JSONRespo
 
 
 @web_app.get("/v1/models", response_model=None)
-async def list_models() -> dict[str, object] | Response:
+async def list_models(request: Request) -> dict[str, object] | Response:
     """List available models from the inference backend."""
-    backend = _get_inference_backend()
+    backend = _get_inference_backend(request)
     return await backend.list_models()
 
 

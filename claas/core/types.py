@@ -336,3 +336,37 @@ class HealthResponse(BaseModel):
     status: str
     worker: ServiceHealth | None = None
     teacher: ServiceHealth | None = None
+
+
+# --- Inference Request Models ---
+
+
+class ChatCompletionMessage(BaseModel):
+    """A single message in a chat completion request."""
+
+    role: str
+    content: Any = ""
+
+
+class ChatCompletionRequest(BaseModel):
+    """OpenAI-compatible chat completion request."""
+
+    model: str = ""
+    messages: list[ChatCompletionMessage]
+    max_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    stream: bool = False
+    stop: list[str] | None = None
+
+
+class CompletionRequest(BaseModel):
+    """OpenAI-compatible text completion request."""
+
+    model: str = ""
+    prompt: str
+    max_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    stream: bool = False
+    stop: list[str] | None = None
