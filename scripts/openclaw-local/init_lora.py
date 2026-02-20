@@ -4,7 +4,7 @@
 Idempotent — skips creation if the adapter already exists with weights.
 
 Usage:
-    CLAAS_STORAGE_BACKEND=local_fs python3 scripts/openclaw-local/init_lora.py
+    python3 scripts/openclaw-local/init_lora.py
 """
 
 from __future__ import annotations
@@ -21,8 +21,6 @@ LORA_ROOT = os.environ.get(
     str(Path(__file__).resolve().parents[2] / ".local_loras"),
 )
 
-# Ensure claas uses local_fs storage at our lora root
-os.environ.setdefault("CLAAS_STORAGE_BACKEND", "local_fs")
 os.environ["CLAAS_LORA_ROOT"] = LORA_ROOT
 
 
@@ -46,7 +44,9 @@ def main() -> None:
                 print(f"LoRA '{alias_key}' already exists -> {target}, skipping.")
                 return
 
-    from claas.training.storage import create_initial_lora
+    from claas.training.storage import configure_storage_backend, create_initial_lora
+
+    configure_storage_backend("local_fs")
 
     lora_r = int(os.environ.get("LORA_R", "32"))
     lora_alpha = int(os.environ.get("LORA_ALPHA", "64"))

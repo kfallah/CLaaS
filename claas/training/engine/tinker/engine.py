@@ -23,7 +23,7 @@ import torch
 from tinker import types as T
 from tinker.types.tensor_data import TensorData
 
-from claas.core.config import TinkerConfig, get_config
+from claas.core.config import TinkerConfig
 from claas.core.types import (
     DistillBatchItem,
     DistillBatchRequestPayload,
@@ -59,12 +59,12 @@ _MAX_KL_GAIN = 4.0
 class TinkerTrainingEngine(TrainingEngine):
     """Executes training and LoRA management through the Tinker Python SDK."""
 
-    def __init__(self) -> None:
-        cfg = get_config()
-        api_key = cfg.tinker_api_key if isinstance(cfg, TinkerConfig) else ""
+    def __init__(self, cfg: TinkerConfig) -> None:
+        api_key = os.environ.get("CLAAS_TINKER_API_KEY", "").strip()
         if api_key:
             os.environ["TINKER_API_KEY"] = api_key
-        self._base_model = cfg.tinker_base_model if isinstance(cfg, TinkerConfig) else "gpt-oss/GPT-OSS-120B"
+        self._base_model = cfg.tinker_base_model
+        self._state_path = cfg.tinker_state_path
         self._service: tinker.ServiceClient | None = None
 
     @property
@@ -92,11 +92,12 @@ class TinkerTrainingEngine(TrainingEngine):
             base_model=base_model,
             rank=rank,
             step=0,
+            path=self._state_path,
         )
         return LoraInitResponse(lora_id=request.lora_id)
 
     async def list_loras(self, prefix: str) -> LoraListResponse:
-        loras = state_list_loras(prefix)
+        loras = state_list_loras(prefix, path=self._state_path)
         return LoraListResponse(loras=loras)
 
     async def delete_lora(self, lora_id: str) -> LoraDeleteResponse:
@@ -106,7 +107,7 @@ class TinkerTrainingEngine(TrainingEngine):
         then deletes the local state entry.  Returns ``deleted=False``
         if the LoRA was not found (idempotent).
         """
-        entry = get_entry(lora_id)
+        entry = get_entry(lora_id, path=self._state_path)
         if entry is None:
             return LoraDeleteResponse(deleted=False)
         rest = self.service.create_rest_client()
@@ -115,14 +116,14 @@ class TinkerTrainingEngine(TrainingEngine):
                 await rest.delete_checkpoint_from_tinker_path_async(ckpt_path)
             except Exception:
                 logger.warning("Failed to delete checkpoint %s", ckpt_path, exc_info=True)
-        delete_entry(lora_id)
+        delete_entry(lora_id, path=self._state_path)
         return LoraDeleteResponse(deleted=True)
 
     async def lora_exists(self, lora_id: str) -> LoraExistsPayload:
-        return LoraExistsPayload(exists=state_lora_exists(lora_id))
+        return LoraExistsPayload(exists=state_lora_exists(lora_id, path=self._state_path))
 
     async def export_lora(self, lora_id: str) -> LoraExportPayload:
-        entry = _require_entry(lora_id)
+        entry = _require_entry(lora_id, self._state_path)
 
         def _export() -> LoraExportPayload:
             rest = self.service.create_rest_client()
@@ -177,7 +178,7 @@ class TinkerTrainingEngine(TrainingEngine):
         8. optim_step with AdamW
         9. Save checkpoint and update state
         """
-        entry = _require_entry(payload.lora_id)
+        entry = _require_entry(payload.lora_id, self._state_path)
 
         base_model = entry.base_model
         lr = payload.training.learning_rate
@@ -229,6 +230,7 @@ class TinkerTrainingEngine(TrainingEngine):
             rank=entry.rank,
             step=new_step,
             sampler_weights_path=sampler_weights_path,
+            path=self._state_path,
         )
 
         # Aggregate metrics across samples.
@@ -363,9 +365,9 @@ async def _build_sample_datum(
     return datum, metrics
 
 
-def _require_entry(lora_id: str) -> LoraEntry:
+def _require_entry(lora_id: str, state_path: str) -> LoraEntry:
     """Return the state entry for *lora_id* or raise ``FileNotFoundError``."""
-    entry = get_entry(lora_id)
+    entry = get_entry(lora_id, path=state_path)
     if entry is None:
         raise FileNotFoundError(f"LoRA not found in Tinker state: {lora_id}")
     return entry

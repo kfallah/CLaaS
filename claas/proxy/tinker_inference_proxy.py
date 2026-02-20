@@ -50,6 +50,11 @@ def _base_model() -> str:
     return get_proxy_config().tinker_base_model
 
 
+def _tinker_api_key() -> str:
+    raw = os.environ.get("CLAAS_TINKER_API_KEY")
+    return raw.strip() if raw is not None else ""
+
+
 # ---------------------------------------------------------------------------
 # Fallback renderer using the tokenizer's built-in chat template
 # ---------------------------------------------------------------------------
@@ -140,7 +145,7 @@ class _SamplerHolder:
             ):
                 return
             proxy_cfg = get_proxy_config()
-            api_key = proxy_cfg.tinker_api_key
+            api_key = _tinker_api_key()
             if api_key:
                 os.environ["TINKER_API_KEY"] = api_key
             base_model = proxy_cfg.tinker_base_model
@@ -174,7 +179,7 @@ class _SamplerHolder:
             proxy_cfg = get_proxy_config()
             base_model = proxy_cfg.tinker_base_model
             if self._service is None:
-                api_key = proxy_cfg.tinker_api_key
+                api_key = _tinker_api_key()
                 if api_key:
                     os.environ["TINKER_API_KEY"] = api_key
                 self._service = tinker.ServiceClient()

@@ -6,6 +6,7 @@ Idempotent — skips LoRA creation if the alias already exists.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import stat
@@ -15,13 +16,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+from claas.training.storage import configure_storage_backend
 
 # ---------------------------------------------------------------------------
 # Environment
 # ---------------------------------------------------------------------------
 LORA_NAME = os.environ.get("LORA_NAME", "openclaw/assistant")
 BASE_MODEL = os.environ.get("MODEL", "Qwen/Qwen3-8B")
-DISTILL_MODE = os.environ.get("CLAAS_CONFIG_NAME", "local").strip().lower()
+DISTILL_MODE = "local"
 LORA_ROOT = os.environ.get("CLAAS_LORA_ROOT", "/loras")
 OPENCLAW_HOME = Path(os.environ.get("OPENCLAW_HOME", "/openclaw-config"))
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://vllm:8000/v1")
@@ -41,8 +43,19 @@ def _parse_feedback_batch_size() -> int:
 FEEDBACK_BATCH_SIZE = _parse_feedback_batch_size()
 
 # Ensure claas picks up local_fs mode and our lora root
-os.environ["CLAAS_STORAGE_BACKEND"] = "local_fs"
 os.environ["CLAAS_LORA_ROOT"] = LORA_ROOT
+configure_storage_backend("local_fs")
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="CLaaS init stack helper")
+    parser.add_argument(
+        "--config-name",
+        default="local",
+        choices=["local", "modal", "tinker"],
+        help="Core runtime config profile",
+    )
+    return parser.parse_args()
 
 
 def _aliases_path() -> Path:
@@ -347,6 +360,10 @@ def fix_permissions() -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
+    global DISTILL_MODE
+    args = _parse_args()
+    DISTILL_MODE = args.config_name.strip().lower()
+
     print("=== CLaaS init container ===")
     print(f"  LORA_NAME       = {LORA_NAME}")
     print(f"  BASE_MODEL      = {BASE_MODEL}")

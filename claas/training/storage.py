@@ -19,6 +19,7 @@ import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 import modal
 
@@ -28,13 +29,24 @@ lora_volume = modal.Volume.from_name("claas-loras", create_if_missing=True)
 # Mount path inside containers (or local filesystem root in local mode)
 LORA_MOUNT_PATH = os.environ.get("CLAAS_LORA_ROOT", "/loras")
 ALIASES_FILE_NAME = ".aliases.json"
+StorageBackend = Literal["local_fs", "modal_volume"]
+_ACTIVE_STORAGE_BACKEND: StorageBackend | None = None
 
 
-def _storage_backend() -> str:
+def configure_storage_backend(storage_backend: StorageBackend) -> None:
+    """Set process-local storage backend mode."""
+    global _ACTIVE_STORAGE_BACKEND
+    _ACTIVE_STORAGE_BACKEND = storage_backend
+
+
+def _storage_backend() -> StorageBackend:
     """Return configured storage backend."""
-    from claas.core.config import get_config
-
-    return get_config().storage_backend.lower()
+    if _ACTIVE_STORAGE_BACKEND is None:
+        raise RuntimeError(
+            "Storage backend is not configured. "
+            "Call configure_storage_backend(...) at process startup.",
+        )
+    return _ACTIVE_STORAGE_BACKEND
 
 
 def _commit_storage() -> None:

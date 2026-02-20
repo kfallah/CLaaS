@@ -66,16 +66,13 @@ def tinker_engine(tinker_env):
 
     fake_cfg = TinkerConfig(
         mode="tinker",
-        tinker_api_key="fake-key",
         tinker_base_model="gpt-oss/GPT-OSS-120B",
         tinker_state_path=tinker_env,
         vllm_base_url="http://127.0.0.1:8000",
-        vllm_api_key="sk-local",
     )
-    with patch("claas.training.engine.tinker.engine.get_config", return_value=fake_cfg):
-        from claas.training.engine.tinker.engine import TinkerTrainingEngine
+    from claas.training.engine.tinker.engine import TinkerTrainingEngine
 
-        engine = TinkerTrainingEngine()
+    engine = TinkerTrainingEngine(fake_cfg)
     mock_service = MagicMock()
     engine._service = mock_service
     return engine, mock_service

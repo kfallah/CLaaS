@@ -31,8 +31,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.tinker-claas-api
+    command: ["tinker"]
     environment:
-      - CLAAS_CONFIG_NAME=tinker
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
       - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
       - CLAAS_TINKER_STATE_PATH=/data/tinker_state.json
@@ -57,8 +57,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.tinker-init
+    command: ["--config-name", "tinker"]
     environment:
-      - CLAAS_CONFIG_NAME=tinker
       - LORA_NAME=${LORA_NAME:-openclaw/assistant}
       - MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
       - VLLM_BASE_URL=http://tinker-proxy:8000/v1

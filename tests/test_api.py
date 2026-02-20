@@ -26,51 +26,41 @@ def _mock_config(monkeypatch, mode: str, **overrides):
     from claas import api
 
     log_dir = str(overrides.get("feedback_log_dir", "./feedback_logs"))
-    hf = str(overrides.get("hf_token", ""))
     root = str(overrides.get("lora_root", "/loras"))
     backend = str(overrides.get("storage_backend", "modal_volume"))
-    allowed = overrides.get("allowed_init_base_models", frozenset({"Qwen/Qwen3-8B"}))
-    if not isinstance(allowed, frozenset):
-        allowed = frozenset(allowed)
+    allowed = list(overrides.get("allowed_init_base_models", ["Qwen/Qwen3-8B"]))
 
     if mode == "modal":
         cfg = ModalConfig(
             mode="modal",
             feedback_log_dir=log_dir,
-            hf_token=hf,
             lora_root=root,
             storage_backend=backend,
             allowed_init_base_models=allowed,
             vllm_base_url="http://127.0.0.1:8000",
-            vllm_api_key="sk-local",
         )
     elif mode == "tinker":
         cfg = TinkerConfig(
             mode="tinker",
             feedback_log_dir=log_dir,
-            hf_token=hf,
             lora_root=root,
             storage_backend=backend,
             allowed_init_base_models=allowed,
-            tinker_api_key="",
             tinker_base_model="gpt-oss/GPT-OSS-120B",
             tinker_state_path="",
             vllm_base_url="http://127.0.0.1:8000",
-            vllm_api_key="sk-local",
         )
     else:
         cfg = LocalConfig(
             mode="local",
             feedback_log_dir=log_dir,
-            hf_token=hf,
             lora_root=root,
             storage_backend=backend,
             allowed_init_base_models=allowed,
             vllm_base_url="http://127.0.0.1:8000",
-            vllm_api_key="sk-local",
         )
 
-    monkeypatch.setattr(api, "get_config", lambda: cfg)
+    monkeypatch.setattr(api, "_runtime_config", lambda: cfg)
 
 
 @pytest.fixture()

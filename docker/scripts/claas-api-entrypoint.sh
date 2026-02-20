@@ -17,4 +17,12 @@ else
     echo "Skipping backend readiness check (WAIT_FOR_BACKEND=${WAIT_FOR_BACKEND})."
 fi
 
-exec uvicorn claas.api:web_app --host 0.0.0.0 --port 8080
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 <config-name>" >&2
+    exit 2
+fi
+
+CONFIG_NAME="$1"
+shift
+
+exec python -m claas.api --config-name "${CONFIG_NAME}" "$@"

@@ -162,7 +162,6 @@ start_stack_once() {
 
   # Ensure LoRA adapter exists before vLLM tries to load it
   echo "[$STACK_NAME] initializing LoRA adapter..."
-  CLAAS_STORAGE_BACKEND=local_fs \
   LORA_NAME="$LORA_NAME" \
   python3 "$INIT_SCRIPT" 2>&1 | sed "s/^/[$STACK_NAME] /"
 
@@ -192,10 +191,11 @@ start_stack_once() {
 
   echo "[$STACK_NAME] starting CLaaS feedback API..."
   cleanup_old_pid "$CLAAS_API_PID_FILE"
-  CLAAS_CONFIG_NAME=local \
+  CLAAS_API_HOST=0.0.0.0 \
+  CLAAS_API_PORT="${CLAAS_API_PORT:-8080}" \
   VLLM_BASE_URL="http://127.0.0.1:8000" \
   VLLM_API_KEY="${API_KEY:-sk-local}" \
-  nohup uvicorn claas.api:web_app --host 0.0.0.0 --port "${CLAAS_API_PORT:-8080}" >>"$CLAAS_API_LOG" 2>&1 &
+  nohup python -m claas.api --config-name local >>"$CLAAS_API_LOG" 2>&1 &
   local api_pid=$!
   echo "$api_pid" >"$CLAAS_API_PID_FILE"
   initialize_log_offset_state "$CLAAS_API_LOG" "$CLAAS_API_OOM_STATE_FILE"

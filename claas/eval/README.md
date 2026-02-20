@@ -76,7 +76,6 @@ Secrets are resolved from env vars at runtime, NOT stored in config:
 |---|---|---|
 | `CLAAS_TINKER_API_KEY` | Tinker mode | Tinker SDK authentication |
 | `CLAAS_TINKER_BASE_MODEL` | Tinker mode | Must match `base_model` in config |
-| `CLAAS_CONFIG_NAME` | API server | `tinker`, `local`, or `modal` |
 | `CLAAS_ALLOWED_INIT_BASE_MODELS` | API server | Comma-separated allowed models for LoRA init |
 | `VLLM_API_KEY` | Local mode | vLLM server auth token |
 | `GEMINI_API_KEY` | `general` metric | Gemini-based capability evaluation |
@@ -103,18 +102,15 @@ CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
 Note: the FastAPI instance is `web_app`, not `app` (which is the Modal object).
 
 ```bash
-CLAAS_CONFIG_NAME=tinker \
 CLAAS_TINKER_API_KEY="tml-..." \
 CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
 CLAAS_ALLOWED_INIT_BASE_MODELS="Qwen/Qwen3-30B-A3B" \
-  uv run uvicorn claas.api:web_app \
-    --host 0.0.0.0 --port 8080
+  uv run python -m claas.api --config-name tinker
 ```
 
 ### 4. Run the eval
 
 ```bash
-CLAAS_CONFIG_NAME=tinker \
 CLAAS_TINKER_API_KEY="tml-..." \
 CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
   claas eval 'preferences=[concise]' num_steps=20
@@ -124,7 +120,7 @@ CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
 
 **Tinker model naming**: Tinker uses its own model identifiers that differ from HuggingFace names. For example, the HuggingFace model `Qwen/Qwen3-Coder-30B-A3B-Instruct` is `Qwen/Qwen3-30B-A3B` in Tinker. Sampling will work with either name, but LoRA training init will reject the HuggingFace name with a 400 error. Always use the Tinker name in `base_model`.
 
-**API entry point**: When running the CLaaS API with uvicorn directly (no Docker/Modal), use `claas.api:web_app` — not `claas.api:app`. The `app` object is a Modal `App` and is not ASGI-compatible.
+**API entry point**: Run the API via Hydra (`python -m claas.api --config-name ...`) instead of loading `claas.api:web_app` directly.
 
 **`CLAAS_TINKER_BASE_MODEL` must match `base_model`**: The proxy reads `CLAAS_TINKER_BASE_MODEL` to initialize its sampling client, and the eval config's `base_model` is passed to the API for LoRA init. If they reference different models, scoring and training will target different models.
 

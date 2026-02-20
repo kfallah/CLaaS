@@ -7,7 +7,7 @@ Usage:
     claas deploy          # Modal deployment
     claas eval --preferences no_emoji --metrics logprob --num-steps 10
 
-Set CLAAS_CONFIG_NAME (local | modal | tinker) to select backend.
+Pass ``--runtime-config-name`` (local | modal | tinker) to select backend.
 """
 
 from __future__ import annotations
@@ -20,7 +20,9 @@ import sys
 
 import modal
 
+from .core.config import load_core_config
 from .training.storage import create_initial_lora, list_loras
+from .training.storage import configure_storage_backend
 from .training.teacher_service import TeacherService
 from .training.worker import DistillWorker
 
@@ -139,6 +141,12 @@ def main() -> int:
         prog="claas",
         description="CLaaS: Continual Learning as a Service",
     )
+    parser.add_argument(
+        "--runtime-config-name",
+        default="local",
+        choices=["local", "modal", "tinker"],
+        help="Hydra core runtime config profile",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # init-lora command
@@ -210,6 +218,11 @@ def main() -> int:
     eval_parser.set_defaults(func=cmd_eval)
 
     args = parser.parse_args()
+
+    if args.command != "eval":
+        runtime_cfg = load_core_config(args.runtime_config_name)
+        configure_storage_backend(runtime_cfg.storage_backend)
+
     return args.func(args)
 
 

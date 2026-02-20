@@ -9,25 +9,26 @@ torch = pytest.importorskip("torch")
 from claas.training.engine import get_training_engine  # noqa: E402
 from claas.training.engine.local.engine import LocalTrainingEngine  # noqa: E402
 from claas.training.engine.modal.engine import ModalTrainingEngine  # noqa: E402
+from claas.core.config import LocalConfig, ModalConfig, TinkerConfig  # noqa: E402
 
 
 def test_get_local_engine():
-    engine = get_training_engine("local")
+    engine = get_training_engine("local", LocalConfig())
     assert isinstance(engine, LocalTrainingEngine)
 
 
 def test_get_modal_engine():
-    engine = get_training_engine("modal")
+    engine = get_training_engine("modal", ModalConfig())
     assert isinstance(engine, ModalTrainingEngine)
 
 
 def test_get_tinker_engine():
     from claas.training.engine.tinker.engine import TinkerTrainingEngine
 
-    engine = get_training_engine("tinker")
+    engine = get_training_engine("tinker", TinkerConfig())
     assert isinstance(engine, TinkerTrainingEngine)
 
 
 def test_unsupported_engine_raises():
     with pytest.raises(ValueError, match="Unsupported training engine"):
-        get_training_engine("nonexistent")  # type: ignore[arg-type]
+        get_training_engine("nonexistent", LocalConfig())  # type: ignore[arg-type]
