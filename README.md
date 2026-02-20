@@ -6,6 +6,8 @@
 
 Continual learning as-a-service (CLaaS) via self-distillation for OpenClaw. Personalize the model weights of your OpenClaw assistant using text feedback without model collapse.
 
+![Telegram demo](assets/telegram.png)
+
 ## Hybrid engine
 
 The locally hosted request path is driven by a hybrid engine that switches between:
@@ -129,6 +131,10 @@ All configuration is via environment variables. See [`docker/README.md`](docker/
 The CLaaS API serves a built-in dashboard at `/v1/dashboard` showing recent feedback batches, training metrics, and timing breakdowns. Each row is a batch — expand it to see individual samples and detailed metrics.
 
 ![CLaaS Dashboard](assets/dashboard.png)
+
+The eval dashboard is available at `/v1/eval-dashboard`.
+
+![Eval Dashboard](assets/eval.png)
 
 ## References
 
