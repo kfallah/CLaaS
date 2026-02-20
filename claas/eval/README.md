@@ -42,17 +42,17 @@ proxy_url: null                      # Tinker proxy (auto-set to vllm_url in tin
 
 ### Overriding config via CLI
 
-Hydra overrides are positional arguments after the `eval` subcommand:
+Hydra overrides are positional arguments after `python -m claas.eval`:
 
 ```bash
 # Run only conciseness for 10 steps
-claas eval 'preferences=[concise]' num_steps=10
+python -m claas.eval 'preferences=[concise]' num_steps=10
 
 # Override base model and mode
-claas eval base_model=Qwen/Qwen3-30B-A3B mode=tinker
+python -m claas.eval base_model=Qwen/Qwen3-30B-A3B mode=tinker
 
 # Use a custom config directory
-claas eval --config-dir ./my_configs --config-name my_config
+python -m claas.eval --config-dir ./my_configs --config-name my_config
 ```
 
 ### Programmatic usage
@@ -113,7 +113,7 @@ CLAAS_ALLOWED_INIT_BASE_MODELS="Qwen/Qwen3-30B-A3B" \
 ```bash
 CLAAS_TINKER_API_KEY="tml-..." \
 CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
-  claas eval 'preferences=[concise]' num_steps=20
+  uv run python -m claas.eval 'preferences=[concise]' num_steps=20
 ```
 
 ## Known gotchas
