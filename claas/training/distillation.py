@@ -45,7 +45,7 @@ class DistillationTrainer:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.device = torch.device("cuda")
-        hf_cache = os.environ["HF_HOME"]
+        hf_cache = os.environ.get("HF_HOME") or os.environ.get("TRANSFORMERS_CACHE")
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.base_model_id,

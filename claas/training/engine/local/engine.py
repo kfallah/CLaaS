@@ -18,6 +18,7 @@ from claas.core.types import (
     LoraRuntimeRef,
     ServiceHealth,
 )
+from claas.training.distillation import DistillationTrainer
 from claas.training.engine.base import TrainingEngine
 from claas.training.storage import (
     configure_storage_backend,
@@ -29,7 +30,6 @@ from claas.training.storage import (
     lora_exists,
     resolve_lora_id,
 )
-from claas.training.distillation import DistillationTrainer
 
 
 class LocalTrainingEngine(TrainingEngine):

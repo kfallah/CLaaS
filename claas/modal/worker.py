@@ -44,8 +44,8 @@ training_image = (
         {
             "HF_HOME": "/models/hf_cache",
             "TRANSFORMERS_CACHE": "/models/hf_cache",
-            "HF_TOKEN": os.environ["HF_TOKEN"],
-            "HUGGING_FACE_HUB_TOKEN": os.environ["HF_TOKEN"],
+            "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
+            "HUGGING_FACE_HUB_TOKEN": os.environ.get("HF_TOKEN", ""),
         }
     )
 )
@@ -65,8 +65,8 @@ training_image = (
 class DistillWorker:
     """Modal worker that delegates training to ``DistillationTrainer``."""
 
-    base_model_id: str = os.environ["CLAAS_BASE_MODEL_ID"]
-    attn_implementation: str = os.environ["CLAAS_ATTN_IMPLEMENTATION"]
+    base_model_id: str = os.environ.get("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3-8B")
+    attn_implementation: str = os.environ.get("CLAAS_ATTN_IMPLEMENTATION", "sdpa")
 
     @modal.enter(snap=True)
     def load_base_model(self) -> None:
