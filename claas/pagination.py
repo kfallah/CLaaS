@@ -31,6 +31,7 @@ class PaginationInfo:
 
 def paginate(total_items: int, page: int = 1, per_page: int = 20) -> PaginationInfo:
     """Compute pagination state, clamping *page* to ``[1, total_pages]``."""
+    per_page = max(1, per_page)
     total_pages = max(1, math.ceil(total_items / per_page))
     page = max(1, min(page, total_pages))
     return PaginationInfo(
