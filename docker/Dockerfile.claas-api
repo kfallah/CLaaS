@@ -13,7 +13,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
 
 # Copy only dependency files first for layer caching
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 RUN mkdir -p claas && touch claas/__init__.py
 
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
