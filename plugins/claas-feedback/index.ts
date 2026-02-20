@@ -120,6 +120,7 @@ export default function register(api: OpenClawPluginApi) {
     name: "feedback",
     description: "Submit feedback on the last bot response to improve the model",
     acceptsArgs: true,
+    requireAuth: false, // allow HTTP gateway users (not just Telegram allowFrom)
     handler: async (ctx: PluginCommandContext) => {
       const feedbackText = (ctx.args ?? "").trim();
       if (!feedbackText) {

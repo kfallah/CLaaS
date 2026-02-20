@@ -348,21 +348,26 @@ def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
     return str(path)
 
 
-def _read_recent_feedback_logs(limit: int = 20) -> list[FeedbackLogRecord]:
+def _read_recent_feedback_logs(
+    offset: int = 0, limit: int = 20
+) -> tuple[list[FeedbackLogRecord], int]:
     """Load recent feedback records from disk.
 
     Args:
+        offset: Number of records to skip (for pagination).
         limit: Maximum number of records to load.
 
     Returns:
-        A list of feedback records ordered from newest to oldest.
+        A tuple of (records, total) where *records* is ordered newest-first
+        and *total* is the full count of log files on disk.
     """
     log_root = Path(get_config().feedback_log_dir)
     if not log_root.exists():
-        return []
+        return [], 0
 
     log_paths = sorted(log_root.glob("*.json"), reverse=True)
-    selected_paths = log_paths[:limit]
+    total = len(log_paths)
+    selected_paths = log_paths[offset : offset + limit]
     records: list[FeedbackLogRecord] = []
     for path in selected_paths:
         with path.open("r", encoding="utf-8") as file_obj:
@@ -371,7 +376,7 @@ def _read_recent_feedback_logs(limit: int = 20) -> list[FeedbackLogRecord]:
             records.append(FeedbackLogRecord.model_validate(payload))
         except Exception:
             logger.warning("Skipping invalid feedback log: %s", path)
-    return records
+    return records, total
 
 
 def _feedback_prompt_preview(prompt: str, limit: int = 140) -> str:
@@ -487,18 +492,23 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
     return "\n".join(rows)
 
 
-def _feedback_dashboard_html(records: list[FeedbackLogRecord]) -> str:
+def _feedback_dashboard_html(
+    records: list[FeedbackLogRecord], pagination_nav: str = ""
+) -> str:
     """Render feedback records into the dashboard HTML template.
 
     Args:
         records: Feedback records to display.
+        pagination_nav: Pre-rendered pagination HTML to inject.
 
     Returns:
         Rendered HTML content.
     """
     template = FEEDBACK_DASHBOARD_TEMPLATE.read_text(encoding="utf-8")
     table_rows = _feedback_dashboard_rows(records)
-    return template.replace("{{TABLE_ROWS}}", table_rows)
+    return template.replace("{{TABLE_ROWS}}", table_rows).replace(
+        "{{PAGINATION}}", pagination_nav
+    )
 
 
 
@@ -1015,26 +1025,45 @@ async def health_check() -> HealthResponse:
 
 
 @web_app.get("/v1/dashboard", response_class=HTMLResponse)
-async def dashboard(limit: int = Query(default=20, ge=1, le=200)) -> HTMLResponse:
-    """Serve a minimal dashboard of recent feedback records.
+async def dashboard(
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=20, ge=1, le=200),
+) -> HTMLResponse:
+    """Serve a paginated dashboard of recent feedback records.
 
     Args:
-        limit: Maximum number of feedback records to render.
+        page: Page number (1-indexed).
+        per_page: Number of records per page (max 200).
 
     Returns:
         HTML dashboard containing recent feedback details and metrics.
     """
-    records = await asyncio.to_thread(_read_recent_feedback_logs, limit)
-    html_content = _feedback_dashboard_html(records)
+    from .pagination import paginate, render_pagination_nav
+
+    # Two-step: get total first so paginate() can clamp the page,
+    # then fetch the correct slice.
+    _, total = await asyncio.to_thread(_read_recent_feedback_logs, 0, 0)
+    info = paginate(total, page, per_page)
+    records, _ = await asyncio.to_thread(
+        _read_recent_feedback_logs, info.offset, per_page
+    )
+    nav = render_pagination_nav(info, "/v1/dashboard")
+    html_content = _feedback_dashboard_html(records, pagination_nav=nav)
     return HTMLResponse(content=html_content)
 
 
 @web_app.get("/v1/eval", response_class=HTMLResponse)
-async def eval_dashboard(results_dir: str = Query(default="./data/evals")) -> HTMLResponse:
-    """Serve a dashboard of evaluation results.
+async def eval_dashboard(
+    results_dir: str = Query(default="./data/evals"),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=20, ge=1, le=200),
+) -> HTMLResponse:
+    """Serve a paginated dashboard of evaluation results.
 
     Args:
         results_dir: Path to the eval results directory.
+        page: Page number (1-indexed).
+        per_page: Number of runs per page (max 200).
 
     Returns:
         HTML dashboard with summary and per-preference step details.
@@ -1048,7 +1077,9 @@ async def eval_dashboard(results_dir: str = Query(default="./data/evals")) -> HT
             status_code=400,
             detail="results_dir must be within ./data/evals",
         )
-    content = await asyncio.to_thread(eval_dashboard_html, str(requested_dir))
+    content = await asyncio.to_thread(
+        eval_dashboard_html, str(requested_dir), page=page, per_page=per_page
+    )
     return HTMLResponse(content=content)
 
 

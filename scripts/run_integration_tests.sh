@@ -19,6 +19,7 @@ if [[ -z "${TINKER_API_KEY:-}" ]]; then
 fi
 
 export TINKER_API_KEY
+export FEEDBACK_BATCH_SIZE=1
 
 OPENCLAW_TOKEN="openclaw-local-dev-token"
 

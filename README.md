@@ -10,20 +10,16 @@ Continual learning as-a-service (CLaaS) via self-distillation for OpenClaw. Pers
   <img src="assets/telegram.png" alt="Telegram demo" width="400">
 </p>
 
-## Hybrid engine
-
-The locally hosted request path is driven by a hybrid engine that switches between:
-
-- **Serving mode**: route request traffic through vLLM (local or remote) for low-latency generation.
-- **Update mode**: run a single self-distillation LoRA step using the provided feedback to adapt the adapter.
-
-In practice, the flow is: request is answered by vLLM, then the engine performs (or schedules) the training step, and subsequent requests can use the updated adapter. The engine can prefer local or remote teacher inference depending on `teacher_mode`.
-
-![Hybrid engine diagram](assets/image.png)
-
 ## Installation
 
 **Prerequisites:** Python 3.11+, `uv`, and [Docker](https://docs.docker.com/get-docker/).
+
+```mermaid
+flowchart TD
+    A[Do you have a GPU?] -->|Yes| B[Local]
+    A -->|No| D["Tinker (Recommended)"]
+    A -->|No| E[Modal]
+```
 
 ### Local (GPU)
 
@@ -124,9 +120,35 @@ curl -X POST http://localhost:8080/v1/feedback \
 
 For the full supervised local stack (vLLM + gateway + auto-restart, multi-LoRA, Telegram), see [`scripts/openclaw-local/README.md`](scripts/openclaw-local/README.md).
 
-## Configuration
+## Hybrid engine
 
-All configuration is via environment variables. See [`docker/README.md`](docker/README.md#configuration) for the full reference.
+The locally hosted request path is driven by a hybrid engine that switches between:
+
+- **Serving mode**: route request traffic through vLLM (local or remote) for low-latency generation.
+- **Update mode**: run a single self-distillation LoRA step using the provided feedback to adapt the adapter.
+
+In practice, the flow is: request is answered by vLLM, then the engine performs (or schedules) the training step, and subsequent requests can use the updated adapter. The engine can prefer local or remote teacher inference depending on `teacher_mode`.
+
+![Hybrid engine diagram](assets/image.png)
+
+## Eval Harness
+
+The eval harness runs automated feedback loops against a live CLaaS stack and measures whether training shifts the model toward preferred behaviours without collapsing. Configuration uses [Hydra](https://hydra.cc/) with YAML configs.
+
+```bash
+# Install tinker + dev dependencies
+uv sync --extra tinker --extra dev
+
+# Run conciseness eval for 20 steps (Tinker mode, no GPU)
+CLAAS_TINKER_API_KEY="tml-..." \
+CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
+CLAAS_DISTILL_EXECUTION_MODE=tinker \
+  claas eval 'preferences=[concise]' num_steps=20
+```
+
+Override any config field via Hydra's `key=value` syntax. The default config is in [`claas/eval/configs/base.yaml`](claas/eval/configs/base.yaml). See [`claas/eval/README.md`](claas/eval/README.md) for full documentation including metrics, config reference, setup steps, and known gotchas.
+
+**Important**: When using Tinker mode, `base_model` must use Tinker's model name (e.g. `Qwen/Qwen3-30B-A3B`), not the HuggingFace name (`Qwen/Qwen3-Coder-30B-A3B-Instruct`). Tinker's sampling API accepts either, but the LoRA training API only accepts the Tinker name.
 
 ## Dashboard
 

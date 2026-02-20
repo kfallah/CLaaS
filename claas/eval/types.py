@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from claas.core.config import DEFAULT_SYSTEM_PROMPT
 from claas.core.types import ChatMessage
@@ -70,28 +70,31 @@ class EvalRollout:
 
 
 @dataclass
-class HarnessConfig:
-    """Top-level configuration for an evaluation run."""
+class EvalConfig:
+    """Hydra-managed eval configuration (no secrets)."""
 
-    mode: str = "local"  # "local" (GPU + vLLM) or "tinker" (no GPU, Tinker proxy)
+    mode: str = "local"
     claas_url: str = "http://localhost:8080"
     vllm_url: str = "http://localhost:8000"
-    vllm_api_key: str = "sk-local"
     vllm_model_name: str = "qwen3-8b"
     preferences: list[str] = field(default_factory=lambda: ["no_emoji", "concise", "identity"])
     num_steps: int = 20
     output_dir: str = "./data/evals"
-    gemini_api_key: str | None = None
     metrics: list[str] = field(default_factory=lambda: ["logprob"])
     plots: bool = True
-    collapse_steps: set[int] | None = None
+    collapse_steps: Optional[list[int]] = None
     lora_id_prefix: str = "eval"
     seed: int = 42
-    openclaw_url: str | None = None
-    openclaw_api_key: str = "openclaw-local-dev-token"
-    proxy_url: str | None = None
+    openclaw_url: Optional[str] = None
+    proxy_url: Optional[str] = None
     base_model: str = "Qwen/Qwen3-8B"
     batch_size: int = 4
+    steps_per_batch: int = 1
+    feedback_repetitions: int = 1
+
+
+# HarnessConfig is the post-processed runtime config (still no secrets).
+HarnessConfig = EvalConfig
 
 
 @dataclass
@@ -175,6 +178,7 @@ class StepResult:
     prompt_used: str
     response_text: str | None = None
     timing_s: float = 0.0
+    sub_step_count: int = 1  # number of gradient sub-steps taken
 
 
 @dataclass
@@ -196,14 +200,6 @@ class ExperimentSummary:
     logprob_margin_delta: float | None = None
     final_compliance: float | None = None
     capability_ratio: float | None = None
-
-
-@dataclass
-class GeminiEvalResult:
-    """Result from Gemini's evaluation of a chatbot response."""
-
-    satisfied: bool
-    feedback: str | None = None
 
 
 @dataclass
@@ -274,4 +270,5 @@ def step_result_from_dict(data: dict[str, object]) -> StepResult:
         prompt_used=data["prompt_used"],  # type: ignore[arg-type]
         response_text=data.get("response_text"),  # type: ignore[arg-type]
         timing_s=data.get("timing_s", 0.0),  # type: ignore[arg-type]
+        sub_step_count=data.get("sub_step_count", 1),  # type: ignore[arg-type]
     )

@@ -60,6 +60,23 @@ claas/
 │       ├── local/engine.py              # Local GPU execution
 │       ├── modal/engine.py              # Modal remote execution
 │       └── tinker/engine.py, state.py   # Tinker SDK execution
+│
+├── eval/                                # Eval harness (Hydra config)
+│   ├── __init__.py
+│   ├── __main__.py                      # `python -m claas.eval` entry point
+│   ├── config.py                        # Hydra config loading (load_config / build_harness_config)
+│   ├── configs/base.yaml                # Default Hydra YAML config
+│   ├── types.py                         # EvalConfig dataclass, metric types
+│   ├── runner.py                        # Main eval loop (run_harness)
+│   ├── logprob.py                       # Logprob margin scoring
+│   ├── metrics.py                       # Metric registry
+│   ├── preferences.py                   # Preference configs (feedback strings, verifiers)
+│   ├── verifiers.py                     # Programmatic compliance verifiers
+│   ├── capability.py                    # General capability probes
+│   ├── collapse.py                      # Collapse detection
+│   ├── gemini.py                        # Gemini-based evaluation
+│   ├── plotting.py                      # Matplotlib plot generation
+│   └── dashboard.py                     # Web dashboard for results
 ```
 
 ## Modal Deployment
@@ -111,6 +128,25 @@ loss_dict = compute_sdpo_loss(
 )
 ```
 
+## Eval Harness
+
+The eval harness uses Hydra for YAML-based configuration. Default config: `claas/eval/configs/base.yaml`.
+
+```bash
+# Install eval deps
+uv sync --extra tinker --extra dev
+
+# Run eval with Hydra overrides
+claas eval 'preferences=[concise]' num_steps=20 base_model=Qwen/Qwen3-30B-A3B
+```
+
+Key points:
+- Config is in `claas/eval/configs/base.yaml` — override via `key=value` CLI args
+- Tinker model names differ from HuggingFace: use `Qwen/Qwen3-30B-A3B` not `Qwen/Qwen3-Coder-30B-A3B-Instruct`
+- The API's FastAPI instance is `claas.api:web_app` (not `claas.api:app`, which is the Modal App)
+- Secrets (`CLAAS_TINKER_API_KEY`, `VLLM_API_KEY`) come from env vars, not the config
+- `test_eval_config.py` requires `hydra-core` (now a core dependency)
+
 ## Dependencies
 
 Heavy dependencies (torch, vllm, transformers, tinker) are not installed locally. They run inside Docker containers, Modal containers, or the Tinker cloud. `ty check` will report `unresolved-import` errors for these — this is expected.
@@ -120,6 +156,18 @@ Heavy dependencies (torch, vllm, transformers, tinker) are not installed locally
 ### DO NOT manage vLLM as a subprocess from the CLaaS API
 
 Never add code to kill, restart, or spawn vLLM from within the API process. vLLM is managed externally (by the user, systemd, Docker, etc.). The API communicates with vLLM only via its HTTP API (sleep/wake, load/unload LoRA). Adding process management (pkill, subprocess.Popen, etc.) to the API is fragile, creates tight coupling, and is not how this system is designed.
+
+## Long-Running Commands
+
+Always launch long-running commands (servers, evals, deployments, training runs, etc.) inside a `tmux` session so they survive if the Claude Code session ends. Use `run_in_background` for the Bash tool when appropriate, but for any process that must persist beyond the current session, wrap it in tmux:
+
+```bash
+# Example: run an eval inside tmux
+tmux new-session -d -s eval 'claas eval num_steps=50'
+
+# Attach to check progress
+tmux attach -t eval
+```
 
 ## Development Workflow
 

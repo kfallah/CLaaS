@@ -26,7 +26,7 @@ from .verifiers import explain_verifier, run_verifier
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COLLAPSE_STEPS = {0, 5, 10, 15, 19}
+DEFAULT_COLLAPSE_STEPS = [0, 5, 10, 15, 19]
 
 
 def _prefixed_messages(
@@ -146,7 +146,7 @@ class CollapseMetric:
     name = "collapse"
     needs_generation = True
 
-    def __init__(self, check_steps: set[int] | None = None) -> None:
+    def __init__(self, check_steps: list[int] | None = None) -> None:
         self.check_steps = check_steps if check_steps is not None else DEFAULT_COLLAPSE_STEPS
 
     async def measure(self, ctx: MetricContext, metrics: EvalMetrics) -> None:
@@ -182,7 +182,7 @@ METRIC_REGISTRY: dict[str, type] = {
 }
 
 
-def build_metrics(names: list[str], collapse_steps: set[int] | None = None) -> list[Metric]:
+def build_metrics(names: list[str], collapse_steps: list[int] | None = None) -> list[Metric]:
     """Expand presets, deduplicate, and instantiate metric objects."""
     expanded: list[str] = []
     for name in names:

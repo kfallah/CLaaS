@@ -820,7 +820,7 @@ def test_dashboard_renders_latest_records(monkeypatch, tmp_path):
     )
 
     client = TestClient(web_app)
-    response = client.get("/v1/dashboard", params={"limit": 1})
+    response = client.get("/v1/dashboard", params={"page": 1, "per_page": 1})
 
     assert response.status_code == 200
     assert "CLaaS Dashboard" in response.text
@@ -828,6 +828,7 @@ def test_dashboard_renders_latest_records(monkeypatch, tmp_path):
     assert "Expand" in response.text
     assert "prompt-b" in response.text
     assert "prompt-a" not in response.text
+    assert "Page 1 of 2" in response.text
 
 
 def test_dashboard_skips_invalid_log(monkeypatch, tmp_path):
@@ -912,7 +913,7 @@ def test_dashboard_truncates_prompt_preview(monkeypatch, tmp_path):
     )
 
     client = TestClient(web_app)
-    response = client.get("/v1/dashboard", params={"limit": 1})
+    response = client.get("/v1/dashboard", params={"page": 1, "per_page": 1})
 
     assert response.status_code == 200
     assert "…" in response.text
@@ -1018,7 +1019,7 @@ def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
     )
 
     client = TestClient(web_app)
-    response = client.get("/v1/dashboard", params={"limit": 1})
+    response = client.get("/v1/dashboard", params={"page": 1, "per_page": 1})
 
     assert response.status_code == 200
     assert "prompt-d1" in response.text
