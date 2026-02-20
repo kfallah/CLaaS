@@ -5,38 +5,53 @@ description: Set up the full CLaaS stack (vLLM + API + OpenClaw/Telegram) direct
 
 # Setup Local (Dockerless)
 
-Run the full CLaaS stack natively — vLLM, CLaaS feedback API, and OpenClaw Telegram gateway — without Docker.
+> **Docker is strongly preferred.** If Docker is available, use it instead:
+> ```bash
+> cd docker
+> cp .env.local.example .env
+> # Set TELEGRAM_BOT_TOKEN in .env
+> docker compose --profile local up --build
+> ```
+> See `docker/README.md`. Only continue below if Docker is unavailable.
+
+---
+
+Run the full CLaaS stack natively without Docker. **Tested on an NVIDIA RTX 5090.**
 
 ## Prerequisites
 
-- Python 3.11+, pip
-- Node.js 22+, npm
-- NVIDIA GPU with >= 24 GB VRAM and CUDA drivers
+- `uv`, Node.js 22+, npm
+- NVIDIA GPU with >= 24 GB VRAM, CUDA drivers and toolkit (`nvidia-smi` should work)
 - A Telegram bot token from @BotFather
 
 ## Instructions
 
-When this skill is invoked, perform the following steps. The user may pass a Telegram bot token as an argument; if not, ask for it.
+Ask for the Telegram bot token if not provided as an argument, then work through each step.
 
 ### 1. Install dependencies
 
 ```bash
-# Install CLaaS + vLLM (from repo root)
+# Python deps (from repo root)
 uv sync --extra local --extra teacher --extra dev
 
-# Install OpenClaw
+# pyproject.toml pins torch to CPU — reinstall with CUDA
+# Match cu1XX to your CUDA version from nvidia-smi (e.g. cu124, cu128)
+uv pip install "torch>=2.1.0+cu128" torchvision torchaudio \
+  --index-url https://download.pytorch.org/whl/cu128 --reinstall
+uv pip install "numpy<2.3"  # numba compatibility
+
+# OpenClaw
 npm install -g openclaw@latest
 ```
 
-If Node.js is missing or < v22, install it:
-```bash
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y nodejs
-```
+> **Python headers:** Triton JIT-compiles a CUDA extension at first vLLM startup and needs `Python.h`. System Python often lacks dev headers. Use a uv-managed Python (which ships with headers) to avoid this:
+> ```bash
+> uv python install 3.12
+> uv venv --python 3.12 --clear .venv
+> # Re-run the installs above
+> ```
 
-### 2. Run the init container script
-
-Create the LoRA adapter and OpenClaw config. Set `VLLM_BASE_URL` to `http://localhost:8000/v1` (not the Docker service name).
+### 2. Initialize LoRA and OpenClaw config
 
 ```bash
 LORA_ROOT="${HOME}/.local/share/claas/loras"
@@ -51,23 +66,44 @@ VLLM_BASE_URL=http://localhost:8000/v1 \
 API_KEY=sk-local \
 TELEGRAM_BOT_TOKEN=<token> \
 OPENCLAW_HOME="$OPENCLAW_HOME" \
-  python3 docker/scripts/init-stack.py
+  uv run python3 docker/scripts/init-stack.py
 ```
 
-Verify: `$LORA_ROOT/.aliases.json` should exist with an `openclaw/assistant-latest` entry.
-
-### 2b. Install feedback plugin
-
-Copy the CLaaS feedback plugin into the OpenClaw extensions directory so it loads on startup:
+The init script writes config to `$OPENCLAW_HOME/` but OpenClaw (run with `HOME="$OPENCLAW_HOME"`) reads from `$OPENCLAW_HOME/.openclaw/`. Copy and fix:
 
 ```bash
-mkdir -p "$OPENCLAW_HOME/extensions"
-cp -r plugins/claas-feedback "$OPENCLAW_HOME/extensions/claas-feedback"
+cp "$OPENCLAW_HOME/openclaw.json" "$OPENCLAW_HOME/.openclaw/openclaw.json"
+cp "$OPENCLAW_HOME/agents/main/agent/models.json" \
+   "$OPENCLAW_HOME/.openclaw/agents/main/agent/models.json"
+
+# Replace Docker service hostname with localhost
+sed -i 's|http://claas-api:8080|http://localhost:8080|g' \
+  "$OPENCLAW_HOME/.openclaw/openclaw.json"
+
+# Feedback plugin
+mkdir -p "$OPENCLAW_HOME/.openclaw/extensions"
+cp -r plugins/claas-feedback "$OPENCLAW_HOME/.openclaw/extensions/claas-feedback"
+
+# Auth credentials for the local vLLM provider
+cat > "$OPENCLAW_HOME/.openclaw/agents/main/agent/auth-profiles.json" << 'EOF'
+{
+  "version": 1,
+  "profiles": {
+    "local-default": {
+      "type": "api_key",
+      "provider": "local",
+      "key": "sk-local"
+    }
+  }
+}
+EOF
 ```
 
-### 3. Start vLLM (background)
+### 3. Start vLLM
 
 ```bash
+LORA_ROOT="${HOME}/.local/share/claas/loras"
+export PATH="$(pwd)/.venv/bin:$PATH"  # puts 'vllm' on PATH
 export MODEL=Qwen/Qwen3-8B HOST=0.0.0.0 PORT=8000 API_KEY=sk-local
 export SERVED_MODEL_NAMES=qwen3-8b MAX_MODEL_LEN=32768 GPU_MEMORY_UTILIZATION=0.70
 export ENABLE_SLEEP_MODE=1 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
@@ -75,34 +111,30 @@ export ENABLE_AUTO_TOOL_CHOICE=1 TOOL_CALL_PARSER=qwen3_xml
 export LORA_ROOT="$LORA_ROOT" LORA_ALIAS_FILE="$LORA_ROOT/.aliases.json" INCLUDE_ALIAS_LORAS=1
 
 bash scripts/openclaw-local/start_vllm_qwen3_8b.sh >> /tmp/vllm.log 2>&1 &
+
+# First run downloads Qwen3-8B (~16 GB) — expect 5-20 min
+until curl -sf http://localhost:8000/health; do sleep 5; done && echo "vLLM ready"
 ```
 
-Wait for health check:
-```bash
-until curl -sf http://localhost:8000/health; do sleep 5; done
-```
-
-First run downloads Qwen3-8B (~16 GB); expect 5-20 minutes.
-
-### 4. Start CLaaS API (background)
+### 4. Start CLaaS API
 
 ```bash
 CLAAS_STORAGE_BACKEND=local_fs \
-CLAAS_LORA_ROOT="$LORA_ROOT" \
+CLAAS_LORA_ROOT="${HOME}/.local/share/claas/loras" \
 CLAAS_DISTILL_EXECUTION_MODE=local \
 VLLM_BASE_URL=http://localhost:8000 \
 VLLM_API_KEY=sk-local \
 FEEDBACK_LOG_DIR=/tmp/feedback-logs \
-  uvicorn claas.api:web_app --host 0.0.0.0 --port 8080 >> /tmp/claas-api.log 2>&1 &
+  uv run uvicorn claas.api:web_app --host 0.0.0.0 --port 8080 >> /tmp/claas-api.log 2>&1 &
+
+curl -sf http://localhost:8080/v1/health
 ```
 
-Verify: `curl http://localhost:8080/v1/health`
-
-### 5. Start OpenClaw gateway (background)
-
-The init script writes config to `OPENCLAW_HOME/.openclaw/openclaw.json`. Point `HOME` there so OpenClaw finds it:
+### 5. Start OpenClaw
 
 ```bash
+OPENCLAW_HOME="${HOME}/.local/share/claas/openclaw-config"
+
 TELEGRAM_BOT_TOKEN=<token> \
 VLLM_BASE_URL=http://localhost:8000 \
 HOME="$OPENCLAW_HOME" \
@@ -110,31 +142,34 @@ OPENCLAW_GATEWAY_TOKEN=openclaw-local-dev-token \
   openclaw gateway --port 18789 --bind lan --allow-unconfigured --verbose >> /tmp/openclaw.log 2>&1 &
 ```
 
-### 6. Verify the stack
+### 6. Verify and approve pairing
 
 ```bash
-# vLLM models
 curl -s http://localhost:8000/v1/models -H "Authorization: Bearer sk-local"
-
-# CLaaS health
 curl -s http://localhost:8080/v1/health
-
-# LoRA adapters
 curl -s http://localhost:8080/v1/lora
+tail -10 /tmp/openclaw.log  # should show "agent model: local/openclaw-assistant-latest"
+```
 
-# OpenClaw logs
-tail -5 /tmp/openclaw.log
+When the user first messages the bot they'll receive a pairing code. Approve it:
+```bash
+HOME="${HOME}/.local/share/claas/openclaw-config" openclaw pairing approve telegram <CODE>
 ```
 
 Report the status of all four components and the Telegram bot username.
 
 ## Troubleshooting
 
-- **vLLM OOM on startup**: Lower `GPU_MEMORY_UTILIZATION` (e.g. `0.85`). The sleep/wake mechanism ensures vLLM and CLaaS don't use GPU simultaneously.
-- **OpenClaw exits immediately**: Ensure the config at `$OPENCLAW_HOME/.openclaw/openclaw.json` has `channels.telegram.enabled: true`, `channels.telegram.botToken` set, and `gateway.mode: "local"`. Run `HOME="$OPENCLAW_HOME" openclaw doctor --fix` if needed.
-- **Node.js too old**: OpenClaw requires Node 22+. Install via NodeSource (see step 1).
+| Error | Fix |
+|-------|-----|
+| `vllm: not found` | Prepend `.venv/bin` to PATH |
+| `libtorch_cuda.so not found` | Reinstall torch with CUDA index (step 1) |
+| `Numba needs NumPy 2.2 or less` | `uv pip install "numpy<2.3"` |
+| `Python.h: No such file or directory` | Recreate venv with uv-managed Python (step 1 note) |
+| `No API key found for provider "local"` | Create `auth-profiles.json` (step 2) |
+| vLLM OOM | Lower `GPU_MEMORY_UTILIZATION` to `0.60` |
 
-## Log files
+## Logs
 
 | Service | Log |
 |---------|-----|

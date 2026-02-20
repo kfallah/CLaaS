@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -13,7 +13,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
 COPY . /app
 
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 RUN pip install --no-cache-dir --index-url "$TORCH_INDEX_URL" torch && \
     pip install --no-cache-dir ".[local]" modal
 
