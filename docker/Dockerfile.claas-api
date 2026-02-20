@@ -11,11 +11,18 @@ RUN python3.12 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
-COPY . /app
+
+# Copy only dependency files first for layer caching
+COPY pyproject.toml ./
+RUN mkdir -p claas && touch claas/__init__.py
 
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 RUN pip install --no-cache-dir --index-url "$TORCH_INDEX_URL" torch && \
     pip install --no-cache-dir ".[local]" modal
+
+# Copy source and install just the project (deps already cached)
+COPY . .
+RUN pip install --no-cache-dir --no-deps .
 
 COPY docker/scripts/claas-api-entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

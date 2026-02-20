@@ -5,7 +5,8 @@ services:
   tinker-proxy:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tinker-proxy
+      dockerfile: docker/Dockerfile.tinker
+      target: proxy
     environment:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
     ports:
@@ -29,7 +30,8 @@ services:
   claas-api:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tinker-claas-api
+      dockerfile: docker/Dockerfile.tinker
+      target: api
     command:
       [
         "tinker",
@@ -58,7 +60,8 @@ services:
   init:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tinker-init
+      dockerfile: docker/Dockerfile.tinker
+      target: init
     command:
       [
         "--config-name",
@@ -88,7 +91,7 @@ services:
   openclaw:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tinker-openclaw
+      dockerfile: docker/Dockerfile.openclaw
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - VLLM_BASE_URL=http://tinker-proxy:8000

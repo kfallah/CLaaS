@@ -79,7 +79,8 @@ services:
     profiles: [local]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.init
+      dockerfile: docker/Dockerfile.tinker
+      target: init
     command:
       [
         "--config-name",
@@ -122,7 +123,8 @@ services:
     profiles: [tinker]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tinker-proxy
+      dockerfile: docker/Dockerfile.tinker
+      target: proxy
     environment:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:-}
       - HF_TOKEN=${HF_TOKEN:-}
@@ -139,7 +141,8 @@ services:
     profiles: [tinker]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tinker-claas-api
+      dockerfile: docker/Dockerfile.tinker
+      target: api
     command:
       [
         "tinker",
@@ -170,7 +173,8 @@ services:
     profiles: [tinker]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.init
+      dockerfile: docker/Dockerfile.tinker
+      target: init
     command:
       [
         "--config-name",
