@@ -72,7 +72,7 @@ tmux new-session -d -s claas-api \
   "CLAAS_DISTILL_EXECUTION_MODE=tinker \
    CLAAS_TINKER_API_KEY='<TINKER_API_KEY>' \
    CLAAS_TINKER_BASE_MODEL='<MODEL>' \
-   CLAAS_TINKER_STATE_PATH='${HOME}/.claas/tinker_state.json' \
+   CLAAS_TINKER_STATE_PATH=\"\${HOME}/.claas/tinker_state.json\" \
    VLLM_BASE_URL='http://localhost:8000' \
    VLLM_API_KEY=sk-local \
    FEEDBACK_LOG_DIR=/tmp/feedback-logs \
@@ -228,7 +228,7 @@ tmux new-session -d -s openclaw \
    CLAAS_VLLM_BASE_URL='http://localhost:8000' \
    CLAAS_TINKER_PROXY_URL='http://localhost:8000' \
    CLAAS_API_URL='http://localhost:8080' \
-   HOME='$OPENCLAW_HOME' \
+   HOME=\"\$OPENCLAW_HOME\" \
    OPENCLAW_GATEWAY_TOKEN='openclaw-local-dev-token' \
    openclaw gateway --port 18789 --bind lan --allow-unconfigured --verbose \
    2>&1 | tee /tmp/openclaw.log"
