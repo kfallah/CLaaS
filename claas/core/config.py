@@ -1,12 +1,12 @@
 """Centralized configuration for CLaaS.
 
-Configuration is resolved in three tiers (highest priority first):
+Configuration is resolved from two sources:
 
-1. **Environment variables** — always win (for Docker/CI overrides and secrets)
-2. **YAML config** — loaded via Hydra from ``claas/core/configs/``
-3. **Dataclass defaults** — hardcoded fallbacks
+1. **YAML config** — loaded via Hydra from ``claas/core/configs/``
+2. **Environment variables** — used only for secrets and the config selector
 
-The YAML config is selected by ``CLAAS_CONFIG_NAME`` (default: ``"local"``).
+The YAML profile is selected by ``CLAAS_CONFIG_NAME`` (default: ``"local"``).
+Use Hydra CLI overrides (``key=value``) to customize non-secret values.
 
 Usage::
 
@@ -56,58 +56,45 @@ def _load_yaml_config(config_name: str) -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# Env var helpers (with optional YAML fallback)
+# YAML value helpers
 # ---------------------------------------------------------------------------
 
-def _env(name: str, default: str, yaml_val: object = None) -> str:
+def _yaml_str(yaml: dict[str, object], key: str, default: str = "") -> str:
+    val = yaml.get(key)
+    return str(val) if val is not None else default
+
+
+def _yaml_float(yaml: dict[str, object], key: str, default: float = 0.0) -> float:
+    val = yaml.get(key)
+    return float(str(val)) if val is not None else default
+
+
+def _yaml_bool(yaml: dict[str, object], key: str, default: bool = False) -> bool:
+    val = yaml.get(key)
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _yaml_set(
+    yaml: dict[str, object], key: str, default: frozenset[str] = frozenset(),
+) -> frozenset[str]:
+    val = yaml.get(key)
+    if val is None:
+        return default
+    if isinstance(val, (list, tuple)):
+        return frozenset(str(item).strip() for item in val if str(item).strip())
+    return frozenset(
+        item.strip() for item in str(val).split(",") if item.strip()
+    )
+
+
+def _secret(name: str, default: str = "") -> str:
+    """Read a secret from an environment variable."""
     raw = os.environ.get(name)
-    if raw is not None:
-        return raw.strip()
-    if yaml_val is not None:
-        return str(yaml_val)
-    return default
-
-
-def _env_int(name: str, default: int, yaml_val: object = None) -> int:
-    raw = os.environ.get(name)
-    if raw is not None:
-        return int(raw.strip())
-    if yaml_val is not None:
-        return int(str(yaml_val))
-    return default
-
-
-def _env_float(name: str, default: float, yaml_val: object = None) -> float:
-    raw = os.environ.get(name)
-    if raw is not None:
-        return float(raw.strip())
-    if yaml_val is not None:
-        return float(str(yaml_val))
-    return default
-
-
-def _env_bool(name: str, default: bool, yaml_val: object = None) -> bool:
-    raw = os.environ.get(name)
-    if raw is not None:
-        return raw.strip().lower() in {"1", "true", "yes", "on"}
-    if yaml_val is not None:
-        if isinstance(yaml_val, bool):
-            return yaml_val
-        return str(yaml_val).strip().lower() in {"1", "true", "yes", "on"}
-    return default
-
-
-def _env_set(name: str, default: str, yaml_val: object = None) -> frozenset[str]:
-    raw = os.environ.get(name)
-    if raw is not None:
-        return frozenset(item.strip() for item in raw.split(",") if item.strip())
-    if yaml_val is not None:
-        if isinstance(yaml_val, (list, tuple)):
-            return frozenset(str(item).strip() for item in yaml_val if str(item).strip())
-        return frozenset(
-            item.strip() for item in str(yaml_val).split(",") if item.strip()
-        )
-    return frozenset(item.strip() for item in default.split(",") if item.strip())
+    return raw.strip() if raw is not None else default
 
 
 # ---------------------------------------------------------------------------
@@ -181,44 +168,27 @@ class ProxyConfig:
 
 def _build_base_fields(yaml: dict[str, object]) -> dict[str, object]:
     return {
-        "feedback_log_dir": _env(
-            "FEEDBACK_LOG_DIR", "./data/feedback", yaml.get("feedback_log_dir"),
-        ),
-        "hf_token": _env("HF_TOKEN", ""),
-        "lora_root": _env("CLAAS_LORA_ROOT", "/loras", yaml.get("lora_root")),
-        "storage_backend": _env(
-            "CLAAS_STORAGE_BACKEND", "modal_volume", yaml.get("storage_backend"),
-        ),
-        "allowed_init_base_models": _env_set(
-            "CLAAS_ALLOWED_INIT_BASE_MODELS",
-            "Qwen/Qwen3-8B",
-            yaml.get("allowed_init_base_models"),
-        ),
+        "feedback_log_dir": _yaml_str(yaml, "feedback_log_dir", "./data/feedback"),
+        "hf_token": _secret("HF_TOKEN"),
+        "lora_root": _yaml_str(yaml, "lora_root", "/loras"),
+        "storage_backend": _yaml_str(yaml, "storage_backend"),
+        "allowed_init_base_models": _yaml_set(yaml, "allowed_init_base_models"),
     }
 
 
 def _build_vllm_feedback_fields(yaml: dict[str, object]) -> dict[str, object]:
     return {
-        "vllm_base_url": _env(
-            "VLLM_BASE_URL", "http://127.0.0.1:8000", yaml.get("vllm_base_url"),
+        "vllm_base_url": _yaml_str(yaml, "vllm_base_url", "http://127.0.0.1:8000"),
+        "vllm_api_key": _secret("VLLM_API_KEY"),
+        "feedback_lock_timeout_s": _yaml_float(yaml, "feedback_lock_timeout_s", 120.0),
+        "feedback_wake_on_failure": _yaml_bool(yaml, "feedback_wake_on_failure", True),
+        "feedback_min_free_vram_gb": _yaml_float(
+            yaml, "feedback_min_free_vram_gb", 20.0,
         ),
-        "vllm_api_key": _env("VLLM_API_KEY", "sk-local"),
-        "feedback_lock_timeout_s": _env_float(
-            "FEEDBACK_LOCK_TIMEOUT_S", 120.0, yaml.get("feedback_lock_timeout_s"),
+        "feedback_sleep_verify_timeout_s": _yaml_float(
+            yaml, "feedback_sleep_verify_timeout_s", 30.0,
         ),
-        "feedback_wake_on_failure": _env_bool(
-            "FEEDBACK_WAKE_ON_FAILURE", True, yaml.get("feedback_wake_on_failure"),
-        ),
-        "feedback_min_free_vram_gb": _env_float(
-            "FEEDBACK_MIN_FREE_VRAM_GB", 20.0, yaml.get("feedback_min_free_vram_gb"),
-        ),
-        "feedback_sleep_verify_timeout_s": _env_float(
-            "FEEDBACK_SLEEP_VERIFY_TIMEOUT_S", 30.0,
-            yaml.get("feedback_sleep_verify_timeout_s"),
-        ),
-        "feedback_drain_timeout_s": _env_float(
-            "FEEDBACK_DRAIN_TIMEOUT_S", 30.0, yaml.get("feedback_drain_timeout_s"),
-        ),
+        "feedback_drain_timeout_s": _yaml_float(yaml, "feedback_drain_timeout_s", 30.0),
     }
 
 
@@ -232,14 +202,10 @@ def get_config() -> CLaaSConfig:
     The result is cached; call ``get_config.cache_clear()`` to re-read
     (useful in tests).
     """
-    config_name = _env("CLAAS_CONFIG_NAME", "local").lower()
+    config_name = os.environ.get("CLAAS_CONFIG_NAME", "local").strip().lower()
     yaml = _load_yaml_config(config_name)
 
-    mode = config_name
-    # The YAML `mode` field is authoritative when present
-    yaml_mode = yaml.get("mode")
-    if yaml_mode is not None:
-        mode = str(yaml_mode).lower()
+    mode = _yaml_str(yaml, "mode", config_name)
 
     base = _build_base_fields(yaml)
 
@@ -248,12 +214,8 @@ def get_config() -> CLaaSConfig:
             mode=mode,
             **base,  # type: ignore[arg-type]
             **_build_vllm_feedback_fields(yaml),
-            base_model_id=_env(
-                "CLAAS_BASE_MODEL_ID", "Qwen/Qwen3-8B", yaml.get("base_model_id"),
-            ),
-            attn_implementation=_env(
-                "CLAAS_ATTN_IMPLEMENTATION", "sdpa", yaml.get("attn_implementation"),
-            ),
+            base_model_id=_yaml_str(yaml, "base_model_id"),
+            attn_implementation=_yaml_str(yaml, "attn_implementation"),
         )
 
     if mode == "modal":
@@ -261,27 +223,22 @@ def get_config() -> CLaaSConfig:
             mode=mode,
             **base,  # type: ignore[arg-type]
             **_build_vllm_feedback_fields(yaml),
-            hf_secret_name=_env("CLAAS_HF_SECRET_NAME", ""),
+            hf_secret_name=_yaml_str(yaml, "hf_secret_name"),
         )
 
     if mode == "tinker":
+        raw_state_path = _yaml_str(
+            yaml, "tinker_state_path",
+            os.path.join("~", ".claas", "tinker_state.json"),
+        )
         return TinkerConfig(
             mode=mode,
             **base,  # type: ignore[arg-type]
-            tinker_api_key=_env("CLAAS_TINKER_API_KEY", ""),
-            tinker_base_model=_env(
-                "CLAAS_TINKER_BASE_MODEL", "gpt-oss/GPT-OSS-120B",
-                yaml.get("tinker_base_model"),
-            ),
-            tinker_state_path=_env(
-                "CLAAS_TINKER_STATE_PATH",
-                os.path.join(os.path.expanduser("~"), ".claas", "tinker_state.json"),
-                yaml.get("tinker_state_path"),
-            ),
-            vllm_base_url=_env(
-                "VLLM_BASE_URL", "http://127.0.0.1:8000", yaml.get("vllm_base_url"),
-            ),
-            vllm_api_key=_env("VLLM_API_KEY", "sk-local"),
+            tinker_api_key=_secret("CLAAS_TINKER_API_KEY"),
+            tinker_base_model=_yaml_str(yaml, "tinker_base_model"),
+            tinker_state_path=os.path.expanduser(raw_state_path),
+            vllm_base_url=_yaml_str(yaml, "vllm_base_url", "http://127.0.0.1:8000"),
+            vllm_api_key=_secret("VLLM_API_KEY"),
         )
 
     raise ValueError(f"Unsupported CLAAS_CONFIG_NAME: {mode!r}")
@@ -295,12 +252,9 @@ def get_proxy_config() -> ProxyConfig:
     """
     yaml = _load_yaml_config("proxy")
     return ProxyConfig(
-        tinker_api_key=_env("CLAAS_TINKER_API_KEY", ""),
-        tinker_base_model=_env(
-            "CLAAS_TINKER_BASE_MODEL", "gpt-oss/GPT-OSS-120B",
-            yaml.get("tinker_base_model"),
-        ),
-        completion_cache_size=_env_int(
-            "CLAAS_COMPLETION_CACHE_SIZE", 100, yaml.get("completion_cache_size"),
+        tinker_api_key=_secret("CLAAS_TINKER_API_KEY"),
+        tinker_base_model=_yaml_str(yaml, "tinker_base_model"),
+        completion_cache_size=int(
+            _yaml_float(yaml, "completion_cache_size", 100),
         ),
     )

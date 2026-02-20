@@ -9,8 +9,6 @@ from claas.core.config import (
     ModalConfig,
     ProxyConfig,
     TinkerConfig,
-    _env_bool,
-    _env_set,
     get_config,
     get_proxy_config,
 )
@@ -45,23 +43,17 @@ class TestGetConfig:
         with pytest.raises(ValueError, match="bogus"):
             get_config()
 
-
-# ---------------------------------------------------------------------------
-# Env var overrides
-# ---------------------------------------------------------------------------
-
-class TestEnvVarOverrides:
-    def test_feedback_log_dir(self, monkeypatch):
-        monkeypatch.setenv("FEEDBACK_LOG_DIR", "/tmp/logs")
-        cfg = get_config()
-        assert cfg.feedback_log_dir == "/tmp/logs"
-
-    def test_vllm_base_url_local(self, monkeypatch):
-        monkeypatch.setenv("VLLM_BASE_URL", "http://gpu:9000")
+    def test_config_name_case_insensitive(self, monkeypatch):
+        monkeypatch.setenv("CLAAS_CONFIG_NAME", "LOCAL")
         cfg = get_config()
         assert isinstance(cfg, LocalConfig)
-        assert cfg.vllm_base_url == "http://gpu:9000"
 
+
+# ---------------------------------------------------------------------------
+# Secret env vars still work
+# ---------------------------------------------------------------------------
+
+class TestSecretEnvVars:
     def test_tinker_api_key(self, monkeypatch):
         monkeypatch.setenv("CLAAS_CONFIG_NAME", "tinker")
         monkeypatch.setenv("CLAAS_TINKER_API_KEY", "tk-secret")
@@ -69,10 +61,16 @@ class TestEnvVarOverrides:
         assert isinstance(cfg, TinkerConfig)
         assert cfg.tinker_api_key == "tk-secret"
 
-    def test_allowed_models_override(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_ALLOWED_INIT_BASE_MODELS", "A/B,C/D")
+    def test_vllm_api_key(self, monkeypatch):
+        monkeypatch.setenv("VLLM_API_KEY", "sk-test")
         cfg = get_config()
-        assert cfg.allowed_init_base_models == frozenset({"A/B", "C/D"})
+        assert isinstance(cfg, LocalConfig)
+        assert cfg.vllm_api_key == "sk-test"
+
+    def test_hf_token(self, monkeypatch):
+        monkeypatch.setenv("HF_TOKEN", "hf_abc")
+        cfg = get_config()
+        assert cfg.hf_token == "hf_abc"
 
 
 # ---------------------------------------------------------------------------
@@ -92,49 +90,6 @@ class TestFrozen:
 
 
 # ---------------------------------------------------------------------------
-# Env helpers
-# ---------------------------------------------------------------------------
-
-class TestEnvBool:
-    @pytest.mark.parametrize("val,expected", [
-        ("1", True),
-        ("true", True),
-        ("True", True),
-        ("TRUE", True),
-        ("yes", True),
-        ("on", True),
-        ("0", False),
-        ("false", False),
-        ("no", False),
-        ("off", False),
-        ("random", False),
-    ])
-    def test_values(self, monkeypatch, val, expected):
-        monkeypatch.setenv("_TEST_BOOL", val)
-        assert _env_bool("_TEST_BOOL", False) is expected
-
-    def test_default_when_missing(self):
-        assert _env_bool("_NONEXISTENT_BOOL_VAR", True) is True
-        assert _env_bool("_NONEXISTENT_BOOL_VAR", False) is False
-
-
-class TestEnvSet:
-    def test_comma_separated(self, monkeypatch):
-        monkeypatch.setenv("_TEST_SET", "a, b ,c")
-        result = _env_set("_TEST_SET", "default")
-        assert result == frozenset({"a", "b", "c"})
-
-    def test_empty_items_filtered(self, monkeypatch):
-        monkeypatch.setenv("_TEST_SET", "a,,b,")
-        result = _env_set("_TEST_SET", "default")
-        assert result == frozenset({"a", "b"})
-
-    def test_default(self):
-        result = _env_set("_NONEXISTENT_SET_VAR", "x,y")
-        assert result == frozenset({"x", "y"})
-
-
-# ---------------------------------------------------------------------------
 # Proxy config
 # ---------------------------------------------------------------------------
 
@@ -144,11 +99,6 @@ class TestProxyConfig:
         assert isinstance(cfg, ProxyConfig)
         assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-120B"
         assert cfg.completion_cache_size == 100
-
-    def test_cache_size_override(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_COMPLETION_CACHE_SIZE", "50")
-        cfg = get_proxy_config()
-        assert cfg.completion_cache_size == 50
 
 
 # ---------------------------------------------------------------------------

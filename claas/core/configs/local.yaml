@@ -1,9 +1,9 @@
-defaults:
-  - base
-  - _self_
-
 mode: local
+feedback_log_dir: ./data/feedback
+lora_root: /loras
 storage_backend: local_fs
+allowed_init_base_models:
+  - Qwen/Qwen3-8B
 vllm_base_url: http://127.0.0.1:8000
 feedback_lock_timeout_s: 120.0
 feedback_wake_on_failure: true
