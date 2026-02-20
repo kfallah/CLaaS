@@ -17,9 +17,8 @@ Continual learning as-a-service (CLaaS) via self-distillation for OpenClaw. Pers
 ```mermaid
 flowchart TD
     A[Do you have a GPU?] -->|Yes| B[Local]
-    A -->|No| C{Preferred}
-    C -->|Recommended| D[Tinker]
-    C --> E[Modal]
+    A -->|No| D["Tinker (Recommended)"]
+    A -->|No| E[Modal]
 ```
 
 ### Local (GPU)
