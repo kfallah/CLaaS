@@ -1,6 +1,6 @@
 """Shared fixtures for integration tests.
 
-The Docker stack is managed by ``scripts/run_integration_tests.sh``,
+The Docker stack is managed by ``tests/integration/run_tinker_stack_integration.sh``,
 not by pytest.  This conftest just provides connection details.
 """
 

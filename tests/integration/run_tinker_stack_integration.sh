@@ -2,7 +2,7 @@
 # Run the full Tinker integration test suite.
 #
 # Usage:
-#   TINKER_API_KEY=... ./scripts/run_integration_tests.sh
+#   TINKER_API_KEY=... ./tests/integration/run_tinker_stack_integration.sh
 #
 # Requires: docker, uv
 set -euo pipefail
