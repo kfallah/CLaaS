@@ -20,6 +20,7 @@ from claas.core.types import (
 )
 from claas.training.engine.base import TrainingEngine
 from claas.training.storage import (
+    configure_storage_backend,
     create_initial_lora,
     delete_lora,
     export_lora_zip_bytes,
@@ -33,6 +34,9 @@ from claas.training.worker import DistillWorker
 
 class LocalTrainingEngine(TrainingEngine):
     """Executes training and LoRA operations on local infrastructure."""
+
+    def __init__(self) -> None:
+        configure_storage_backend("local_fs")
 
     async def distill(
         self,

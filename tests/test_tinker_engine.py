@@ -66,16 +66,13 @@ def tinker_engine(tinker_env):
 
     fake_cfg = TinkerConfig(
         mode="tinker",
-        tinker_api_key="fake-key",
         tinker_base_model="gpt-oss/GPT-OSS-120B",
         tinker_state_path=tinker_env,
         vllm_base_url="http://127.0.0.1:8000",
-        vllm_api_key="sk-local",
     )
-    with patch("claas.training.engine.tinker.engine.get_config", return_value=fake_cfg):
-        from claas.training.engine.tinker.engine import TinkerTrainingEngine
+    from claas.training.engine.tinker.engine import TinkerTrainingEngine
 
-        engine = TinkerTrainingEngine()
+    engine = TinkerTrainingEngine(fake_cfg)
     mock_service = MagicMock()
     engine._service = mock_service
     return engine, mock_service
@@ -604,10 +601,10 @@ def test_require_entry(tinker_env):
     from claas.training.engine.tinker.engine import _require_entry
 
     with pytest.raises(FileNotFoundError, match="not found"):
-        _require_entry("nonexistent/lora")
+        _require_entry("nonexistent/lora", tinker_env)
 
     set_tinker_path("test/lora", "tinker://ckpt", "m", 8, step=3)
-    entry = _require_entry("test/lora")
+    entry = _require_entry("test/lora", tinker_env)
     assert entry.tinker_path == "tinker://ckpt"
     assert entry.step == 3
 

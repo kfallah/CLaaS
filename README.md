@@ -100,7 +100,7 @@ vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 \
   --enable-lora --lora-modules my-lora=/loras/user/my-lora-init
 
 # 2. Start the CLaaS API
-uv run uvicorn claas.api:web_app --host 0.0.0.0 --port 8080
+uv run python -m claas.api --config-name local
 
 # 3. Initialize a LoRA adapter
 curl -X POST http://localhost:8080/v1/lora/init \
@@ -141,9 +141,7 @@ uv sync --extra tinker --extra dev
 
 # Run conciseness eval for 20 steps (Tinker mode, no GPU)
 CLAAS_TINKER_API_KEY="tml-..." \
-CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
-CLAAS_DISTILL_EXECUTION_MODE=tinker \
-  claas eval 'preferences=[concise]' num_steps=20
+  uv run python -m claas.eval 'preferences=[concise]' num_steps=20
 ```
 
 Override any config field via Hydra's `key=value` syntax. The default config is in [`claas/eval/configs/base.yaml`](claas/eval/configs/base.yaml). See [`claas/eval/README.md`](claas/eval/README.md) for full documentation including metrics, config reference, setup steps, and known gotchas.

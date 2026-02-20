@@ -43,9 +43,6 @@ tinker = [
     "tinker-cookbook",
 ]
 
-[project.scripts]
-claas = "claas.cli:main"
-
 [tool.hatch.build.targets.wheel]
 packages = ["claas"]
 

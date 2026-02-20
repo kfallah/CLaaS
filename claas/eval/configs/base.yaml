@@ -1,3 +1,7 @@
+defaults:
+  - _eval_schema
+  - _self_
+
 mode: tinker
 claas_url: http://localhost:8080
 vllm_url: http://localhost:8000

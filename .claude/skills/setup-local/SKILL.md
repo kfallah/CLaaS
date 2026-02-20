@@ -58,7 +58,7 @@ LORA_ROOT="${HOME}/.local/share/claas/loras"
 OPENCLAW_HOME="${HOME}/.local/share/claas/openclaw-config"
 mkdir -p "$LORA_ROOT" "$OPENCLAW_HOME"
 
-CLAAS_STORAGE_BACKEND=local_fs \
+CLAAS_CONFIG_NAME=local \
 CLAAS_LORA_ROOT="$LORA_ROOT" \
 LORA_NAME=openclaw/assistant \
 MODEL=Qwen/Qwen3-8B \
@@ -119,9 +119,8 @@ until curl -sf http://localhost:8000/health; do sleep 5; done && echo "vLLM read
 ### 4. Start CLaaS API
 
 ```bash
-CLAAS_STORAGE_BACKEND=local_fs \
+CLAAS_CONFIG_NAME=local \
 CLAAS_LORA_ROOT="${HOME}/.local/share/claas/loras" \
-CLAAS_DISTILL_EXECUTION_MODE=local \
 VLLM_BASE_URL=http://localhost:8000 \
 VLLM_API_KEY=sk-local \
 FEEDBACK_LOG_DIR=/tmp/feedback-logs \

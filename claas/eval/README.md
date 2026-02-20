@@ -42,28 +42,32 @@ proxy_url: null                      # Tinker proxy (auto-set to vllm_url in tin
 
 ### Overriding config via CLI
 
-Hydra overrides are positional arguments after the `eval` subcommand:
+Hydra overrides are positional arguments after `uv run python -m claas.eval`:
 
 ```bash
 # Run only conciseness for 10 steps
-claas eval 'preferences=[concise]' num_steps=10
+uv run python -m claas.eval 'preferences=[concise]' num_steps=10
 
 # Override base model and mode
-claas eval base_model=Qwen/Qwen3-30B-A3B mode=tinker
+uv run python -m claas.eval base_model=Qwen/Qwen3-30B-A3B mode=tinker
 
 # Use a custom config directory
-claas eval --config-dir ./my_configs --config-name my_config
+uv run python -m claas.eval --config-dir ./my_configs --config-name my_config
 ```
 
 ### Programmatic usage
 
 ```python
-from claas.eval.config import load_config
+from claas.eval.config import build_harness_config
 from claas.eval.runner import run_harness
+from claas.eval.types import EvalConfig
 import asyncio
 
-config = load_config(
-    overrides=["preferences=[concise]", "num_steps=5"],
+config = build_harness_config(
+    EvalConfig(
+        preferences=["concise"],
+        num_steps=5,
+    )
 )
 asyncio.run(run_harness(config))
 ```
@@ -75,9 +79,6 @@ Secrets are resolved from env vars at runtime, NOT stored in config:
 | Variable | Required for | Purpose |
 |---|---|---|
 | `CLAAS_TINKER_API_KEY` | Tinker mode | Tinker SDK authentication |
-| `CLAAS_TINKER_BASE_MODEL` | Tinker mode | Must match `base_model` in config |
-| `CLAAS_DISTILL_EXECUTION_MODE` | API server | `tinker`, `local`, or `modal` |
-| `CLAAS_ALLOWED_INIT_BASE_MODELS` | API server | Comma-separated allowed models for LoRA init |
 | `VLLM_API_KEY` | Local mode | vLLM server auth token |
 | `GEMINI_API_KEY` | `general` metric | Gemini-based capability evaluation |
 
@@ -93,40 +94,29 @@ uv sync --extra tinker --extra dev
 
 ```bash
 CLAAS_TINKER_API_KEY="tml-..." \
-CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
   uv run uvicorn claas.proxy.tinker_inference_proxy:app \
     --host 0.0.0.0 --port 8000
 ```
 
 ### 3. Start the CLaaS API
 
-Note: the FastAPI instance is `web_app`, not `app` (which is the Modal object).
-
 ```bash
-CLAAS_DISTILL_EXECUTION_MODE=tinker \
 CLAAS_TINKER_API_KEY="tml-..." \
-CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
-CLAAS_ALLOWED_INIT_BASE_MODELS="Qwen/Qwen3-30B-A3B" \
-  uv run uvicorn claas.api:web_app \
-    --host 0.0.0.0 --port 8080
+  uv run python -m claas.api --config-name tinker
 ```
 
 ### 4. Run the eval
 
 ```bash
-CLAAS_DISTILL_EXECUTION_MODE=tinker \
 CLAAS_TINKER_API_KEY="tml-..." \
-CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
-  claas eval 'preferences=[concise]' num_steps=20
+  uv run python -m claas.eval 'preferences=[concise]' num_steps=20
 ```
 
 ## Known gotchas
 
 **Tinker model naming**: Tinker uses its own model identifiers that differ from HuggingFace names. For example, the HuggingFace model `Qwen/Qwen3-Coder-30B-A3B-Instruct` is `Qwen/Qwen3-30B-A3B` in Tinker. Sampling will work with either name, but LoRA training init will reject the HuggingFace name with a 400 error. Always use the Tinker name in `base_model`.
 
-**API entry point**: When running the CLaaS API with uvicorn directly (no Docker/Modal), use `claas.api:web_app` — not `claas.api:app`. The `app` object is a Modal `App` and is not ASGI-compatible.
-
-**`CLAAS_TINKER_BASE_MODEL` must match `base_model`**: The proxy reads `CLAAS_TINKER_BASE_MODEL` to initialize its sampling client, and the eval config's `base_model` is passed to the API for LoRA init. If they reference different models, scoring and training will target different models.
+**API entry point**: Run the API via Hydra (`python -m claas.api --config-name ...`) instead of loading `claas.api:web_app` directly.
 
 **Collapse metric is slow**: The `collapse` metric generates multiple stochastic samples per step. It only runs at steps listed in `collapse_steps` (default `[0, 5, 10, 15, 19]`) to limit overhead.
 

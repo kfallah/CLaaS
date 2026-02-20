@@ -1,96 +1,57 @@
-"""Centralized configuration for CLaaS.
+"""Centralized Hydra-backed configuration for CLaaS.
 
-All environment variable reads are concentrated here so the rest of the
-codebase uses typed, validated config objects instead of ad-hoc
-``os.environ.get`` calls.
-
-Usage::
-
-    from claas.core.config import get_config, get_proxy_config
-
-    cfg = get_config()          # CLaaSConfig subclass based on mode
-    proxy_cfg = get_proxy_config()  # standalone proxy config
+All profile YAML is validated against structured dataclass schemas registered in
+Hydra's ``ConfigStore``. Runtime profile selection is explicit via config name.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from functools import lru_cache
+from pathlib import Path
+
+from hydra import compose, initialize_config_dir
+from hydra.core.config_store import ConfigStore
+from omegaconf import OmegaConf
 
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
-# ---------------------------------------------------------------------------
-# Env var helpers
-# ---------------------------------------------------------------------------
-
-def _env(name: str, default: str) -> str:
-    return os.environ.get(name, default).strip()
+_CONFIG_DIR = str(Path(__file__).parent / "configs")
+_SCHEMAS_REGISTERED = False
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return int(raw.strip())
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return float(raw.strip())
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_set(name: str, default: str) -> frozenset[str]:
-    raw = os.environ.get(name, default)
-    return frozenset(item.strip() for item in raw.split(",") if item.strip())
-
-
-# ---------------------------------------------------------------------------
-# Config hierarchy
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
+@dataclass
 class CLaaSConfig:
     """Base configuration shared by all execution modes."""
 
-    mode: str = ""
+    mode: str = "local"
     feedback_log_dir: str = "./data/feedback"
-    hf_token: str = ""
-    lora_root: str = ""
-    storage_backend: str = ""
-    allowed_init_base_models: frozenset[str] = field(default_factory=frozenset)
+    lora_root: str = "/loras"
+    storage_backend: str = "local_fs"
+    allowed_init_base_models: list[str] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
+@dataclass
 class LocalConfig(CLaaSConfig):
     """Configuration for local GPU execution."""
 
-    vllm_base_url: str = ""
-    vllm_api_key: str = ""
+    vllm_base_url: str = "http://127.0.0.1:8000"
     feedback_lock_timeout_s: float = 120.0
     feedback_wake_on_failure: bool = True
     feedback_min_free_vram_gb: float = 20.0
     feedback_sleep_verify_timeout_s: float = 30.0
     feedback_drain_timeout_s: float = 30.0
-    base_model_id: str = ""
-    attn_implementation: str = ""
+    base_model_id: str = "Qwen/Qwen3-8B"
+    attn_implementation: str = "flash_attention_2"
 
 
-@dataclass(frozen=True)
+@dataclass
 class ModalConfig(CLaaSConfig):
     """Configuration for Modal remote execution."""
 
-    vllm_base_url: str = ""
-    vllm_api_key: str = ""
+    mode: str = "modal"
+    storage_backend: str = "modal_volume"
+    vllm_base_url: str = "http://127.0.0.1:8000"
     feedback_lock_timeout_s: float = 120.0
     feedback_wake_on_failure: bool = True
     feedback_min_free_vram_gb: float = 20.0
@@ -99,105 +60,92 @@ class ModalConfig(CLaaSConfig):
     hf_secret_name: str = ""
 
 
-@dataclass(frozen=True)
+@dataclass
 class TinkerConfig(CLaaSConfig):
     """Configuration for Tinker SDK execution."""
 
-    tinker_api_key: str = ""
-    tinker_base_model: str = ""
-    tinker_state_path: str = ""
-    vllm_base_url: str = ""
-    vllm_api_key: str = ""
+    mode: str = "tinker"
+    storage_backend: str = "local_fs"
+    tinker_base_model: str = "gpt-oss/GPT-OSS-120B"
+    tinker_state_path: str = "~/.claas/tinker_state.json"
+    vllm_base_url: str = "http://127.0.0.1:8000"
 
 
-@dataclass(frozen=True)
+CoreConfig = LocalConfig | ModalConfig | TinkerConfig
+
+
+@dataclass
 class ProxyConfig:
     """Standalone configuration for the Tinker inference proxy."""
 
-    tinker_api_key: str = ""
-    tinker_base_model: str = ""
+    tinker_base_model: str = "gpt-oss/GPT-OSS-120B"
     completion_cache_size: int = 100
 
 
-# ---------------------------------------------------------------------------
-# Factory functions
-# ---------------------------------------------------------------------------
+def register_config_schemas() -> None:
+    """Register all core config schemas in Hydra's ConfigStore."""
+    global _SCHEMAS_REGISTERED
+    if _SCHEMAS_REGISTERED:
+        return
 
-def _build_base_fields() -> dict[str, object]:
-    return {
-        "feedback_log_dir": _env("FEEDBACK_LOG_DIR", "./data/feedback"),
-        "hf_token": _env("HF_TOKEN", ""),
-        "lora_root": _env("CLAAS_LORA_ROOT", "/loras"),
-        "storage_backend": _env("CLAAS_STORAGE_BACKEND", "modal_volume"),
-        "allowed_init_base_models": _env_set("CLAAS_ALLOWED_INIT_BASE_MODELS", "Qwen/Qwen3-8B"),
-    }
-
-
-def _build_vllm_feedback_fields() -> dict[str, object]:
-    return {
-        "vllm_base_url": _env("VLLM_BASE_URL", "http://127.0.0.1:8000"),
-        "vllm_api_key": _env("VLLM_API_KEY", "sk-local"),
-        "feedback_lock_timeout_s": _env_float("FEEDBACK_LOCK_TIMEOUT_S", 120.0),
-        "feedback_wake_on_failure": _env_bool("FEEDBACK_WAKE_ON_FAILURE", True),
-        "feedback_min_free_vram_gb": _env_float("FEEDBACK_MIN_FREE_VRAM_GB", 20.0),
-        "feedback_sleep_verify_timeout_s": _env_float("FEEDBACK_SLEEP_VERIFY_TIMEOUT_S", 30.0),
-        "feedback_drain_timeout_s": _env_float("FEEDBACK_DRAIN_TIMEOUT_S", 30.0),
-    }
+    cs = ConfigStore.instance()
+    cs.store(name="_core_local_schema", node=LocalConfig)
+    cs.store(name="_core_modal_schema", node=ModalConfig)
+    cs.store(name="_core_tinker_schema", node=TinkerConfig)
+    cs.store(name="_core_proxy_schema", node=ProxyConfig)
+    _SCHEMAS_REGISTERED = True
 
 
-@lru_cache(maxsize=1)
-def get_config() -> CLaaSConfig:
-    """Return the application config for the current execution mode.
+def load_core_config(
+    config_name: str,
+    overrides: list[str] | None = None,
+    config_dir: str | None = None,
+) -> CoreConfig:
+    """Compose and return a typed core runtime config for a specific profile."""
+    normalized = config_name.strip().lower()
+    if normalized not in {"local", "modal", "tinker"}:
+        raise ValueError(f"Unsupported core config profile: {config_name!r}")
 
-    The mode is determined by ``CLAAS_DISTILL_EXECUTION_MODE`` (default: ``"local"``).
-    The result is cached; call ``get_config.cache_clear()`` to re-read env vars
-    (useful in tests).
-    """
-    mode = _env("CLAAS_DISTILL_EXECUTION_MODE", "local").lower()
-    base = _build_base_fields()
+    register_config_schemas()
+    abs_dir = os.path.abspath(config_dir or _CONFIG_DIR)
+    with initialize_config_dir(version_base=None, config_dir=abs_dir):
+        cfg = compose(config_name=normalized, overrides=overrides or [])
 
-    if mode == "local":
-        return LocalConfig(
-            mode=mode,
-            **base,  # type: ignore[arg-type]
-            **_build_vllm_feedback_fields(),
-            base_model_id=_env("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3-8B"),
-            attn_implementation=_env("CLAAS_ATTN_IMPLEMENTATION", "sdpa"),
-        )
+    if normalized == "local":
+        typed_cfg = OmegaConf.merge(OmegaConf.structured(LocalConfig), cfg)
+        obj = OmegaConf.to_object(typed_cfg)
+        if not isinstance(obj, LocalConfig):
+            raise TypeError("Hydra compose for 'local' did not produce LocalConfig")
+        return obj
 
-    if mode == "modal":
-        return ModalConfig(
-            mode=mode,
-            **base,  # type: ignore[arg-type]
-            **_build_vllm_feedback_fields(),
-            hf_secret_name=_env("CLAAS_HF_SECRET_NAME", ""),
-        )
+    if normalized == "modal":
+        typed_cfg = OmegaConf.merge(OmegaConf.structured(ModalConfig), cfg)
+        obj = OmegaConf.to_object(typed_cfg)
+        if not isinstance(obj, ModalConfig):
+            raise TypeError("Hydra compose for 'modal' did not produce ModalConfig")
+        return obj
 
-    if mode == "tinker":
-        return TinkerConfig(
-            mode=mode,
-            **base,  # type: ignore[arg-type]
-            tinker_api_key=_env("CLAAS_TINKER_API_KEY", ""),
-            tinker_base_model=_env("CLAAS_TINKER_BASE_MODEL", "gpt-oss/GPT-OSS-120B"),
-            tinker_state_path=_env(
-                "CLAAS_TINKER_STATE_PATH",
-                os.path.join(os.path.expanduser("~"), ".claas", "tinker_state.json"),
-            ),
-            vllm_base_url=_env("VLLM_BASE_URL", "http://127.0.0.1:8000"),
-            vllm_api_key=_env("VLLM_API_KEY", "sk-local"),
-        )
-
-    raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {mode!r}")
+    typed_cfg = OmegaConf.merge(OmegaConf.structured(TinkerConfig), cfg)
+    obj = OmegaConf.to_object(typed_cfg)
+    if not isinstance(obj, TinkerConfig):
+        raise TypeError("Hydra compose for 'tinker' did not produce TinkerConfig")
+    obj.tinker_state_path = os.path.expanduser(obj.tinker_state_path)
+    return obj
 
 
-@lru_cache(maxsize=1)
-def get_proxy_config() -> ProxyConfig:
-    """Return the standalone proxy config.
+def load_proxy_config(
+    *,
+    overrides: list[str] | None = None,
+    config_dir: str | None = None,
+) -> ProxyConfig:
+    """Compose and return the standalone proxy config."""
+    register_config_schemas()
+    abs_dir = os.path.abspath(config_dir or _CONFIG_DIR)
+    with initialize_config_dir(version_base=None, config_dir=abs_dir):
+        cfg = compose(config_name="proxy", overrides=overrides or [])
 
-    Cached; call ``get_proxy_config.cache_clear()`` to re-read.
-    """
-    return ProxyConfig(
-        tinker_api_key=_env("CLAAS_TINKER_API_KEY", ""),
-        tinker_base_model=_env("CLAAS_TINKER_BASE_MODEL", "gpt-oss/GPT-OSS-120B"),
-        completion_cache_size=_env_int("CLAAS_COMPLETION_CACHE_SIZE", 100),
-    )
+    typed_cfg = OmegaConf.merge(OmegaConf.structured(ProxyConfig), cfg)
+    obj = OmegaConf.to_object(typed_cfg)
+    if not isinstance(obj, ProxyConfig):
+        raise TypeError("Hydra compose for 'proxy' did not produce ProxyConfig")
+    return obj
