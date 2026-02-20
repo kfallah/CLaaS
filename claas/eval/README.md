@@ -58,12 +58,16 @@ python -m claas.eval --config-dir ./my_configs --config-name my_config
 ### Programmatic usage
 
 ```python
-from claas.eval.config import load_config
+from claas.eval.config import build_harness_config
 from claas.eval.runner import run_harness
+from claas.eval.types import EvalConfig
 import asyncio
 
-config = load_config(
-    overrides=["preferences=[concise]", "num_steps=5"],
+config = build_harness_config(
+    EvalConfig(
+        preferences=["concise"],
+        num_steps=5,
+    )
 )
 asyncio.run(run_harness(config))
 ```

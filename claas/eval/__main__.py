@@ -4,7 +4,6 @@ Usage::
 
     python -m claas.eval                              # base config
     python -m claas.eval mode=tinker num_steps=5      # overrides
-    python -m claas.eval --config-dir ./my_configs    # custom config dir
 """
 
 from __future__ import annotations
@@ -14,10 +13,8 @@ import asyncio
 import hydra
 from omegaconf import OmegaConf
 
-from .config import build_harness_config, register_eval_schemas
+from .config import build_harness_config
 from .types import EvalConfig
-
-register_eval_schemas()
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="base")
