@@ -80,11 +80,16 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.init
-    command: ["--config-name", "local"]
+    command:
+      [
+        "--config-name",
+        "local",
+        "--base-model=${MODEL:-Qwen/Qwen3-8B}",
+        "--vllm-base-url=http://vllm:8000/v1",
+        "--lora-root=/loras",
+      ]
     environment:
       - LORA_NAME=${LORA_NAME:-openclaw/assistant}
-      - MODEL=${MODEL:-Qwen/Qwen3-8B}
-      - VLLM_BASE_URL=http://vllm:8000/v1
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - OPENCLAW_HOME=/openclaw-config
       - CLAAS_API_URL=http://claas-api:8080
@@ -165,11 +170,16 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.init
-    command: ["--config-name", "tinker"]
+    command:
+      [
+        "--config-name",
+        "tinker",
+        "--base-model=${MODEL:-gpt-oss/GPT-OSS-120B}",
+        "--vllm-base-url=http://tinker-proxy:8000/v1",
+        "--lora-root=/loras",
+      ]
     environment:
       - LORA_NAME=${LORA_NAME:-openclaw/assistant}
-      - MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
-      - VLLM_BASE_URL=http://tinker-proxy:8000/v1
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - OPENCLAW_HOME=/openclaw-config
       - CLAAS_API_URL=http://claas-api:8080

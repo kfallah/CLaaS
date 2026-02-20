@@ -35,7 +35,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import hydra
@@ -73,7 +73,13 @@ from .core.types import (
 )
 from .training.engine import get_training_engine
 from .training.engine.base import EngineKind, TrainingEngine
-from .training.storage import LORA_MOUNT_PATH, configure_storage_backend, lora_volume
+from .training.storage import (
+    LORA_MOUNT_PATH,
+    StorageBackend,
+    configure_storage_backend,
+    configure_storage_root,
+    lora_volume,
+)
 from .training.teacher_helpers import format_teacher_prompt
 
 logger = logging.getLogger(__name__)
@@ -96,7 +102,11 @@ EVAL_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "eval_dashboard.html
 def configure_web_app(cfg: CoreConfig) -> None:
     """Inject runtime config into the process-local FastAPI app."""
     web_app.state.runtime_config = cfg
-    configure_storage_backend(cfg.storage_backend)
+    configure_storage_root(cfg.lora_root)
+    backend = cfg.storage_backend
+    if backend not in {"local_fs", "modal_volume"}:
+        raise ValueError(f"Unsupported storage backend: {backend!r}")
+    configure_storage_backend(cast(StorageBackend, backend))
 
 
 def _runtime_config() -> CoreConfig:

@@ -27,10 +27,21 @@ import modal
 lora_volume = modal.Volume.from_name("claas-loras", create_if_missing=True)
 
 # Mount path inside containers (or local filesystem root in local mode)
-LORA_MOUNT_PATH = os.environ.get("CLAAS_LORA_ROOT", "/loras")
+LORA_MOUNT_PATH = "/loras"
 ALIASES_FILE_NAME = ".aliases.json"
 StorageBackend = Literal["local_fs", "modal_volume"]
 _ACTIVE_STORAGE_BACKEND: StorageBackend | None = None
+
+
+def configure_storage_root(lora_root: str) -> None:
+    """Set process-local LoRA storage root."""
+    global LORA_MOUNT_PATH
+    normalized = os.path.normpath(os.path.expanduser(lora_root.strip()))
+    if not normalized:
+        raise ValueError("lora_root must be non-empty")
+    if not os.path.isabs(normalized):
+        normalized = os.path.abspath(normalized)
+    LORA_MOUNT_PATH = normalized
 
 
 def configure_storage_backend(storage_backend: StorageBackend) -> None:

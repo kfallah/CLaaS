@@ -3,10 +3,7 @@ set -euo pipefail
 
 WAIT_FOR_BACKEND="${WAIT_FOR_BACKEND:-1}"
 if [[ "${WAIT_FOR_BACKEND}" == "1" ]]; then
-    BACKEND_BASE="${VLLM_BASE_URL:-http://vllm:8000}"
-    BACKEND_BASE="${BACKEND_BASE%/}"
-    BACKEND_BASE="${BACKEND_BASE%/v1}"
-    BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-${BACKEND_BASE}/health}"
+    BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-http://vllm:8000/health}"
 
     echo "Waiting for backend at ${BACKEND_HEALTH_URL} ..."
     until curl -sf --connect-timeout 5 --max-time 10 "${BACKEND_HEALTH_URL}" > /dev/null 2>&1; do

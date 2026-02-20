@@ -9,24 +9,30 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
 from pathlib import Path
 
-LORA_NAME = os.environ.get("LORA_NAME", "openclaw/assistant")
-BASE_MODEL = os.environ.get("MODEL", "Qwen/Qwen3-8B")
-LORA_ROOT = os.environ.get(
-    "CLAAS_LORA_ROOT",
-    str(Path(__file__).resolve().parents[2] / ".local_loras"),
-)
+DEFAULT_LORA_ROOT = str(Path(__file__).resolve().parents[2] / ".local_loras")
 
-os.environ["CLAAS_LORA_ROOT"] = LORA_ROOT
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Initialize local CLaaS LoRA storage")
+    parser.add_argument("--lora-name", default=os.environ.get("LORA_NAME", "openclaw/assistant"))
+    parser.add_argument("--base-model", default=os.environ.get("MODEL", "Qwen/Qwen3-8B"))
+    parser.add_argument("--lora-root", default=DEFAULT_LORA_ROOT)
+    return parser.parse_args()
 
 
 def main() -> None:
-    alias_key = f"{LORA_NAME}-latest"
-    aliases_path = Path(LORA_ROOT) / ".aliases.json"
+    args = _parse_args()
+    lora_name = args.lora_name
+    base_model = args.base_model
+    lora_root = str(Path(args.lora_root).expanduser())
+    alias_key = f"{lora_name}-latest"
+    aliases_path = Path(lora_root) / ".aliases.json"
 
     # Check if already initialized
     if aliases_path.exists():
@@ -37,21 +43,26 @@ def main() -> None:
 
         if alias_key in aliases:
             target = aliases[alias_key]
-            adapter_dir = Path(LORA_ROOT) / target
+            adapter_dir = Path(lora_root) / target
             if (adapter_dir / "adapter_config.json").exists() and (
                 adapter_dir / "adapter_model.safetensors"
             ).exists():
                 print(f"LoRA '{alias_key}' already exists -> {target}, skipping.")
                 return
 
-    from claas.training.storage import configure_storage_backend, create_initial_lora
+    from claas.training.storage import (
+        configure_storage_backend,
+        configure_storage_root,
+        create_initial_lora,
+    )
 
+    configure_storage_root(lora_root)
     configure_storage_backend("local_fs")
 
     lora_r = int(os.environ.get("LORA_R", "32"))
     lora_alpha = int(os.environ.get("LORA_ALPHA", "64"))
     full_id = create_initial_lora(
-        LORA_NAME, base_model_name=BASE_MODEL, lora_r=lora_r, lora_alpha=lora_alpha,
+        lora_name, base_model_name=base_model, lora_r=lora_r, lora_alpha=lora_alpha,
     )
     print(f"Created initial LoRA: {full_id}")
 

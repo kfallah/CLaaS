@@ -6,10 +6,10 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from claas.core.config import LocalConfig, ModalConfig, TinkerConfig  # noqa: E402
 from claas.training.engine import get_training_engine  # noqa: E402
 from claas.training.engine.local.engine import LocalTrainingEngine  # noqa: E402
 from claas.training.engine.modal.engine import ModalTrainingEngine  # noqa: E402
-from claas.core.config import LocalConfig, ModalConfig, TinkerConfig  # noqa: E402
 
 
 def test_get_local_engine():
