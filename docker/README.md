@@ -1,6 +1,6 @@
 # CLaaS Docker Compose Stack
 
-One-command setup for the full CLaaS + vLLM + OpenClaw stack with Telegram integration. Two **profiles** are available in `docker-compose.local.yml`:
+One-command setup for the full CLaaS + vLLM + OpenClaw stack with Telegram integration. Two **profiles** are available in a single `docker-compose.yml`:
 
 | Profile | GPU required | Inference backend |
 |---------|-------------|-------------------|
@@ -11,7 +11,7 @@ One-command setup for the full CLaaS + vLLM + OpenClaw stack with Telegram integ
 
 - [Docker](https://docs.docker.com/get-docker/)
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
-- For `docker-compose.local.yml` only: NVIDIA GPU with >= 24 GB VRAM and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+- For local `docker-compose.yml` only: NVIDIA GPU with >= 24 GB VRAM and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
 
 ## Quick Start
 
@@ -21,7 +21,7 @@ One-command setup for the full CLaaS + vLLM + OpenClaw stack with Telegram integ
 cd docker
 cp .env.local.example .env
 # Edit .env and set TELEGRAM_BOT_TOKEN
-docker compose -f docker-compose.local.yml --profile local up --build
+docker compose --profile local up --build
 ```
 
 The first run downloads Qwen3-8B (~16 GB) — expect the vLLM health check to take 10-20 minutes. Subsequent runs use the cached model.
@@ -169,7 +169,7 @@ Only secrets should be passed via environment variables:
 
 ## Troubleshooting
 
-**vLLM takes forever to start**: The first run downloads Qwen3-8B. Check progress with `docker compose -f docker-compose.local.yml --profile local logs -f vllm`.
+**vLLM takes forever to start**: The first run downloads Qwen3-8B. Check progress with `docker compose --profile local logs -f vllm`.
 
 **Out of GPU memory**: Lower `GPU_MEMORY_UTILIZATION` in `.env` (e.g., `0.85`). The sleep/wake mechanism ensures vLLM and CLaaS don't use GPU simultaneously.
 

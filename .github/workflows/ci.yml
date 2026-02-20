@@ -72,4 +72,4 @@ jobs:
 
       - name: Dump docker logs on failure
         if: failure()
-        run: docker compose -f docker/docker-compose.local.yml --profile tinker logs --tail=200
+        run: docker compose -f docker/docker-compose.yml --profile tinker logs --tail=200
