@@ -26,7 +26,7 @@ def main(cfg: EvalConfig) -> None:
     from .config import build_harness_config
     from .runner import run_harness
 
-    eval_cfg = EvalConfig(**OmegaConf.to_container(cfg, resolve=True))
+    eval_cfg = EvalConfig(**OmegaConf.to_container(cfg, resolve=True))  # type: ignore[invalid-argument-type]
     config = build_harness_config(eval_cfg)
     asyncio.run(run_harness(config))
 
