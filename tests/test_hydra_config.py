@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from claas.core.config import (
@@ -11,7 +9,6 @@ from claas.core.config import (
     ModalConfig,
     ProxyConfig,
     TinkerConfig,
-    get_config,
     get_proxy_config,
     load_core_config,
     load_proxy_config,
@@ -71,45 +68,43 @@ class TestSelfContainedConfigs:
 
 class TestGetConfig:
     def test_get_local_config_name(self):
-        cfg = get_config("local")
+        cfg = load_core_config("local")
         assert isinstance(cfg, LocalConfig)
         assert cfg.mode == "local"
         assert cfg.storage_backend == "local_fs"
 
     def test_get_tinker_config_name(self):
-        cfg = get_config("tinker")
+        cfg = load_core_config("tinker")
         assert isinstance(cfg, TinkerConfig)
         assert cfg.mode == "tinker"
         assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-120B"
 
     def test_get_modal_config_name(self):
-        cfg = get_config("modal")
+        cfg = load_core_config("modal")
         assert isinstance(cfg, ModalConfig)
         assert cfg.mode == "modal"
 
 
 class TestYamlValues:
     def test_local_yaml_provides_vllm_base_url(self):
-        cfg = get_config("local")
+        cfg = load_core_config("local")
         assert isinstance(cfg, LocalConfig)
         assert cfg.vllm_base_url == "http://127.0.0.1:8000"
 
     def test_local_yaml_provides_base_model_id(self):
-        cfg = get_config("local")
+        cfg = load_core_config("local")
         assert isinstance(cfg, LocalConfig)
         assert cfg.base_model_id == "Qwen/Qwen3-8B"
 
     def test_local_yaml_provides_attn_implementation(self):
-        cfg = get_config("local")
+        cfg = load_core_config("local")
         assert isinstance(cfg, LocalConfig)
         assert cfg.attn_implementation == "flash_attention_2"
 
-    def test_tinker_yaml_expands_tilde_in_state_path(self):
-        cfg = get_config("tinker")
+    def test_tinker_yaml_provides_state_path(self):
+        cfg = load_core_config("tinker")
         assert isinstance(cfg, TinkerConfig)
-        expected = os.path.join(os.path.expanduser("~"), ".claas", "tinker_state.json")
-        assert cfg.tinker_state_path == expected
-        assert "~" not in cfg.tinker_state_path
+        assert cfg.tinker_state_path == "/data/tinker_state.json"
 
 
 class TestProxyYamlConfig:
@@ -123,5 +118,4 @@ class TestProxyYamlConfig:
 class TestInvalidConfigName:
     def test_unknown_config_name_raises(self):
         with pytest.raises(ValueError, match="bogus"):
-            get_config("bogus")
-
+            load_core_config("bogus")

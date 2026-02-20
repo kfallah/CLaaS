@@ -8,7 +8,6 @@ services:
       dockerfile: docker/Dockerfile.tinker-proxy
     environment:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
-      - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
     ports:
       - "${TINKER_PROXY_PORT:-8000}:8000"
     healthcheck:
@@ -31,12 +30,15 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.tinker-claas-api
-    command: ["tinker"]
+    command:
+      [
+        "tinker",
+        "tinker_base_model=${MODEL:-gpt-oss/GPT-OSS-120B}",
+        "tinker_state_path=/data/tinker_state.json",
+        "vllm_base_url=http://tinker-proxy:8000",
+      ]
     environment:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
-      - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
-      - CLAAS_TINKER_STATE_PATH=/data/tinker_state.json
-      - VLLM_BASE_URL=http://tinker-proxy:8000
       - WAIT_FOR_BACKEND=0
     volumes:
       - claas-feedback-logs:/app/data/feedback

@@ -93,12 +93,6 @@ FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "index.html"
 EVAL_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "eval_dashboard.html"
 
 
-def _as_runtime_config(value: object) -> CoreConfig:
-    if isinstance(value, (LocalConfig, ModalConfig, TinkerConfig)):
-        return value
-    raise TypeError("Hydra did not produce a supported CLaaS runtime config")
-
-
 def configure_web_app(cfg: CoreConfig) -> None:
     """Inject runtime config into the process-local FastAPI app."""
     web_app.state.runtime_config = cfg
@@ -107,7 +101,9 @@ def configure_web_app(cfg: CoreConfig) -> None:
 
 def _runtime_config() -> CoreConfig:
     cfg = getattr(web_app.state, "runtime_config", None)
-    return _as_runtime_config(cfg)
+    if isinstance(cfg, (LocalConfig, ModalConfig, TinkerConfig)):
+        return cfg
+    raise TypeError("Hydra did not produce a supported CLaaS runtime config")
 
 
 def _get_engine_kind() -> EngineKind:
@@ -965,8 +961,10 @@ def fastapi_app():
 @hydra.main(version_base=None, config_path="core/configs", config_name="local")
 def main(cfg: LocalConfig | ModalConfig | TinkerConfig) -> None:
     """Hydra entry point for running the API locally with explicit config profile."""
-    runtime_cfg = _as_runtime_config(OmegaConf.to_object(cfg))
-    configure_web_app(runtime_cfg)
+    cfg_obj = OmegaConf.to_object(cfg)
+    if not isinstance(cfg_obj, (LocalConfig, ModalConfig, TinkerConfig)):
+        raise TypeError("Hydra did not produce a supported CLaaS runtime config")
+    configure_web_app(cfg_obj)
     host = os.environ.get("CLAAS_API_HOST", "0.0.0.0")
     port = int(os.environ.get("CLAAS_API_PORT", "8080"))
     uvicorn.run(web_app, host=host, port=port)

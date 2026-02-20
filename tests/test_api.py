@@ -22,7 +22,7 @@ from claas.core.types import (
 
 
 def _mock_config(monkeypatch, mode: str, **overrides):
-    """Patch get_config() to return a config for the given mode."""
+    """Patch API runtime-config accessor to return a config for the given mode."""
     from claas import api
 
     log_dir = str(overrides.get("feedback_log_dir", "./feedback_logs"))
@@ -702,7 +702,7 @@ def test_health_check_healthy(monkeypatch):
         async def health(self):
             return ServiceHealth(status="healthy", error=None)
 
-    monkeypatch.setattr(api, "get_training_engine", lambda _kind: _HealthyEngine())
+    monkeypatch.setattr(api, "get_training_engine", lambda _kind, _cfg: _HealthyEngine())
 
     client = TestClient(web_app)
     resp = client.get("/v1/health")
@@ -723,7 +723,7 @@ def test_health_check_degraded(monkeypatch):
         async def health(self):
             raise ConnectionError("service down")
 
-    monkeypatch.setattr(api, "get_training_engine", lambda _kind: _UnhealthyEngine())
+    monkeypatch.setattr(api, "get_training_engine", lambda _kind, _cfg: _UnhealthyEngine())
 
     client = TestClient(web_app)
     resp = client.get("/v1/health")

@@ -50,9 +50,12 @@ def _base_model() -> str:
     return get_proxy_config().tinker_base_model
 
 
-def _tinker_api_key() -> str:
+def _tinker_api_key() -> str | None:
     raw = os.environ.get("CLAAS_TINKER_API_KEY")
-    return raw.strip() if raw is not None else ""
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value if value else None
 
 
 # ---------------------------------------------------------------------------

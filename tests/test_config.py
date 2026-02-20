@@ -9,39 +9,39 @@ from claas.core.config import (
     ModalConfig,
     ProxyConfig,
     TinkerConfig,
-    get_config,
     get_proxy_config,
+    load_core_config,
 )
 
 
-class TestGetConfig:
+class TestLoadCoreConfig:
     def test_local_mode(self):
-        cfg = get_config("local")
+        cfg = load_core_config("local")
         assert isinstance(cfg, LocalConfig)
         assert cfg.mode == "local"
 
     def test_modal_mode(self):
-        cfg = get_config("modal")
+        cfg = load_core_config("modal")
         assert isinstance(cfg, ModalConfig)
         assert cfg.mode == "modal"
 
     def test_tinker_mode(self):
-        cfg = get_config("tinker")
+        cfg = load_core_config("tinker")
         assert isinstance(cfg, TinkerConfig)
         assert cfg.mode == "tinker"
 
     def test_unknown_mode_raises(self):
         with pytest.raises(ValueError, match="bogus"):
-            get_config("bogus")
+            load_core_config("bogus")
 
     def test_config_name_case_insensitive(self):
-        cfg = get_config("LOCAL")
+        cfg = load_core_config("LOCAL")
         assert isinstance(cfg, LocalConfig)
 
 
 class TestMutability:
     def test_base_config_mutable(self):
-        cfg = get_config("local")
+        cfg = load_core_config("local")
         cfg.mode = "modal"
         assert cfg.mode == "modal"
 
@@ -59,15 +59,8 @@ class TestProxyConfig:
         assert cfg.completion_cache_size == 100
 
 
-class TestCacheClearing:
-    def test_get_config_returns_same_instance(self):
-        a = get_config("local")
-        b = get_config("local")
-        assert a is b
-
-    def test_cache_clear_returns_new_instance(self):
-        a = get_config("local")
-        get_config.cache_clear()
-        b = get_config("local")
+class TestLoadSemantics:
+    def test_load_core_config_returns_new_instances(self):
+        a = load_core_config("local")
+        b = load_core_config("local")
         assert a is not b
-

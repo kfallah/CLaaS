@@ -127,12 +127,6 @@ def _compose_structured(
     return obj
 
 
-def _normalize_runtime_fields(cfg: CoreConfig) -> CoreConfig:
-    if isinstance(cfg, TinkerConfig):
-        cfg.tinker_state_path = os.path.expanduser(cfg.tinker_state_path)
-    return cfg
-
-
 def load_core_config(
     config_name: str,
     overrides: list[str] | None = None,
@@ -141,40 +135,30 @@ def load_core_config(
     """Compose and return a typed core runtime config for a specific profile."""
     normalized = config_name.strip().lower()
     if normalized == "local":
-        return _normalize_runtime_fields(
-            _compose_structured(
-                config_name="local",
-                schema_type=LocalConfig,
-                overrides=overrides,
-                config_dir=config_dir,
-            ),
+        return _compose_structured(
+            config_name="local",
+            schema_type=LocalConfig,
+            overrides=overrides,
+            config_dir=config_dir,
         )
     if normalized == "modal":
-        return _normalize_runtime_fields(
-            _compose_structured(
-                config_name="modal",
-                schema_type=ModalConfig,
-                overrides=overrides,
-                config_dir=config_dir,
-            ),
+        return _compose_structured(
+            config_name="modal",
+            schema_type=ModalConfig,
+            overrides=overrides,
+            config_dir=config_dir,
         )
     if normalized == "tinker":
-        return _normalize_runtime_fields(
-            _compose_structured(
-                config_name="tinker",
-                schema_type=TinkerConfig,
-                overrides=overrides,
-                config_dir=config_dir,
-            ),
+        cfg = _compose_structured(
+            config_name="tinker",
+            schema_type=TinkerConfig,
+            overrides=overrides,
+            config_dir=config_dir,
         )
+        cfg.tinker_state_path = os.path.expanduser(cfg.tinker_state_path)
+        return cfg
 
     raise ValueError(f"Unsupported core config profile: {config_name!r}")
-
-
-@lru_cache(maxsize=3)
-def get_config(config_name: str) -> CoreConfig:
-    """Cached explicit-profile core config accessor."""
-    return load_core_config(config_name=config_name)
 
 
 def load_proxy_config(

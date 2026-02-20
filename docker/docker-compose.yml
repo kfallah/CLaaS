@@ -49,10 +49,13 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.claas-api
-    command: ["local"]
+    command:
+      [
+        "local",
+        "base_model_id=${MODEL:-Qwen/Qwen3-8B}",
+        "vllm_base_url=http://vllm:8000",
+      ]
     environment:
-      - CLAAS_BASE_MODEL_ID=${MODEL:-Qwen/Qwen3-8B}
-      - VLLM_BASE_URL=http://vllm:8000
       - VLLM_API_KEY=sk-local
       - HF_TOKEN=${HF_TOKEN:-}
     volumes:
@@ -117,7 +120,6 @@ services:
       dockerfile: docker/Dockerfile.tinker-proxy
     environment:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:-}
-      - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
     ports:
       - "${TINKER_PROXY_PORT:-8000}:8000"
     healthcheck:
@@ -132,16 +134,19 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.tinker-claas-api
-    command: ["tinker"]
+    command:
+      [
+        "tinker",
+        "tinker_base_model=${MODEL:-gpt-oss/GPT-OSS-120B}",
+        "tinker_state_path=/data/tinker_state.json",
+        "vllm_base_url=http://tinker-proxy:8000",
+      ]
     networks:
       default:
         aliases:
           - claas-api
     environment:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:-}
-      - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
-      - CLAAS_TINKER_STATE_PATH=/data/tinker_state.json
-      - VLLM_BASE_URL=http://tinker-proxy:8000
       - WAIT_FOR_BACKEND=0
     volumes:
       - claas-feedback-logs:/app/data/feedback
