@@ -8,7 +8,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.10.2 /uv /uvx /usr/local/bin/
 
 WORKDIR /app
 
@@ -43,11 +43,13 @@ FROM base AS api
 RUN groupadd --gid 10001 claas && \
     useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin claas && \
     chown -R claas:claas /app && \
-    install -d -o claas -g claas /data /feedback-logs
+    install -d -o claas -g claas /data /app/data/feedback
 
 USER claas
 
 EXPOSE 8080
+
+RUN chmod +x /app/docker/scripts/claas-api-entrypoint.sh
 
 ENTRYPOINT ["/app/docker/scripts/claas-api-entrypoint.sh"]
 
