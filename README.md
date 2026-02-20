@@ -136,7 +136,7 @@ The CLaaS API serves a built-in dashboard at `/v1/dashboard` showing recent feed
   <img src="assets/dashboard.png" alt="CLaaS Dashboard" width="600">
 </p>
 
-The eval dashboard at `/v1/eval-dashboard` tracks per-prompt scores across training checkpoints so you can monitor whether feedback is actually improving the model.
+The eval dashboard at `/v1/eval-dashboard` displays results from running the eval harness against your model.
 
 <p align="center">
   <img src="assets/eval.png" alt="Eval Dashboard" width="600">
