@@ -45,6 +45,14 @@ def build_harness_config(eval_cfg: EvalConfig) -> HarnessConfig:
     """Post-process EvalConfig → HarnessConfig (no secrets)."""
     fields = dataclasses.asdict(eval_cfg)
 
+    # Normalize preferences: bare string → single-element list
+    if "preferences" in fields:
+        val = fields["preferences"]
+        if isinstance(val, str):
+            fields["preferences"] = [val]
+        elif isinstance(val, list):
+            fields["preferences"] = [str(p) for p in val]
+
     # Tinker defaults: proxy_url fallback to vllm_url
     if fields["mode"] == "tinker" and not fields.get("proxy_url"):
         fields["proxy_url"] = fields["vllm_url"]
