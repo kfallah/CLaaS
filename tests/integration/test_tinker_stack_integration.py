@@ -286,42 +286,45 @@ class TestTinkerStackRoundTrip:
 
 
 class TestOpenClawEndToEnd:
-    """Chat via OpenClaw HTTP API -> /feedback command -> real plugin -> distillation.
+    """Chat via OpenClaw HTTP gateway -> fetch cached completion -> distill.
 
-    Instead of reimplementing the feedback plugin logic in Python (hash
-    computation, cache lookup, payload construction), this test sends the
-    ``/feedback`` command through OpenClaw's HTTP API, which triggers the
-    **real** ``claas-feedback`` plugin — the same code path used in
-    production via Telegram.
+    Proves the full pipeline works end-to-end through OpenClaw: the chat
+    request goes through OpenClaw's agent pipeline to the tinker-proxy,
+    the proxy caches the raw completion, and we submit feedback directly
+    to the CLaaS API for distillation.
 
-    Requires ``FEEDBACK_BATCH_SIZE=1`` so a single ``/feedback`` triggers
-    immediate distillation without needing to fill a batch.
+    Uses the pre-configured ``openclaw/assistant-latest`` LoRA so no
+    init/cleanup is needed.
     """
 
     def test_chat_and_feedback_via_openclaw(self, tinker_stack: TinkerStack) -> None:
+        proxy_url = tinker_stack.proxy_url
+        claas_url = tinker_stack.claas_url
         openclaw_headers = {
             "Authorization": f"Bearer {tinker_stack.openclaw_token}",
             "x-openclaw-agent-id": "main",
         }
+        lora_id = "openclaw/assistant-latest"
+        user_prompt = "What is 2 + 2? Answer in one word."
+        feedback_text = "Correct and concise."
 
         with httpx.Client(timeout=600.0) as client:
             # 1. Record pre-test sampler status
             status_resp = client.get(
-                f"{tinker_stack.proxy_url}/v1/sampler/status",
-                timeout=15.0,
+                f"{proxy_url}/v1/sampler/status", timeout=15.0,
             )
             assert status_resp.status_code == 200
             initial_model_path = status_resp.json().get("model_path")
             logger.info("Initial sampler model_path: %s", initial_model_path)
 
-            # 2. Chat through OpenClaw — fires plugin's message_received + agent_end hooks
+            # 2. Chat through OpenClaw gateway
             chat_payload = {
                 "model": "openclaw",
-                "messages": [{"role": "user", "content": "What is 2 + 2? Answer in one word."}],
+                "messages": [{"role": "user", "content": user_prompt}],
                 "max_tokens": 64,
             }
             logger.info(
-                "POST %s/v1/chat/completions (chat):\n%s",
+                "POST %s/v1/chat/completions:\n%s",
                 tinker_stack.openclaw_url,
                 json.dumps(chat_payload, indent=2),
             )
@@ -336,49 +339,71 @@ class TestOpenClawEndToEnd:
             assert len(choices) > 0
             response_content = choices[0]["message"]["content"]
             assert len(response_content) > 0
-            logger.info("OpenClaw chat response: %s", response_content[:500])
+            logger.info("OpenClaw response: %s", response_content[:500])
 
-            # 3. Send /feedback command through OpenClaw — triggers real plugin
+            # 3. Fetch raw completion + logprobs from proxy cache
+            raw_response, rollout_logprobs = _fetch_raw_completion(
+                client, proxy_url, response_content,
+            )
+            logger.info(
+                "Fetched %d rollout logprobs from proxy cache",
+                len(rollout_logprobs),
+            )
+
+            # 4. Distill via CLaaS feedback endpoint
+            teacher_messages = build_teacher_messages(user_prompt, feedback_text)
+            logger.info(
+                "Teacher messages:\n%s",
+                json.dumps(teacher_messages, indent=2),
+            )
             feedback_payload = {
-                "model": "openclaw",
-                "messages": [
-                    {"role": "user", "content": "/feedback Correct and concise."},
+                "requests": [
+                    {
+                        "lora_id": lora_id,
+                        "prompt": user_prompt,
+                        "response": raw_response,
+                        "feedback": feedback_text,
+                        "rollout_logprobs": rollout_logprobs,
+                        "training": {"teacher_mode": "self"},
+                    },
                 ],
-                "max_tokens": 256,
+                "orchestration": {
+                    "sleep_before": False,
+                    "wake_after": False,
+                },
             }
             logger.info(
-                "POST %s/v1/chat/completions (/feedback):\n%s",
-                tinker_stack.openclaw_url,
-                json.dumps(feedback_payload, indent=2),
+                "POST /v1/feedback:\n%s", json.dumps(feedback_payload, indent=2),
             )
             feedback_resp = client.post(
-                f"{tinker_stack.openclaw_url}/v1/chat/completions",
+                f"{claas_url}/v1/feedback",
                 json=feedback_payload,
-                headers=openclaw_headers,
-                timeout=600.0,
+                timeout=300.0,
             )
             assert feedback_resp.status_code == 200, feedback_resp.text
-            fb_choices = feedback_resp.json()["choices"]
-            assert len(fb_choices) > 0
-            fb_content = fb_choices[0]["message"]["content"]
-            logger.info("OpenClaw /feedback response: %s", fb_content[:500])
+            fb_data = feedback_resp.json()
+            logger.info("Feedback response:\n%s", json.dumps(fb_data, indent=2))
+            assert fb_data["status"] == "ok"
+            assert fb_data["distill_result"] is not None
+            step = fb_data["distill_result"]["metadata"].get("step")
+            assert step is not None and step >= 1
 
-            # 4. Verify plugin reported success
-            assert "Feedback applied" in fb_content, (
-                f"Expected 'Feedback applied' in plugin response, got: {fb_content[:300]}"
+            # 5. Verify sampler refreshed with new weights
+            assert fb_data["vllm"]["woke"] is True, (
+                "Expected tinker-proxy refresh after distillation"
             )
-
-            # 5. Verify sampler refreshed — model_path should have changed
-            post_status = client.get(
-                f"{tinker_stack.proxy_url}/v1/sampler/status",
-                timeout=15.0,
+            expected_path = fb_data["distill_result"]["metadata"][
+                "sampler_weights_path"
+            ]
+            status_resp = client.get(
+                f"{proxy_url}/v1/sampler/status", timeout=15.0,
             )
-            assert post_status.status_code == 200
-            new_model_path = post_status.json().get("model_path")
-            logger.info("Post-distillation sampler model_path: %s", new_model_path)
-            assert new_model_path is not None, "Sampler model_path is null after distillation"
-            assert new_model_path != initial_model_path, (
-                f"Sampler model_path unchanged after distillation: {new_model_path!r}"
+            assert status_resp.status_code == 200
+            actual_path = status_resp.json()["model_path"]
+            logger.info("Post-distillation sampler model_path: %s", actual_path)
+            assert actual_path == expected_path, (
+                f"Proxy should be serving distilled LoRA {expected_path!r}, "
+                f"got {actual_path!r}"
             )
 
             # 6. Post-distillation health: OpenClaw still works
