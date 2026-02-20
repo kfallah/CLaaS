@@ -10,8 +10,8 @@ services:
       - HOST=0.0.0.0
       - API_KEY=sk-local
       - SERVED_MODEL_NAMES=qwen3-8b
-      - MAX_MODEL_LEN=${MAX_MODEL_LEN:?set MAX_MODEL_LEN in .env}
-      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:?set GPU_MEMORY_UTILIZATION in .env}
+      - MAX_MODEL_LEN=${MAX_MODEL_LEN}
+      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION}
       - ENABLE_SLEEP_MODE=1
       - VLLM_SERVER_DEV_MODE=1
       - VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
@@ -125,7 +125,7 @@ services:
       dockerfile: docker/Dockerfile.tinker
       target: proxy
     environment:
-      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY in docker/.env.tinker}
+      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY}
       - HF_TOKEN=${HF_TOKEN:-}
     ports:
       - "${TINKER_PROXY_PORT:-8000}:8000"
@@ -154,7 +154,7 @@ services:
         aliases:
           - claas-api
     environment:
-      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY in docker/.env.tinker}
+      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY}
       - WAIT_FOR_BACKEND=0
     volumes:
       - claas-feedback-logs:/app/data/feedback
@@ -186,7 +186,7 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in env file}
       - OPENCLAW_HOME=/openclaw-config
       - CLAAS_API_URL=http://claas-api:8080
-      - FEEDBACK_BATCH_SIZE=${FEEDBACK_BATCH_SIZE:?set FEEDBACK_BATCH_SIZE in env file}
+      - FEEDBACK_BATCH_SIZE=${FEEDBACK_BATCH_SIZE}
     volumes:
       - openclaw-config:/openclaw-config
       - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro
