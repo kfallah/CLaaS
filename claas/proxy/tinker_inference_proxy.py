@@ -23,7 +23,7 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import tinker
 from fastapi import FastAPI, HTTPException
@@ -84,7 +84,9 @@ class _TokenizerChatRenderer:
         self._tokenizer = tokenizer
 
     def build_generation_prompt(self, messages: list[Message]) -> T.ModelInput:
-        dicts = [{"role": m["role"], "content": m.get("content", "")} for m in messages]
+        dicts = cast(list[ChatMessage], [
+            {"role": m["role"], "content": m.get("content", "")} for m in messages
+        ])
         token_ids = _apply_chat_template_ids(self._tokenizer, dicts)
         return T.ModelInput.from_ints(token_ids)
 
@@ -524,17 +526,17 @@ async def score_completion(req: ScoreRequest) -> ScoreResponse:
 
     if req.messages is not None:
         # Chat template path
-        msg_dicts: list[ChatMessage] = [
-            {"role": m.role, "content": _coerce_content(m.content)}  # type: ignore[typeddict-item]
+        msg_dicts = cast(list[ChatMessage], [
+            {"role": m.role, "content": _coerce_content(m.content)}
             for m in req.messages
-        ]
+        ])
 
         prompt_ids = _apply_chat_template_ids(
             tokenizer, msg_dicts, add_generation_prompt=True,
         )
-        full_msg_dicts: list[ChatMessage] = msg_dicts + [
+        full_msg_dicts = cast(list[ChatMessage], msg_dicts + [
             {"role": "assistant", "content": req.completion},
-        ]
+        ])
         full_tokens = _apply_chat_template_ids(
             tokenizer, full_msg_dicts, add_generation_prompt=False,
         )
