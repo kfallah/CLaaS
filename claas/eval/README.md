@@ -100,8 +100,6 @@ CLAAS_TINKER_API_KEY="tml-..." \
 
 ### 3. Start the CLaaS API
 
-Note: the FastAPI instance is `web_app`, not `app` (which is the Modal object).
-
 ```bash
 CLAAS_TINKER_API_KEY="tml-..." \
   uv run python -m claas.api --config-name tinker

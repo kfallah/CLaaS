@@ -1,4 +1,4 @@
-"""Tests for the centralized Hydra config module."""
+"""Tests for Hydra-backed core config loading."""
 
 from __future__ import annotations
 
@@ -14,53 +14,62 @@ from claas.core.config import (
 )
 
 
-class TestLoadCoreConfig:
-    def test_local_mode(self):
-        cfg = load_core_config("local")
-        assert isinstance(cfg, LocalConfig)
-        assert cfg.mode == "local"
-
-    def test_modal_mode(self):
-        cfg = load_core_config("modal")
-        assert isinstance(cfg, ModalConfig)
-        assert cfg.mode == "modal"
-
-    def test_tinker_mode(self):
-        cfg = load_core_config("tinker")
-        assert isinstance(cfg, TinkerConfig)
-        assert cfg.mode == "tinker"
-
-    def test_unknown_mode_raises(self):
-        with pytest.raises(ValueError, match="bogus"):
-            load_core_config("bogus")
-
-    def test_config_name_case_insensitive(self):
-        cfg = load_core_config("LOCAL")
-        assert isinstance(cfg, LocalConfig)
+def test_load_local_config() -> None:
+    cfg = load_core_config("local")
+    assert isinstance(cfg, LocalConfig)
+    assert cfg.mode == "local"
+    assert cfg.storage_backend == "local_fs"
+    assert cfg.vllm_base_url == "http://127.0.0.1:8000"
+    assert cfg.base_model_id == "Qwen/Qwen3-8B"
 
 
-class TestMutability:
-    def test_base_config_mutable(self):
-        cfg = load_core_config("local")
-        cfg.mode = "modal"
-        assert cfg.mode == "modal"
-
-    def test_proxy_config_mutable(self):
-        cfg = load_proxy_config()
-        cfg.tinker_base_model = "gpt-oss/GPT-OSS-20B"
-        assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-20B"
+def test_load_modal_config() -> None:
+    cfg = load_core_config("modal")
+    assert isinstance(cfg, ModalConfig)
+    assert cfg.mode == "modal"
+    assert cfg.storage_backend == "modal_volume"
+    assert cfg.feedback_lock_timeout_s == 120.0
 
 
-class TestProxyConfig:
-    def test_defaults(self):
-        cfg = load_proxy_config()
-        assert isinstance(cfg, ProxyConfig)
-        assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-120B"
-        assert cfg.completion_cache_size == 100
+def test_load_tinker_config() -> None:
+    cfg = load_core_config("tinker")
+    assert isinstance(cfg, TinkerConfig)
+    assert cfg.mode == "tinker"
+    assert cfg.storage_backend == "local_fs"
+    assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-120B"
+    assert cfg.tinker_state_path == "/data/tinker_state.json"
 
 
-class TestLoadSemantics:
-    def test_load_core_config_returns_new_instances(self):
-        a = load_core_config("local")
-        b = load_core_config("local")
-        assert a is not b
+def test_core_config_includes_shared_defaults() -> None:
+    cfg = load_core_config("local")
+    assert cfg.feedback_log_dir == "./data/feedback"
+    assert cfg.lora_root == "/loras"
+    assert "Qwen/Qwen3-8B" in cfg.allowed_init_base_models
+
+
+def test_core_config_name_is_case_insensitive() -> None:
+    cfg = load_core_config("LOCAL")
+    assert isinstance(cfg, LocalConfig)
+
+
+def test_unknown_core_config_raises() -> None:
+    with pytest.raises(ValueError, match="bogus"):
+        load_core_config("bogus")
+
+
+def test_load_core_config_returns_new_instances() -> None:
+    first = load_core_config("local")
+    second = load_core_config("local")
+    assert first is not second
+
+
+def test_load_proxy_config_defaults() -> None:
+    cfg = load_proxy_config()
+    assert isinstance(cfg, ProxyConfig)
+    assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-120B"
+    assert cfg.completion_cache_size == 100
+
+
+def test_load_proxy_config_overrides() -> None:
+    cfg = load_proxy_config(overrides=["completion_cache_size=50"])
+    assert cfg.completion_cache_size == 50

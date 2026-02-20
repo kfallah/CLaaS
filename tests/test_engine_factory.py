@@ -29,6 +29,6 @@ def test_get_tinker_engine():
     assert isinstance(engine, TinkerTrainingEngine)
 
 
-def test_unsupported_engine_raises():
-    with pytest.raises(ValueError, match="Unsupported training engine"):
-        get_training_engine("nonexistent", LocalConfig())  # type: ignore[arg-type]
+def test_tinker_engine_requires_tinker_config():
+    with pytest.raises(ValueError, match="requires a TinkerConfig"):
+        get_training_engine("tinker", LocalConfig())

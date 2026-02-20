@@ -35,7 +35,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import httpx
 import hydra
@@ -75,7 +75,6 @@ from .training.engine import get_training_engine
 from .training.engine.base import EngineKind, TrainingEngine
 from .training.storage import (
     LORA_MOUNT_PATH,
-    StorageBackend,
     configure_storage_backend,
     configure_storage_root,
     lora_volume,
@@ -104,9 +103,13 @@ def configure_web_app(cfg: CoreConfig) -> None:
     web_app.state.runtime_config = cfg
     configure_storage_root(cfg.lora_root)
     backend = cfg.storage_backend
-    if backend not in {"local_fs", "modal_volume"}:
-        raise ValueError(f"Unsupported storage backend: {backend!r}")
-    configure_storage_backend(cast(StorageBackend, backend))
+    if backend == "local_fs":
+        configure_storage_backend("local_fs")
+        return
+    if backend == "modal_volume":
+        configure_storage_backend("modal_volume")
+        return
+    raise ValueError(f"Unsupported storage backend: {backend!r}")
 
 
 def _runtime_config() -> CoreConfig:
@@ -118,10 +121,13 @@ def _runtime_config() -> CoreConfig:
 
 def _get_engine_kind() -> EngineKind:
     """Validate and return the configured engine kind."""
-    cfg = _runtime_config()
-    mode = cfg.mode
-    if mode in {"local", "modal", "tinker"}:
-        return mode  # type: ignore[return-value]
+    mode = _runtime_config().mode
+    if mode == "local":
+        return "local"
+    if mode == "modal":
+        return "modal"
+    if mode == "tinker":
+        return "tinker"
     raise ValueError(f"Unsupported runtime config mode: {mode}")
 
 def _uses_modal_teacher() -> bool:
@@ -971,7 +977,10 @@ def fastapi_app():
 @hydra.main(version_base=None, config_path="core/configs", config_name="local")
 def main(cfg: LocalConfig | ModalConfig | TinkerConfig) -> None:
     """Hydra entry point for running the API locally with explicit config profile."""
-    configure_web_app(OmegaConf.to_object(cfg))  # type: ignore[arg-type]
+    parsed_cfg = OmegaConf.to_object(cfg)
+    if not isinstance(parsed_cfg, (LocalConfig, ModalConfig, TinkerConfig)):
+        raise TypeError("Hydra did not produce a supported CLaaS runtime config")
+    configure_web_app(parsed_cfg)
     host = os.environ.get("CLAAS_API_HOST", "0.0.0.0")
     port = int(os.environ.get("CLAAS_API_PORT", "8080"))
     uvicorn.run(web_app, host=host, port=port)

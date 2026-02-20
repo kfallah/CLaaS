@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 from hydra import compose, initialize_config_dir
 from hydra.core.config_store import ConfigStore
@@ -19,8 +18,6 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
 _CONFIG_DIR = str(Path(__file__).parent / "configs")
 _SCHEMAS_REGISTERED = False
-
-CoreConfigName = Literal["local", "modal", "tinker"]
 
 
 @dataclass

@@ -15,7 +15,6 @@ from .types import EvalConfig, HarnessConfig
 # Pattern matching the timestamped run-id suffix (e.g. 20260220-012345Z)
 _RUN_ID_RE = re.compile(r"\d{8}-\d{6}Z$")
 
-# Register eval schema once when module is imported.
 ConfigStore.instance().store(name="_eval_schema", node=EvalConfig)
 
 

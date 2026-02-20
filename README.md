@@ -141,7 +141,6 @@ uv sync --extra tinker --extra dev
 
 # Run conciseness eval for 20 steps (Tinker mode, no GPU)
 CLAAS_TINKER_API_KEY="tml-..." \
-CLAAS_TINKER_BASE_MODEL="Qwen/Qwen3-30B-A3B" \
   uv run python -m claas.eval 'preferences=[concise]' num_steps=20
 ```
 
