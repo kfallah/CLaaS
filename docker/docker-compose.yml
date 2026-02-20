@@ -126,7 +126,7 @@ services:
       dockerfile: docker/Dockerfile.tinker
       target: proxy
     environment:
-      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:-}
+      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY in docker/.env.tinker}
       - HF_TOKEN=${HF_TOKEN:-}
     ports:
       - "${TINKER_PROXY_PORT:-8000}:8000"
@@ -155,7 +155,7 @@ services:
         aliases:
           - claas-api
     environment:
-      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:-}
+      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY in docker/.env.tinker}
       - WAIT_FOR_BACKEND=0
     volumes:
       - claas-feedback-logs:/app/data/feedback
