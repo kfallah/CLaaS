@@ -108,6 +108,28 @@
         cursor: pointer;
         font-weight: 500;
       }
+      .pagination {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        margin: 1rem 0;
+      }
+      .pagination-link {
+        padding: 0.4rem 0.8rem;
+        border: 1px solid #cbd5e1;
+        border-radius: 4px;
+        text-decoration: none;
+        color: #2563eb;
+      }
+      .pagination-link.disabled {
+        color: #94a3b8;
+        cursor: default;
+      }
+      .pagination-status {
+        font-size: 0.9rem;
+        color: #475569;
+      }
     </style>
     <script>
       function toggleDetails(rowId, button) {
@@ -125,5 +147,6 @@
   <body>
     <h1>CLaaS Eval Dashboard</h1>
     {{CONTENT}}
+    {{PAGINATION}}
   </body>
 </html>

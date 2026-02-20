@@ -26,7 +26,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 import tinker
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from tinker import types as T
@@ -34,6 +34,7 @@ from tinker_cookbook import model_info
 from tinker_cookbook.renderers import Message, Renderer, get_renderer
 
 from claas.core.config import get_proxy_config
+from claas.core.types import ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +55,19 @@ def _base_model() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _apply_chat_template_ids(tokenizer: Any, dicts: list[dict[str, str]]) -> list[int]:
+def _apply_chat_template_ids(
+    tokenizer: Any,
+    messages: list[ChatMessage],
+    *,
+    add_generation_prompt: bool = True,
+) -> list[int]:
     """Tokenize messages via apply_chat_template, returning token ids.
 
     The tokenizer parameter is typed as ``Any`` so that ty doesn't try to
     narrow the complex union return type of ``apply_chat_template``.
     """
     result = tokenizer.apply_chat_template(
-        dicts, add_generation_prompt=True, tokenize=True,
+        messages, add_generation_prompt=add_generation_prompt, tokenize=True,
     )
     if isinstance(result, list):
         return result
@@ -79,7 +85,7 @@ class _TokenizerChatRenderer:
 
     def build_generation_prompt(self, messages: list[Message]) -> T.ModelInput:
         dicts = [{"role": m["role"], "content": m.get("content", "")} for m in messages]
-        token_ids = _apply_chat_template_ids(self._tokenizer, dicts)
+        token_ids = _apply_chat_template_ids(self._tokenizer, dicts)  # type: ignore[arg-type]
         return T.ModelInput.from_ints(token_ids)
 
     def parse_response(self, tokens: list[int]) -> tuple[dict[str, str], list[Any]]:
@@ -307,8 +313,25 @@ class CompletionRequest(BaseModel):
 
 
 class ScoreRequest(BaseModel):
-    prompt: str
+    """Unified scoring request.
+
+    Provide ``prompt`` for raw-string tokenization, or ``messages`` to apply
+    the model's chat template.  Exactly one of the two must be set.
+    """
+
+    prompt: str | None = None
     completion: str
+    messages: list[ChatCompletionMessage] | None = None
+
+
+class ScoreResponse(BaseModel):
+    """Per-token logprob scoring result."""
+
+    logprobs: list[float]
+    tokens: list[str]
+    prompt_tokens: int
+    completion_tokens: int
+    logprob_sum: float
 
 
 class RefreshRequest(BaseModel):
@@ -483,38 +506,75 @@ async def get_raw_completion(content_hash: str) -> dict[str, object]:
 
 
 @app.post("/v1/score")
-async def score_completion(req: ScoreRequest) -> dict[str, object]:
-    """Score a prompt+completion pair and return per-token completion logprobs."""
+async def score_completion(req: ScoreRequest) -> ScoreResponse:
+    """Score a prompt+completion pair and return per-token completion logprobs.
+
+    When ``messages`` is provided, the tokenizer's chat template is applied
+    so logprob scoring matches how the model sees inputs during generation
+    and training.  Otherwise ``prompt`` + ``completion`` are tokenized as
+    raw strings.
+    """
+    if req.prompt is None and req.messages is None:
+        raise HTTPException(
+            status_code=422, detail="Either 'prompt' or 'messages' must be provided",
+        )
+
     tokenizer = _holder.tokenizer
     sampler = _holder.sampler
 
-    prompt_tokens: list[int] = list(tokenizer.encode(req.prompt, add_special_tokens=True))
-    completion_tokens: list[int] = tokenizer.encode(
-        req.completion, add_special_tokens=False,
-    )
-    full_tokens = prompt_tokens + completion_tokens
-    prompt_len = len(prompt_tokens)
-    completion_len = len(completion_tokens)
+    if req.messages is not None:
+        # Chat template path
+        msg_dicts: list[ChatMessage] = [  # type: ignore[invalid-assignment]
+            {"role": m.role, "content": _coerce_content(m.content)}  # type: ignore[invalid-argument-type]
+            for m in req.messages
+        ]
+
+        prompt_ids = _apply_chat_template_ids(
+            tokenizer, msg_dicts, add_generation_prompt=True,
+        )
+        full_msg_dicts: list[ChatMessage] = msg_dicts + [  # type: ignore[assignment]
+            {"role": "assistant", "content": req.completion},
+        ]
+        full_tokens = _apply_chat_template_ids(
+            tokenizer, full_msg_dicts, add_generation_prompt=False,
+        )
+        prompt_len = len(prompt_ids)
+        completion_len = len(full_tokens) - prompt_len
+        completion_tokens = full_tokens[prompt_len:]
+    else:
+        # Raw string tokenization path
+        assert req.prompt is not None
+        prompt_ids_raw: list[int] = list(
+            tokenizer.encode(req.prompt, add_special_tokens=True),
+        )
+        completion_tokens_raw: list[int] = tokenizer.encode(
+            req.completion, add_special_tokens=False,
+        )
+        full_tokens = prompt_ids_raw + completion_tokens_raw
+        prompt_len = len(prompt_ids_raw)
+        completion_len = len(completion_tokens_raw)
+        completion_tokens = completion_tokens_raw
+
+    if completion_len <= 0:
+        return ScoreResponse(
+            logprobs=[], tokens=[], prompt_tokens=prompt_len,
+            completion_tokens=0, logprob_sum=0.0,
+        )
 
     model_input = T.ModelInput.from_ints(full_tokens)
     logprobs_full = await asyncio.to_thread(
         lambda: sampler.compute_logprobs(model_input).result(),
     )
 
-    # Slice completion logprobs (same pattern as engine.py _slice_completion_logprobs)
     raw = logprobs_full[prompt_len : prompt_len + completion_len]
     logprobs = [lp if lp is not None else 0.0 for lp in raw]
-
     token_strings = [tokenizer.decode([t]) for t in completion_tokens]
     logprob_sum = sum(logprobs)
 
-    return {
-        "logprobs": logprobs,
-        "tokens": token_strings,
-        "prompt_tokens": prompt_len,
-        "completion_tokens": completion_len,
-        "logprob_sum": logprob_sum,
-    }
+    return ScoreResponse(
+        logprobs=logprobs, tokens=token_strings, prompt_tokens=prompt_len,
+        completion_tokens=completion_len, logprob_sum=logprob_sum,
+    )
 
 
 @app.get("/v1/models")

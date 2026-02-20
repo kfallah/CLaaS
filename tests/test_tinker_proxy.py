@@ -770,3 +770,125 @@ class TestCacheEndToEnd:
         assert "<|channel|>analysis" in data["response"]
 
         assert data["logprobs"] == pytest.approx([-1.0, -0.8, -0.9])
+
+
+class TestChatScoreEndpoint:
+    """Tests for /v1/score with messages (chat template path)."""
+
+    def _setup_holder_with_chat_template(self, holder, logprobs_result):
+        """Set up holder with a tokenizer that supports apply_chat_template."""
+        mock_sampler = MagicMock()
+        mock_future = MagicMock()
+        mock_future.result.return_value = logprobs_result
+        mock_sampler.compute_logprobs.return_value = mock_future
+
+        mock_tokenizer = MagicMock()
+
+        # apply_chat_template returns different lengths depending on
+        # add_generation_prompt: True → prompt only, False → prompt + completion
+        def _apply_template(dicts, add_generation_prompt=True, tokenize=True):
+            if add_generation_prompt:
+                # Prompt tokens only
+                return [10, 20, 30]
+            # Full conversation including assistant reply
+            return [10, 20, 30, 40, 50]
+
+        mock_tokenizer.apply_chat_template.side_effect = _apply_template
+        mock_tokenizer.decode.side_effect = lambda ids: f"tok{ids[0]}"
+
+        _patch_holder(holder, mock_sampler, mock_tokenizer, _make_mock_renderer())
+        return mock_sampler, mock_tokenizer
+
+    def test_chat_score_returns_logprobs(self, proxy_client):
+        """Happy path: structured messages are templated and scored."""
+        from claas.proxy.tinker_inference_proxy import _holder
+
+        # 3 prompt tokens + 2 completion tokens = 5 total
+        # logprobs for all 5 positions
+        self._setup_holder_with_chat_template(
+            _holder, [None, -1.0, -2.0, -0.5, -0.3],
+        )
+
+        resp = proxy_client.post(
+            "/v1/score",
+            json={
+                "messages": [
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": "Hi"},
+                ],
+                "completion": "Hello!",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert body["prompt_tokens"] == 3
+        assert body["completion_tokens"] == 2
+        # Completion logprobs at positions 3 and 4 → [-0.5, -0.3]
+        assert body["logprobs"] == pytest.approx([-0.5, -0.3])
+        assert body["tokens"] == ["tok40", "tok50"]
+        assert body["logprob_sum"] == pytest.approx(-0.8)
+
+    def test_chat_score_handles_none_logprobs(self, proxy_client):
+        """None in completion region is treated as 0.0."""
+        from claas.proxy.tinker_inference_proxy import _holder
+
+        self._setup_holder_with_chat_template(
+            _holder, [None, -1.0, -2.0, None, -0.3],
+        )
+
+        resp = proxy_client.post(
+            "/v1/score",
+            json={
+                "messages": [{"role": "user", "content": "Hi"}],
+                "completion": "Hello!",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        # Position 3 = None → 0.0, position 4 = -0.3
+        assert body["logprobs"] == pytest.approx([0.0, -0.3])
+        assert body["logprob_sum"] == pytest.approx(-0.3)
+
+    def test_chat_score_empty_completion(self, proxy_client):
+        """When completion produces no extra tokens, return empty results."""
+        from claas.proxy.tinker_inference_proxy import _holder
+
+        mock_sampler = MagicMock()
+        mock_tokenizer = MagicMock()
+
+        # Both calls return the same tokens → completion_len = 0
+        mock_tokenizer.apply_chat_template.return_value = [10, 20, 30]
+        mock_tokenizer.decode.side_effect = lambda ids: f"tok{ids[0]}"
+
+        _patch_holder(_holder, mock_sampler, mock_tokenizer, _make_mock_renderer())
+
+        resp = proxy_client.post(
+            "/v1/score",
+            json={
+                "messages": [{"role": "user", "content": "Hi"}],
+                "completion": "",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["logprobs"] == []
+        assert body["tokens"] == []
+        assert body["completion_tokens"] == 0
+        assert body["logprob_sum"] == 0.0
+
+    def test_chat_score_rejects_missing_fields(self, proxy_client):
+        """Missing messages or completion should return 422."""
+        # Missing completion
+        resp = proxy_client.post(
+            "/v1/score",
+            json={"messages": [{"role": "user", "content": "Hi"}]},
+        )
+        assert resp.status_code == 422
+
+        # Missing messages
+        resp = proxy_client.post(
+            "/v1/score",
+            json={"completion": "Hello!"},
+        )
+        assert resp.status_code == 422

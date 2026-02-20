@@ -108,15 +108,16 @@ async def fetch_response_logprob_sum_via_proxy(
     response_text: str,
     timeout_s: float = 60.0,
 ) -> float:
-    """Fetch the total log-probability via the Tinker proxy /v1/score endpoint."""
-    # Flatten messages into a single prompt string for the proxy
-    prompt = "\n".join(
-        f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages
-    )
+    """Fetch the total log-probability via the Tinker proxy /v1/score endpoint.
+
+    Sends structured chat messages so the proxy can apply the model's chat
+    template, matching how the model sees inputs during generation and training.
+    """
+    msg_dicts = [{"role": m["role"], "content": m.get("content", "")} for m in messages]
     async with httpx.AsyncClient(base_url=proxy_url, timeout=timeout_s) as client:
         resp = await client.post(
             "/v1/score",
-            json={"prompt": prompt, "completion": response_text},
+            json={"messages": msg_dicts, "completion": response_text},
         )
         resp.raise_for_status()
         return resp.json()["logprob_sum"]

@@ -1,0 +1,30 @@
+mode: tinker
+claas_url: http://localhost:8080
+vllm_url: http://localhost:8000
+vllm_model_name: qwen3-8b
+base_model: Qwen/Qwen3-30B-A3B
+
+preferences:
+  - no_emoji
+  - concise
+  - identity
+
+metrics:
+  - logprob
+  - compliance
+  - general
+  - collapse
+
+collapse_steps: [0, 5, 10, 15, 19]
+plots: true
+
+num_steps: 20
+batch_size: 4
+steps_per_batch: 1
+feedback_repetitions: 1
+seed: 42
+lora_id_prefix: eval
+output_dir: ./data/evals
+
+openclaw_url: null
+proxy_url: null
