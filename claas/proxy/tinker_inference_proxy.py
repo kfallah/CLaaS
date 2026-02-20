@@ -33,7 +33,7 @@ from tinker import types as T
 from tinker_cookbook import model_info
 from tinker_cookbook.renderers import Message, Renderer, get_renderer
 
-from claas.core.config import get_proxy_config
+from claas.core.config import ProxyConfig, load_proxy_config
 from claas.core.types import ChatMessage
 
 logger = logging.getLogger(__name__)
@@ -44,10 +44,11 @@ else:
     PreTrainedTokenizerBase = Any
 
 app = FastAPI(title="CLaaS Tinker Inference Proxy")
+_PROXY_CONFIG: ProxyConfig = load_proxy_config()
 
 
 def _base_model() -> str:
-    return get_proxy_config().tinker_base_model
+    return _PROXY_CONFIG.tinker_base_model
 
 
 def _tinker_api_key() -> str | None:
@@ -147,7 +148,7 @@ class _SamplerHolder:
                 and self._renderer is not None
             ):
                 return
-            proxy_cfg = get_proxy_config()
+            proxy_cfg = _PROXY_CONFIG
             api_key = _tinker_api_key()
             if api_key:
                 os.environ["TINKER_API_KEY"] = api_key
@@ -179,7 +180,7 @@ class _SamplerHolder:
     def refresh(self, model_path: str | None = None) -> None:
         """Refresh the sampling client (e.g. after a distillation step)."""
         with self._lock:
-            proxy_cfg = get_proxy_config()
+            proxy_cfg = _PROXY_CONFIG
             base_model = proxy_cfg.tinker_base_model
             if self._service is None:
                 api_key = _tinker_api_key()
@@ -230,7 +231,7 @@ class _CompletionCache:
 
     def __init__(self, max_size: int | None = None) -> None:
         if max_size is None:
-            max_size = get_proxy_config().completion_cache_size
+            max_size = _PROXY_CONFIG.completion_cache_size
         self._store: OrderedDict[str, _CompletionCacheEntry] = OrderedDict()
         self._max_size = max_size
         self._lock = threading.Lock()

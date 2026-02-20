@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
-from typing import Literal, TypeVar
+from typing import Literal
 
 from hydra import compose, initialize_config_dir
 from hydra.core.config_store import ConfigStore
@@ -21,7 +20,6 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 _CONFIG_DIR = str(Path(__file__).parent / "configs")
 _DEFAULT_ALLOWED_MODELS = ("Qwen/Qwen3-8B",)
 _SCHEMAS_REGISTERED = False
-T = TypeVar("T")
 
 CoreConfigName = Literal["local", "modal", "tinker"]
 
@@ -106,27 +104,6 @@ def register_config_schemas() -> None:
     _SCHEMAS_REGISTERED = True
 
 
-def _compose_structured(
-    *,
-    config_name: str,
-    schema_type: type[T],
-    overrides: list[str] | None = None,
-    config_dir: str | None = None,
-) -> T:
-    register_config_schemas()
-    abs_dir = os.path.abspath(config_dir or _CONFIG_DIR)
-    with initialize_config_dir(version_base=None, config_dir=abs_dir):
-        cfg = compose(config_name=config_name, overrides=overrides or [])
-
-    typed_cfg = OmegaConf.merge(OmegaConf.structured(schema_type), cfg)
-    obj = OmegaConf.to_object(typed_cfg)
-    if not isinstance(obj, schema_type):
-        raise TypeError(
-            f"Hydra compose for {config_name!r} did not produce {schema_type.__name__}",
-        )
-    return obj
-
-
 def load_core_config(
     config_name: str,
     overrides: list[str] | None = None,
@@ -134,31 +111,34 @@ def load_core_config(
 ) -> CoreConfig:
     """Compose and return a typed core runtime config for a specific profile."""
     normalized = config_name.strip().lower()
-    if normalized == "local":
-        return _compose_structured(
-            config_name="local",
-            schema_type=LocalConfig,
-            overrides=overrides,
-            config_dir=config_dir,
-        )
-    if normalized == "modal":
-        return _compose_structured(
-            config_name="modal",
-            schema_type=ModalConfig,
-            overrides=overrides,
-            config_dir=config_dir,
-        )
-    if normalized == "tinker":
-        cfg = _compose_structured(
-            config_name="tinker",
-            schema_type=TinkerConfig,
-            overrides=overrides,
-            config_dir=config_dir,
-        )
-        cfg.tinker_state_path = os.path.expanduser(cfg.tinker_state_path)
-        return cfg
+    if normalized not in {"local", "modal", "tinker"}:
+        raise ValueError(f"Unsupported core config profile: {config_name!r}")
 
-    raise ValueError(f"Unsupported core config profile: {config_name!r}")
+    register_config_schemas()
+    abs_dir = os.path.abspath(config_dir or _CONFIG_DIR)
+    with initialize_config_dir(version_base=None, config_dir=abs_dir):
+        cfg = compose(config_name=normalized, overrides=overrides or [])
+
+    if normalized == "local":
+        typed_cfg = OmegaConf.merge(OmegaConf.structured(LocalConfig), cfg)
+        obj = OmegaConf.to_object(typed_cfg)
+        if not isinstance(obj, LocalConfig):
+            raise TypeError("Hydra compose for 'local' did not produce LocalConfig")
+        return obj
+
+    if normalized == "modal":
+        typed_cfg = OmegaConf.merge(OmegaConf.structured(ModalConfig), cfg)
+        obj = OmegaConf.to_object(typed_cfg)
+        if not isinstance(obj, ModalConfig):
+            raise TypeError("Hydra compose for 'modal' did not produce ModalConfig")
+        return obj
+
+    typed_cfg = OmegaConf.merge(OmegaConf.structured(TinkerConfig), cfg)
+    obj = OmegaConf.to_object(typed_cfg)
+    if not isinstance(obj, TinkerConfig):
+        raise TypeError("Hydra compose for 'tinker' did not produce TinkerConfig")
+    obj.tinker_state_path = os.path.expanduser(obj.tinker_state_path)
+    return obj
 
 
 def load_proxy_config(
@@ -167,15 +147,13 @@ def load_proxy_config(
     config_dir: str | None = None,
 ) -> ProxyConfig:
     """Compose and return the standalone proxy config."""
-    return _compose_structured(
-        config_name="proxy",
-        schema_type=ProxyConfig,
-        overrides=overrides,
-        config_dir=config_dir,
-    )
+    register_config_schemas()
+    abs_dir = os.path.abspath(config_dir or _CONFIG_DIR)
+    with initialize_config_dir(version_base=None, config_dir=abs_dir):
+        cfg = compose(config_name="proxy", overrides=overrides or [])
 
-
-@lru_cache(maxsize=1)
-def get_proxy_config() -> ProxyConfig:
-    """Cached standalone proxy config accessor."""
-    return load_proxy_config()
+    typed_cfg = OmegaConf.merge(OmegaConf.structured(ProxyConfig), cfg)
+    obj = OmegaConf.to_object(typed_cfg)
+    if not isinstance(obj, ProxyConfig):
+        raise TypeError("Hydra compose for 'proxy' did not produce ProxyConfig")
+    return obj

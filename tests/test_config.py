@@ -9,8 +9,8 @@ from claas.core.config import (
     ModalConfig,
     ProxyConfig,
     TinkerConfig,
-    get_proxy_config,
     load_core_config,
+    load_proxy_config,
 )
 
 
@@ -46,14 +46,14 @@ class TestMutability:
         assert cfg.mode == "modal"
 
     def test_proxy_config_mutable(self):
-        cfg = get_proxy_config()
+        cfg = load_proxy_config()
         cfg.tinker_base_model = "gpt-oss/GPT-OSS-20B"
         assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-20B"
 
 
 class TestProxyConfig:
     def test_defaults(self):
-        cfg = get_proxy_config()
+        cfg = load_proxy_config()
         assert isinstance(cfg, ProxyConfig)
         assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-120B"
         assert cfg.completion_cache_size == 100

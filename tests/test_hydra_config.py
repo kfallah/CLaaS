@@ -9,7 +9,6 @@ from claas.core.config import (
     ModalConfig,
     ProxyConfig,
     TinkerConfig,
-    get_proxy_config,
     load_core_config,
     load_proxy_config,
 )
@@ -109,7 +108,7 @@ class TestYamlValues:
 
 class TestProxyYamlConfig:
     def test_proxy_defaults_from_yaml(self):
-        cfg = get_proxy_config()
+        cfg = load_proxy_config()
         assert isinstance(cfg, ProxyConfig)
         assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-120B"
         assert cfg.completion_cache_size == 100
