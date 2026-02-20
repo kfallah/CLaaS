@@ -16,8 +16,8 @@ VLLM_START_SCRIPT="${VLLM_START_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/start_v
 GATEWAY_START_SCRIPT="${GATEWAY_START_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/start_openclaw_gateway_local.sh}"
 CONFIGURE_SCRIPT="${CONFIGURE_SCRIPT:-$ROOT_DIR/scripts/openclaw-local/configure_openclaw_local_models.py}"
 
-# Shared lora root — used by init_lora.py, vLLM, and the CLaaS API
-export CLAAS_LORA_ROOT="${CLAAS_LORA_ROOT:-$ROOT_DIR/.local_loras}"
+# Shared LoRA root — used by init_lora.py and passed to Hydra as lora_root
+LOCAL_LORA_ROOT="${LOCAL_LORA_ROOT:-$ROOT_DIR/.local_loras}"
 
 STACK_NAME="openclaw-local"
 RESTART_BACKOFF_SECONDS="${RESTART_BACKOFF_SECONDS:-3}"
@@ -162,9 +162,11 @@ start_stack_once() {
 
   # Ensure LoRA adapter exists before vLLM tries to load it
   echo "[$STACK_NAME] initializing LoRA adapter..."
-  CLAAS_STORAGE_BACKEND=local_fs \
-  LORA_NAME="$LORA_NAME" \
-  python3 "$INIT_SCRIPT" 2>&1 | sed "s/^/[$STACK_NAME] /"
+  python3 "$INIT_SCRIPT" \
+    --lora-name "$LORA_NAME" \
+    --base-model "${MODEL:-Qwen/Qwen3-8B}" \
+    --lora-root "$LOCAL_LORA_ROOT" \
+    2>&1 | sed "s/^/[$STACK_NAME] /"
 
   BASE_URL="${BASE_URL:-http://127.0.0.1:8000/v1}" \
   API_KEY="${API_KEY:-sk-local}" \
@@ -192,11 +194,15 @@ start_stack_once() {
 
   echo "[$STACK_NAME] starting CLaaS feedback API..."
   cleanup_old_pid "$CLAAS_API_PID_FILE"
-  CLAAS_STORAGE_BACKEND=local_fs \
-  CLAAS_DISTILL_EXECUTION_MODE=local \
-  VLLM_BASE_URL="http://127.0.0.1:8000" \
+  CLAAS_API_HOST=0.0.0.0 \
+  CLAAS_API_PORT="${CLAAS_API_PORT:-8080}" \
   VLLM_API_KEY="${API_KEY:-sk-local}" \
-  nohup uvicorn claas.api:web_app --host 0.0.0.0 --port "${CLAAS_API_PORT:-8080}" >>"$CLAAS_API_LOG" 2>&1 &
+  nohup python -m claas.api \
+    --config-name local \
+    "vllm_base_url=http://127.0.0.1:8000" \
+    "lora_root=${LOCAL_LORA_ROOT}" \
+    "base_model_id=${MODEL:-Qwen/Qwen3-8B}" \
+    >>"$CLAAS_API_LOG" 2>&1 &
   local api_pid=$!
   echo "$api_pid" >"$CLAAS_API_PID_FILE"
   initialize_log_offset_state "$CLAAS_API_LOG" "$CLAAS_API_OOM_STATE_FILE"

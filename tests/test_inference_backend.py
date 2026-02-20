@@ -16,22 +16,14 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _reset_state(monkeypatch):
-    """Reset the inference backend singleton and config cache between tests."""
-    import claas.api as api_mod
-    from claas.core.config import get_config
+def _reset_state():
+    """Reset the inference backend and config between tests."""
+    from claas.api import configure_web_app
+    from claas.core.config import load_core_config
 
-    # Force tinker mode for these tests
-    monkeypatch.setenv("CLAAS_DISTILL_EXECUTION_MODE", "tinker")
-
-    get_config.cache_clear()
-
-    # Reset the lazy inference backend so it's re-created per test
-    old_backend = api_mod._inference_backend
-    api_mod._inference_backend = None
+    configure_web_app(load_core_config("tinker"))
     yield
-    api_mod._inference_backend = old_backend
-    get_config.cache_clear()
+    configure_web_app(load_core_config("tinker"))
 
 
 @pytest.fixture()
@@ -87,10 +79,10 @@ def _patch_holder(holder, sampler, tokenizer, renderer):
 
 def _get_tinker_backend(api_client):
     """Force backend creation and return the TinkerBackend instance."""
-    from claas.api import _get_inference_backend
+    from claas.api import web_app
     from claas.inference.tinker import TinkerBackend
 
-    backend = _get_inference_backend()
+    backend = web_app.state.inference_backend
     assert isinstance(backend, TinkerBackend)
     return backend
 
@@ -739,9 +731,10 @@ class TestChatScoreEndpoint:
         _patch_holder(holder, mock_sampler, mock_tokenizer, _make_mock_renderer())
         return mock_sampler, mock_tokenizer
 
-    def test_chat_score_returns_logprobs(self, proxy_client):
+    def test_chat_score_returns_logprobs(self, api_client):
         """Happy path: structured messages are templated and scored."""
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.api import web_app
+        _holder = web_app.state.inference_backend.holder
 
         # 3 prompt tokens + 2 completion tokens = 5 total
         # logprobs for all 5 positions
@@ -749,7 +742,7 @@ class TestChatScoreEndpoint:
             _holder, [None, -1.0, -2.0, -0.5, -0.3],
         )
 
-        resp = proxy_client.post(
+        resp = api_client.post(
             "/v1/score",
             json={
                 "messages": [
@@ -769,15 +762,16 @@ class TestChatScoreEndpoint:
         assert body["tokens"] == ["tok40", "tok50"]
         assert body["logprob_sum"] == pytest.approx(-0.8)
 
-    def test_chat_score_handles_none_logprobs(self, proxy_client):
+    def test_chat_score_handles_none_logprobs(self, api_client):
         """None in completion region is treated as 0.0."""
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.api import web_app
+        _holder = web_app.state.inference_backend.holder
 
         self._setup_holder_with_chat_template(
             _holder, [None, -1.0, -2.0, None, -0.3],
         )
 
-        resp = proxy_client.post(
+        resp = api_client.post(
             "/v1/score",
             json={
                 "messages": [{"role": "user", "content": "Hi"}],
@@ -790,9 +784,10 @@ class TestChatScoreEndpoint:
         assert body["logprobs"] == pytest.approx([0.0, -0.3])
         assert body["logprob_sum"] == pytest.approx(-0.3)
 
-    def test_chat_score_empty_completion(self, proxy_client):
+    def test_chat_score_empty_completion(self, api_client):
         """When completion produces no extra tokens, return empty results."""
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.api import web_app
+        _holder = web_app.state.inference_backend.holder
 
         mock_sampler = MagicMock()
         mock_tokenizer = MagicMock()
@@ -803,7 +798,7 @@ class TestChatScoreEndpoint:
 
         _patch_holder(_holder, mock_sampler, mock_tokenizer, _make_mock_renderer())
 
-        resp = proxy_client.post(
+        resp = api_client.post(
             "/v1/score",
             json={
                 "messages": [{"role": "user", "content": "Hi"}],
@@ -817,17 +812,17 @@ class TestChatScoreEndpoint:
         assert body["completion_tokens"] == 0
         assert body["logprob_sum"] == 0.0
 
-    def test_chat_score_rejects_missing_fields(self, proxy_client):
+    def test_chat_score_rejects_missing_fields(self, api_client):
         """Missing messages or completion should return 422."""
         # Missing completion
-        resp = proxy_client.post(
+        resp = api_client.post(
             "/v1/score",
             json={"messages": [{"role": "user", "content": "Hi"}]},
         )
         assert resp.status_code == 422
 
         # Missing messages
-        resp = proxy_client.post(
+        resp = api_client.post(
             "/v1/score",
             json={"completion": "Hello!"},
         )

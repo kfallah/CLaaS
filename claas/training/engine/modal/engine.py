@@ -21,6 +21,7 @@ from claas.core.types import (
 )
 from claas.training.engine.base import TrainingEngine
 from claas.training.storage import (
+    configure_storage_backend,
     create_initial_lora,
     delete_lora,
     export_lora_zip_bytes,
@@ -33,6 +34,9 @@ from claas.training.storage import (
 
 class ModalTrainingEngine(TrainingEngine):
     """Executes training on Modal while using shared LoRA storage."""
+
+    def __init__(self) -> None:
+        configure_storage_backend("modal_volume")
 
     async def distill(
         self,

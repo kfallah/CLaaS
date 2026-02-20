@@ -6,6 +6,7 @@ Idempotent — skips LoRA creation if the alias already exists.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import stat
@@ -16,15 +17,17 @@ from pathlib import Path
 
 import httpx
 
+from claas.training.storage import configure_storage_backend, configure_storage_root
+
 # ---------------------------------------------------------------------------
 # Environment
 # ---------------------------------------------------------------------------
 LORA_NAME = os.environ.get("LORA_NAME", "openclaw/assistant")
-BASE_MODEL = os.environ.get("MODEL", "Qwen/Qwen3-8B")
-DISTILL_MODE = os.environ.get("CLAAS_DISTILL_EXECUTION_MODE", "local").strip().lower()
-LORA_ROOT = os.environ.get("CLAAS_LORA_ROOT", "/loras")
+DISTILL_MODE = "local"
+BASE_MODEL = "Qwen/Qwen3-8B"
+LORA_ROOT = "/loras"
 OPENCLAW_HOME = Path(os.environ.get("OPENCLAW_HOME", "/openclaw-config"))
-VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://vllm:8000/v1")
+VLLM_BASE_URL = "http://vllm:8000/v1"
 API_KEY = os.environ.get("API_KEY", "sk-local")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CLAAS_API_URL = os.environ.get("CLAAS_API_URL", "http://claas-api:8080")
@@ -40,9 +43,42 @@ def _parse_feedback_batch_size() -> int:
 
 FEEDBACK_BATCH_SIZE = _parse_feedback_batch_size()
 
-# Ensure claas picks up local_fs mode and our lora root
-os.environ["CLAAS_STORAGE_BACKEND"] = "local_fs"
-os.environ["CLAAS_LORA_ROOT"] = LORA_ROOT
+def _default_base_model(config_name: str) -> str:
+    if config_name == "tinker":
+        return "gpt-oss/GPT-OSS-120B"
+    return "Qwen/Qwen3-8B"
+
+
+def _default_vllm_base_url(config_name: str) -> str:
+    if config_name == "tinker":
+        return "http://tinker-proxy:8000/v1"
+    return "http://vllm:8000/v1"
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="CLaaS init stack helper")
+    parser.add_argument(
+        "--config-name",
+        default="local",
+        choices=["local", "modal", "tinker"],
+        help="Core runtime config profile",
+    )
+    parser.add_argument(
+        "--base-model",
+        default=None,
+        help="Base model id used for initial LoRA creation",
+    )
+    parser.add_argument(
+        "--vllm-base-url",
+        default=None,
+        help="OpenAI-compatible /v1 endpoint written into OpenClaw config",
+    )
+    parser.add_argument(
+        "--lora-root",
+        default="/loras",
+        help="LoRA storage root path",
+    )
+    return parser.parse_args()
 
 
 def _aliases_path() -> Path:
@@ -233,13 +269,6 @@ def write_openclaw_config() -> None:
                 "mode": "token",
                 "token": "openclaw-local-dev-token",
             },
-            "http": {
-                "endpoints": {
-                    "chatCompletions": {
-                        "enabled": True,
-                    },
-                },
-            },
         },
         "messages": {
             "ackReactionScope": "group-mentions",
@@ -348,6 +377,23 @@ def fix_permissions() -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
+    global DISTILL_MODE, BASE_MODEL, LORA_ROOT, VLLM_BASE_URL
+    args = _parse_args()
+    DISTILL_MODE = args.config_name.strip().lower()
+    BASE_MODEL = (
+        args.base_model.strip()
+        if isinstance(args.base_model, str) and args.base_model.strip()
+        else _default_base_model(DISTILL_MODE)
+    )
+    VLLM_BASE_URL = (
+        args.vllm_base_url.strip()
+        if isinstance(args.vllm_base_url, str) and args.vllm_base_url.strip()
+        else _default_vllm_base_url(DISTILL_MODE)
+    )
+    LORA_ROOT = str(Path(args.lora_root).expanduser())
+    configure_storage_root(LORA_ROOT)
+    configure_storage_backend("local_fs")
+
     print("=== CLaaS init container ===")
     print(f"  LORA_NAME       = {LORA_NAME}")
     print(f"  BASE_MODEL      = {BASE_MODEL}")

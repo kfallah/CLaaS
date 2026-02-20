@@ -1,7 +1,7 @@
 """Tinker SDK inference backend.
 
 Uses the Tinker sampling API for chat and text completions.
-Only imported when ``CLAAS_DISTILL_EXECUTION_MODE=tinker``.
+Only imported when running in tinker mode.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from claas.core.config import get_config
+from claas.core.config import CoreConfig
 
 from .base import CompletionResult, InferenceBackend, TextCompletionResult
 from .helpers import bounded_float, bounded_int, coerce_content
@@ -95,7 +95,8 @@ def _make_renderer(
 class _SamplerHolder:
     """Holds a lazily-initialized Tinker SamplingClient and tokenizer."""
 
-    def __init__(self) -> None:
+    def __init__(self, cfg: CoreConfig | None = None) -> None:
+        self._cfg = cfg
         self._service: Any | None = None
         self._sampler: Any | None = None
         self._tokenizer: PreTrainedTokenizerBase | None = None
@@ -113,11 +114,10 @@ class _SamplerHolder:
                 return
             import tinker
 
-            cfg = get_config()
-            api_key = getattr(cfg, "tinker_api_key", "")
+            api_key = os.environ.get("CLAAS_TINKER_API_KEY", "")
             if api_key:
                 os.environ["TINKER_API_KEY"] = api_key
-            base_model = getattr(cfg, "tinker_base_model", "")
+            base_model = getattr(self._cfg, "tinker_base_model", "") if self._cfg else ""
             self._service = tinker.ServiceClient()
             self._sampler = self._service.create_sampling_client(base_model=base_model)
             self._tokenizer = self._sampler.get_tokenizer()
@@ -146,10 +146,9 @@ class _SamplerHolder:
         import tinker
 
         with self._lock:
-            cfg = get_config()
-            base_model = getattr(cfg, "tinker_base_model", "")
+            base_model = getattr(self._cfg, "tinker_base_model", "") if self._cfg else ""
             if self._service is None:
-                api_key = getattr(cfg, "tinker_api_key", "")
+                api_key = os.environ.get("CLAAS_TINKER_API_KEY", "")
                 if api_key:
                     os.environ["TINKER_API_KEY"] = api_key
                 self._service = tinker.ServiceClient()
@@ -199,15 +198,16 @@ class ScoreRequest(BaseModel):
 class TinkerBackend(InferenceBackend):
     """Inference backend backed by the Tinker SDK."""
 
-    def __init__(self) -> None:
-        self._holder = _SamplerHolder()
+    def __init__(self, cfg: CoreConfig | None = None) -> None:
+        self._cfg = cfg
+        self._holder = _SamplerHolder(cfg=cfg)
 
     @property
     def holder(self) -> _SamplerHolder:
         return self._holder
 
     def _base_model(self) -> str:
-        return getattr(get_config(), "tinker_base_model", "")
+        return getattr(self._cfg, "tinker_base_model", "") if self._cfg else ""
 
     async def chat_completion(
         self,

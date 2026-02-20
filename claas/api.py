@@ -1,8 +1,8 @@
 """CLaaS API: FastAPI web endpoint for SDPO continual distillation and inference.
 
 This module provides the REST API for the distillation service and
-inference proxy.  The training backend is selected via
-``CLAAS_DISTILL_EXECUTION_MODE`` (local | modal | tinker).
+inference proxy. Runtime backend config is selected via Hydra config name
+(``local``, ``modal``, or ``tinker``) at process startup.
 
 Endpoints:
 - POST /v1/chat/completions: Chat completion (forwarded to inference backend)
@@ -35,20 +35,29 @@ import hashlib
 import html
 import json
 import logging
+import os
 import re
 import time
 import uuid
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx
+import hydra
 import modal
+import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from omegaconf import OmegaConf
 
-from .core.config import CLaaSConfig, get_config
+from .core.config import (
+    CoreConfig,
+    LocalConfig,
+    ModalConfig,
+    TinkerConfig,
+    load_core_config,
+    register_config_schemas,
+)
 from .core.types import (
     ChatCompletionRequest,
     CompletionRequest,
@@ -81,28 +90,19 @@ from .inference.helpers import (
 )
 from .training.engine import get_training_engine
 from .training.engine.base import EngineKind, TrainingEngine
-from .training.storage import LORA_MOUNT_PATH, lora_volume
+from .training.storage import (
+    LORA_MOUNT_PATH,
+    configure_storage_backend,
+    configure_storage_root,
+    lora_volume,
+)
 from .training.teacher_helpers import format_teacher_prompt
 
 logger = logging.getLogger(__name__)
+register_config_schemas()
 
 # Modal app for API surface; worker/teacher are resolved by name at runtime.
 app = modal.App("claas-distill")
-
-
-# ---------------------------------------------------------------------------
-# FastAPI lifespan — initializes inference backend on startup
-# ---------------------------------------------------------------------------
-
-@asynccontextmanager
-async def _lifespan(application: FastAPI) -> AsyncGenerator[None]:
-    """Initialize the inference backend and attach it to app state."""
-    cfg = get_config()
-    backend = get_inference_backend(_get_engine_kind())
-    completion_cache._max_size = cfg.completion_cache_size
-    backend.register_routes(application)
-    application.state.inference_backend = backend
-    yield
 
 
 # FastAPI app
@@ -110,11 +110,47 @@ web_app = FastAPI(
     title="CLaaS API",
     description="Continual Learning as a Service - SDPO-style distillation",
     version="0.1.0",
-    lifespan=_lifespan,
 )
 
 FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "index.html"
 EVAL_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "eval_dashboard.html"
+
+
+def configure_web_app(cfg: CoreConfig) -> None:
+    """Inject runtime config into the process-local FastAPI app."""
+    web_app.state.runtime_config = cfg
+    configure_storage_root(cfg.lora_root)
+    backend = cfg.storage_backend
+    if backend == "local_fs":
+        configure_storage_backend("local_fs")
+    elif backend == "modal_volume":
+        configure_storage_backend("modal_volume")
+    else:
+        raise ValueError(f"Unsupported storage backend: {backend!r}")
+    # Inference backend
+    inference = get_inference_backend(_get_engine_kind_from_cfg(cfg), cfg=cfg)
+    completion_cache._max_size = cfg.completion_cache_size
+    inference.register_routes(web_app)
+    web_app.state.inference_backend = inference
+
+
+def _runtime_config() -> CoreConfig:
+    cfg = getattr(web_app.state, "runtime_config", None)
+    if isinstance(cfg, (LocalConfig, ModalConfig, TinkerConfig)):
+        return cfg
+    raise TypeError("Hydra did not produce a supported CLaaS runtime config")
+
+
+def _get_engine_kind_from_cfg(cfg: CoreConfig) -> EngineKind:
+    """Return the engine kind from a config object (used during init)."""
+    mode = cfg.mode
+    if mode == "local":
+        return "local"
+    if mode == "modal":
+        return "modal"
+    if mode == "tinker":
+        return "tinker"
+    raise ValueError(f"Unsupported runtime config mode: {mode}")
 
 
 # ---------------------------------------------------------------------------
@@ -124,11 +160,7 @@ EVAL_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "eval_dashboard.html
 
 def _get_engine_kind() -> EngineKind:
     """Validate and return the configured engine kind."""
-    cfg = get_config()
-    mode = cfg.mode
-    if mode in {"local", "modal", "tinker"}:
-        return mode  # type: ignore[return-value]
-    raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {mode}")
+    return _get_engine_kind_from_cfg(_runtime_config())
 
 def _uses_modal_teacher() -> bool:
     """Return whether API should fetch teacher scores from Modal TeacherService."""
@@ -137,7 +169,8 @@ def _uses_modal_teacher() -> bool:
 
 def _get_training_engine() -> TrainingEngine:
     """Build the configured training engine instance."""
-    return get_training_engine(_get_engine_kind())
+    cfg = _runtime_config()
+    return get_training_engine(_get_engine_kind(), cfg)
 
 
 _feedback_locks: dict[str, asyncio.Lock] = {}
@@ -145,7 +178,7 @@ _feedback_locks_guard = asyncio.Lock()
 
 
 def _validate_init_base_model(base_model: str) -> None:
-    cfg = get_config()
+    cfg = _runtime_config()
     if base_model in cfg.allowed_init_base_models:
         return
 
@@ -180,12 +213,17 @@ async def _get_feedback_lock_key(lora_id: str) -> str:
     return runtime_ref.vllm_name
 
 
-def _vllm_connection(cfg: CLaaSConfig | None = None) -> tuple[str, str]:
+def _vllm_api_key() -> str:
+    raw = os.environ.get("VLLM_API_KEY")
+    return raw.strip() if raw is not None else ""
+
+
+def _vllm_connection(cfg: CoreConfig | None = None) -> tuple[str, str]:
     """Return (base_url, api_key) from the current config."""
     if cfg is None:
-        cfg = get_config()
+        cfg = _runtime_config()
     base_url: str = getattr(cfg, "vllm_base_url", "http://127.0.0.1:8000")
-    api_key: str = getattr(cfg, "vllm_api_key", "")
+    api_key = _vllm_api_key()
     return base_url, api_key
 
 
@@ -223,7 +261,7 @@ async def _wait_for_vllm_idle(
 
     Raises :class:`TimeoutError` if vLLM is still busy after *timeout_s*.
     """
-    cfg = get_config()
+    cfg = _runtime_config()
     if timeout_s is None:
         timeout_s = getattr(cfg, "feedback_drain_timeout_s", 30.0)
     base_url, api_key = _vllm_connection(cfg)
@@ -271,7 +309,7 @@ async def _verify_gpu_ready(
     actually released its VRAM.  If torch is not installed (CPU-only API
     image) the check is skipped silently.
     """
-    cfg = get_config()
+    cfg = _runtime_config()
     if min_free_gb is None:
         min_free_gb = getattr(cfg, "feedback_min_free_vram_gb", 20.0)
     if timeout_s is None:
@@ -338,7 +376,7 @@ def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
         payload = record
         request_id = str(payload.get("request_id", ""))
 
-    log_root = Path(get_config().feedback_log_dir)
+    log_root = Path(_runtime_config().feedback_log_dir)
     log_root.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     request_id = request_id or uuid.uuid4().hex
@@ -361,7 +399,7 @@ def _read_recent_feedback_logs(
         A tuple of (records, total) where *records* is ordered newest-first
         and *total* is the full count of log files on disk.
     """
-    log_root = Path(get_config().feedback_log_dir)
+    log_root = Path(_runtime_config().feedback_log_dir)
     if not log_root.exists():
         return [], 0
 
@@ -769,7 +807,7 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
 
         lock_key = await _get_feedback_lock_key(lora_id)
         lock = await _get_feedback_lock(lock_key)
-        cfg = get_config()
+        cfg = _runtime_config()
         lock_timeout = getattr(cfg, "feedback_lock_timeout_s", 120.0)
         await asyncio.wait_for(lock.acquire(), timeout=lock_timeout)
 
@@ -868,7 +906,10 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             slept
             and not woke
             and request.orchestration.wake_after
-            and (request.orchestration.wake_on_failure or getattr(get_config(), "feedback_wake_on_failure", True))
+            and (
+                request.orchestration.wake_on_failure
+                or getattr(_runtime_config(), "feedback_wake_on_failure", True)
+            )
         ):
             try:
                 await _vllm_post("/resume")
@@ -1005,7 +1046,7 @@ async def health_check() -> HealthResponse:
     status = "healthy"
 
     try:
-        worker = await get_training_engine(_get_engine_kind()).health()
+        worker = await get_training_engine(_get_engine_kind(), _runtime_config()).health()
     except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError, httpx.HTTPError) as e:
         worker = ServiceHealth(status="unhealthy", error=str(e))
         status = "degraded"
@@ -1113,4 +1154,21 @@ async def root():
 @modal.asgi_app()
 def fastapi_app():
     """Modal ASGI app entry point."""
+    configure_web_app(load_core_config("modal"))
     return web_app
+
+
+@hydra.main(version_base=None, config_path="core/configs", config_name="local")
+def main(cfg: LocalConfig | ModalConfig | TinkerConfig) -> None:
+    """Hydra entry point for running the API locally with explicit config profile."""
+    parsed_cfg = OmegaConf.to_object(cfg)
+    if not isinstance(parsed_cfg, (LocalConfig, ModalConfig, TinkerConfig)):
+        raise TypeError("Hydra did not produce a supported CLaaS runtime config")
+    configure_web_app(parsed_cfg)
+    host = os.environ.get("CLAAS_API_HOST", "0.0.0.0")
+    port = int(os.environ.get("CLAAS_API_PORT", "8080"))
+    uvicorn.run(web_app, host=host, port=port)
+
+
+if __name__ == "__main__":
+    main()

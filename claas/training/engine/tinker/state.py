@@ -27,14 +27,6 @@ class LoraEntry:
 
 
 def _state_path() -> str:
-    try:
-        from claas.core.config import TinkerConfig, get_config
-
-        cfg = get_config()
-        if isinstance(cfg, TinkerConfig):
-            return cfg.tinker_state_path
-    except (ImportError, ValueError):
-        pass
     return os.environ.get(
         "CLAAS_TINKER_STATE_PATH",
         os.path.join(os.path.expanduser("~"), ".claas", "tinker_state.json"),

@@ -1,4 +1,4 @@
-"""Tests for the centralized config module."""
+"""Tests for Hydra-backed core config loading."""
 
 from __future__ import annotations
 
@@ -8,146 +8,59 @@ from claas.core.config import (
     LocalConfig,
     ModalConfig,
     TinkerConfig,
-    _env_bool,
-    _env_set,
-    get_config,
+    load_core_config,
 )
 
-# ---------------------------------------------------------------------------
-# Factory returns correct subclass
-# ---------------------------------------------------------------------------
 
-class TestGetConfig:
-    def test_default_is_local(self):
-        cfg = get_config()
-        assert isinstance(cfg, LocalConfig)
-        assert cfg.mode == "local"
-
-    def test_local_mode(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_DISTILL_EXECUTION_MODE", "local")
-        cfg = get_config()
-        assert isinstance(cfg, LocalConfig)
-
-    def test_modal_mode(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_DISTILL_EXECUTION_MODE", "modal")
-        cfg = get_config()
-        assert isinstance(cfg, ModalConfig)
-
-    def test_tinker_mode(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_DISTILL_EXECUTION_MODE", "tinker")
-        cfg = get_config()
-        assert isinstance(cfg, TinkerConfig)
-
-    def test_unknown_mode_raises(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_DISTILL_EXECUTION_MODE", "bogus")
-        with pytest.raises(ValueError, match="bogus"):
-            get_config()
+def test_load_local_config() -> None:
+    cfg = load_core_config("local")
+    assert isinstance(cfg, LocalConfig)
+    assert cfg.mode == "local"
+    assert cfg.storage_backend == "local_fs"
+    assert cfg.vllm_base_url == "http://127.0.0.1:8000"
+    assert cfg.base_model_id == "Qwen/Qwen3-8B"
 
 
-# ---------------------------------------------------------------------------
-# Env var overrides
-# ---------------------------------------------------------------------------
-
-class TestEnvVarOverrides:
-    def test_feedback_log_dir(self, monkeypatch):
-        monkeypatch.setenv("FEEDBACK_LOG_DIR", "/tmp/logs")
-        cfg = get_config()
-        assert cfg.feedback_log_dir == "/tmp/logs"
-
-    def test_vllm_base_url_local(self, monkeypatch):
-        monkeypatch.setenv("VLLM_BASE_URL", "http://gpu:9000")
-        cfg = get_config()
-        assert isinstance(cfg, LocalConfig)
-        assert cfg.vllm_base_url == "http://gpu:9000"
-
-    def test_tinker_api_key(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_DISTILL_EXECUTION_MODE", "tinker")
-        monkeypatch.setenv("CLAAS_TINKER_API_KEY", "tk-secret")
-        cfg = get_config()
-        assert isinstance(cfg, TinkerConfig)
-        assert cfg.tinker_api_key == "tk-secret"
-
-    def test_allowed_models_override(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_ALLOWED_INIT_BASE_MODELS", "A/B,C/D")
-        cfg = get_config()
-        assert cfg.allowed_init_base_models == frozenset({"A/B", "C/D"})
-
-    def test_completion_cache_size_override(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_COMPLETION_CACHE_SIZE", "50")
-        cfg = get_config()
-        assert cfg.completion_cache_size == 50
-
-    def test_completion_cache_size_default(self):
-        cfg = get_config()
-        assert cfg.completion_cache_size == 100
+def test_load_modal_config() -> None:
+    cfg = load_core_config("modal")
+    assert isinstance(cfg, ModalConfig)
+    assert cfg.mode == "modal"
+    assert cfg.storage_backend == "modal_volume"
+    assert cfg.feedback_lock_timeout_s == 120.0
 
 
-# ---------------------------------------------------------------------------
-# Frozen enforcement
-# ---------------------------------------------------------------------------
-
-class TestFrozen:
-    def test_base_config_frozen(self):
-        cfg = get_config()
-        with pytest.raises(AttributeError):
-            cfg.mode = "modal"  # type: ignore[misc]
+def test_load_tinker_config() -> None:
+    cfg = load_core_config("tinker")
+    assert isinstance(cfg, TinkerConfig)
+    assert cfg.mode == "tinker"
+    assert cfg.storage_backend == "local_fs"
+    assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-120B"
+    assert cfg.tinker_state_path == "/data/tinker_state.json"
 
 
-# ---------------------------------------------------------------------------
-# Env helpers
-# ---------------------------------------------------------------------------
-
-class TestEnvBool:
-    @pytest.mark.parametrize("val,expected", [
-        ("1", True),
-        ("true", True),
-        ("True", True),
-        ("TRUE", True),
-        ("yes", True),
-        ("on", True),
-        ("0", False),
-        ("false", False),
-        ("no", False),
-        ("off", False),
-        ("random", False),
-    ])
-    def test_values(self, monkeypatch, val, expected):
-        monkeypatch.setenv("_TEST_BOOL", val)
-        assert _env_bool("_TEST_BOOL", False) is expected
-
-    def test_default_when_missing(self):
-        assert _env_bool("_NONEXISTENT_BOOL_VAR", True) is True
-        assert _env_bool("_NONEXISTENT_BOOL_VAR", False) is False
+def test_core_config_includes_shared_defaults() -> None:
+    cfg = load_core_config("local")
+    assert cfg.feedback_log_dir == "./data/feedback"
+    assert cfg.lora_root == "/loras"
+    assert "Qwen/Qwen3-8B" in cfg.allowed_init_base_models
 
 
-class TestEnvSet:
-    def test_comma_separated(self, monkeypatch):
-        monkeypatch.setenv("_TEST_SET", "a, b ,c")
-        result = _env_set("_TEST_SET", "default")
-        assert result == frozenset({"a", "b", "c"})
-
-    def test_empty_items_filtered(self, monkeypatch):
-        monkeypatch.setenv("_TEST_SET", "a,,b,")
-        result = _env_set("_TEST_SET", "default")
-        assert result == frozenset({"a", "b"})
-
-    def test_default(self):
-        result = _env_set("_NONEXISTENT_SET_VAR", "x,y")
-        assert result == frozenset({"x", "y"})
+def test_core_config_name_is_case_insensitive() -> None:
+    cfg = load_core_config("LOCAL")
+    assert isinstance(cfg, LocalConfig)
 
 
-# ---------------------------------------------------------------------------
-# Cache clearing
-# ---------------------------------------------------------------------------
+def test_unknown_core_config_raises() -> None:
+    with pytest.raises(ValueError, match="bogus"):
+        load_core_config("bogus")
 
-class TestCacheClearing:
-    def test_get_config_returns_same_instance(self):
-        a = get_config()
-        b = get_config()
-        assert a is b
 
-    def test_cache_clear_returns_new_instance(self):
-        a = get_config()
-        get_config.cache_clear()
-        b = get_config()
-        assert a is not b
+def test_load_core_config_returns_new_instances() -> None:
+    first = load_core_config("local")
+    second = load_core_config("local")
+    assert first is not second
+
+
+def test_core_config_includes_completion_cache_size() -> None:
+    cfg = load_core_config("local")
+    assert cfg.completion_cache_size == 100

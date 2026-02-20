@@ -7,12 +7,13 @@ Used for both ``local`` and ``modal`` execution modes.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request, Response
 
-from claas.core.config import get_config
+from claas.core.config import CoreConfig
 
 from .base import CompletionResult, InferenceBackend, TextCompletionResult
 from .helpers import build_chatml_prompt, coerce_content
@@ -41,15 +42,18 @@ def _get_vllm_client() -> httpx.AsyncClient:
 class VllmBackend(InferenceBackend):
     """Inference backend that forwards to an upstream vLLM instance."""
 
+    def __init__(self, cfg: CoreConfig | None = None) -> None:
+        self._cfg = cfg
+
     def _backend_url(self) -> str:
         """Return the upstream vLLM base URL (no trailing slash)."""
-        cfg = get_config()
-        url: str = getattr(cfg, "vllm_base_url", "http://127.0.0.1:8000")
+        cfg = self._cfg
+        url: str = getattr(cfg, "vllm_base_url", "http://127.0.0.1:8000") if cfg else "http://127.0.0.1:8000"
         return url.rstrip("/")
 
     def _api_key(self) -> str:
-        cfg = get_config()
-        return getattr(cfg, "vllm_api_key", "")
+        raw = os.environ.get("VLLM_API_KEY")
+        return raw.strip() if raw is not None else ""
 
     def _auth_headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}

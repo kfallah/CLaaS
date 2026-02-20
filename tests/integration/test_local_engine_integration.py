@@ -69,7 +69,6 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
     from claas.training.engine.local import engine as engine_module
 
     monkeypatch.setenv("CLAAS_LORA_ROOT", str(tmp_path))
-    monkeypatch.setenv("CLAAS_STORAGE_BACKEND", "local_fs")
     monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
 
     state = WorkerState()

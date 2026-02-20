@@ -1,0 +1,19 @@
+defaults:
+  - _core_local_schema
+  - _self_
+
+mode: local
+feedback_log_dir: ./data/feedback
+lora_root: /loras
+storage_backend: local_fs
+allowed_init_base_models:
+  - Qwen/Qwen3-8B
+vllm_base_url: http://127.0.0.1:8000
+feedback_lock_timeout_s: 120.0
+feedback_wake_on_failure: true
+feedback_min_free_vram_gb: 20.0
+feedback_sleep_verify_timeout_s: 30.0
+feedback_drain_timeout_s: 30.0
+base_model_id: Qwen/Qwen3-8B
+attn_implementation: flash_attention_2
+completion_cache_size: 100
