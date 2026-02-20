@@ -271,8 +271,15 @@ async def _build_sample_datum(
     multiple samples can be processed concurrently via ``asyncio.gather``.
     """
     # ── Tokenize prompt + response directly (matching local worker) ──
-    prompt_tokens: list[int] = tokenizer.encode(sample.prompt, add_special_tokens=True)
-    response_tokens: list[int] = tokenizer.encode(sample.response, add_special_tokens=False)
+    # Prefer pre-tokenized IDs when available to avoid decode/re-encode mismatch.
+    if sample.prompt_token_ids is not None:
+        prompt_tokens = list(sample.prompt_token_ids)
+    else:
+        prompt_tokens = tokenizer.encode(sample.prompt, add_special_tokens=True)
+    if sample.response_token_ids is not None:
+        response_tokens = list(sample.response_token_ids)
+    else:
+        response_tokens = tokenizer.encode(sample.response, add_special_tokens=False)
     full_tokens = prompt_tokens + response_tokens
     prompt_len = len(prompt_tokens)
     completion_len = len(response_tokens)
@@ -286,7 +293,9 @@ async def _build_sample_datum(
     student_logprobs = list(sample.rollout_logprobs)
 
     # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
-    teacher_messages = build_teacher_messages(sample.prompt, sample.feedback)
+    # Use clean user_prompt (without chat template decoration) when available.
+    teacher_prompt_source = sample.user_prompt or sample.prompt
+    teacher_messages = build_teacher_messages(teacher_prompt_source, sample.feedback)
     template_messages = teacher_messages_to_chat_template(teacher_messages)
     teacher_prompt_text = tokenizer.apply_chat_template(
         template_messages,

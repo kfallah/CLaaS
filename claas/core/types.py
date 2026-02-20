@@ -129,6 +129,18 @@ class DistillRequest(BaseModel):
         default_factory=TrainingConfig,
         description="Training configuration",
     )
+    prompt_token_ids: list[int] | None = Field(
+        default=None,
+        description="Pre-tokenized prompt token IDs (avoids decode/re-encode round-trip)",
+    )
+    response_token_ids: list[int] | None = Field(
+        default=None,
+        description="Pre-tokenized response token IDs (avoids decode/re-encode round-trip)",
+    )
+    user_prompt: str | None = Field(
+        default=None,
+        description="Clean user prompt for teacher construction (without chat template decoration)",
+    )
 
 
 class TeacherTokenLogprobs(BaseModel):
@@ -149,6 +161,9 @@ class DistillRequestPayload(BaseModel):
     training: TrainingConfig
     teacher_result: list[TeacherTokenLogprobs] | None = None
     save_in_place: bool = False
+    prompt_token_ids: list[int] | None = None
+    response_token_ids: list[int] | None = None
+    user_prompt: str | None = None
 
 
 class DistillBatchItem(BaseModel):
@@ -159,6 +174,9 @@ class DistillBatchItem(BaseModel):
     feedback: str
     rollout_logprobs: list[float]
     teacher_result: list[TeacherTokenLogprobs] | None = None
+    prompt_token_ids: list[int] | None = None
+    response_token_ids: list[int] | None = None
+    user_prompt: str | None = None
 
 
 class DistillBatchRequestPayload(BaseModel):

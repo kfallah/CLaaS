@@ -198,7 +198,7 @@ _CACHE_TTL_SECS = 3600  # 1 hour
 
 
 class _CompletionCacheEntry:
-    __slots__ = ("prompt", "response", "token_ids", "logprobs", "created_at")
+    __slots__ = ("prompt", "response", "token_ids", "logprobs", "prompt_token_ids", "created_at")
 
     def __init__(
         self,
@@ -206,11 +206,13 @@ class _CompletionCacheEntry:
         response: str,
         token_ids: list[int],
         logprobs: list[float] | None,
+        prompt_token_ids: list[int] | None = None,
     ) -> None:
         self.prompt = prompt
         self.response = response
         self.token_ids = token_ids
         self.logprobs = logprobs
+        self.prompt_token_ids = prompt_token_ids
         self.created_at = time.monotonic()
 
     def is_expired(self) -> bool:
@@ -378,8 +380,9 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
 
     # Cache raw completion for training pipeline retrieval
     tokenizer = _holder.tokenizer
-    raw_completion_text = tokenizer.decode(seq.tokens, skip_special_tokens=False)
+    raw_completion_text = tokenizer.decode(seq.tokens, skip_special_tokens=True)
     prompt_text = tokenizer.decode(model_input.to_ints(), skip_special_tokens=False)
+    prompt_token_id_list = list(model_input.to_ints())
     content_hash = hashlib.sha256(_strip_thinking(content).encode("utf-8")).hexdigest()
     _completion_cache.put(
         content_hash,
@@ -388,6 +391,7 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
             response=raw_completion_text,
             token_ids=list(seq.tokens),
             logprobs=list(seq.logprobs) if seq.logprobs is not None else None,
+            prompt_token_ids=prompt_token_id_list,
         ),
     )
 
@@ -502,6 +506,7 @@ async def get_raw_completion(content_hash: str) -> dict[str, object]:
         "response": entry.response,
         "token_ids": entry.token_ids,
         "logprobs": entry.logprobs,
+        "prompt_token_ids": entry.prompt_token_ids,
     }
 
 

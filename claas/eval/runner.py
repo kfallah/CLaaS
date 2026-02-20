@@ -102,6 +102,9 @@ async def _submit_feedback(
                 feedback=s.feedback,
                 rollout_logprobs=s.rollout_logprobs,
                 training=TrainingConfig(teacher_mode="self"),
+                prompt_token_ids=s.prompt_token_ids,
+                response_token_ids=s.response_token_ids,
+                user_prompt=s.user_prompt,
             )
             for s in samples
         ],
@@ -171,7 +174,7 @@ async def _generate_response(
 async def _fetch_cached_completion(
     proxy_url: str,
     visible_content: str,
-) -> tuple[str, str, list[float]]:
+) -> tuple[str, str, list[float], list[int] | None, list[int] | None]:
     """Fetch the cached raw completion from the proxy by content hash.
 
     The proxy caches ``{prompt, response, logprobs}`` keyed by
@@ -180,7 +183,8 @@ async def _fetch_cached_completion(
     cache key.  We apply ``strip_thinking`` defensively in case the caller
     passes un-stripped text.
 
-    Returns ``(real_prompt, raw_response, rollout_logprobs)``.
+    Returns ``(real_prompt, raw_response, rollout_logprobs,
+    response_token_ids, prompt_token_ids)``.
     """
     content_hash = hashlib.sha256(
         strip_thinking(visible_content).encode("utf-8"),
@@ -193,14 +197,20 @@ async def _fetch_cached_completion(
         resp.raise_for_status()
 
     data = resp.json()
-    return data["prompt"], data["response"], data["logprobs"] or []
+    return (
+        data["prompt"],
+        data["response"],
+        data["logprobs"] or [],
+        data.get("token_ids"),
+        data.get("prompt_token_ids"),
+    )
 
 
 async def _generate_and_collect(
     config: HarnessConfig,
     model: str,
     prompt: str,
-) -> tuple[str, str, str, list[float]]:
+) -> tuple[str, str, str, list[float], list[int] | None, list[int] | None]:
     """Generate via OpenClaw, then fetch cached raw completion from the proxy.
 
     When ``config.openclaw_url`` is set, generation routes through the OpenClaw
@@ -209,15 +219,16 @@ async def _generate_and_collect(
     (with the full OpenClaw-templated prompt and generation-time logprobs)
     keyed by ``SHA-256(visible_content)``.
 
-    Returns ``(visible_content, real_prompt, raw_response, rollout_logprobs)``.
+    Returns ``(visible_content, real_prompt, raw_response, rollout_logprobs,
+    response_token_ids, prompt_token_ids)``.
     """
     assert config.proxy_url is not None
     content = await _generate_response(config, model, prompt, temperature=0.7)
 
-    real_prompt, raw_response, rollout_lps = await _fetch_cached_completion(
-        config.proxy_url, content,
+    real_prompt, raw_response, rollout_lps, resp_token_ids, prompt_token_ids = (
+        await _fetch_cached_completion(config.proxy_url, content)
     )
-    return content, real_prompt, raw_response, rollout_lps
+    return content, real_prompt, raw_response, rollout_lps, resp_token_ids, prompt_token_ids
 
 
 async def _fetch_rollout_logprobs_vllm(
@@ -557,7 +568,7 @@ async def run_preference_experiment(
             if config.mode == "tinker":
                 # Tinker mode: generate via OpenClaw, fetch cached completion
                 try:
-                    content, real_prompt, raw_response, rollout_lps = (
+                    content, real_prompt, raw_response, rollout_lps, resp_tids, prompt_tids = (
                         await _generate_and_collect(config, vllm_model, prompt)
                     )
                     if response_text is None:
@@ -567,6 +578,9 @@ async def run_preference_experiment(
                         response=raw_response,
                         feedback=feedback_str,
                         rollout_logprobs=rollout_lps,
+                        prompt_token_ids=prompt_tids,
+                        response_token_ids=resp_tids,
+                        user_prompt=prompt,
                     ))
                 except (httpx.HTTPError, KeyError, ValueError) as e:
                     logger.warning(

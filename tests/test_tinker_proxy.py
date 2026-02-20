@@ -636,14 +636,14 @@ class TestCacheEndToEnd:
     # --- Eval path simulation ---
 
     def test_eval_fetch_cached_completion_qwen3(self, proxy_client):
-        """Full round-trip: proxy strips thinking, cache returns it back.
+        """Full round-trip: proxy strips thinking, cache returns clean text.
 
         Flow:
         1. Renderer produces content with orphaned </think> (Qwen3 behavior)
         2. Real proxy code strips thinking → API returns answer-only
-        3. Caller hashes the visible content (with defensive strip_thinking)
-        4. Cache lookup returns the RAW response (with <think> block) +
-           the full templated prompt + generation-time logprobs
+        3. Response text is decoded with skip_special_tokens=True (no <think>)
+        4. Cache lookup returns the clean response text, the full templated
+           prompt, generation-time logprobs, and prompt_token_ids
         """
         import hashlib
 
@@ -655,7 +655,7 @@ class TestCacheEndToEnd:
         mock_resp.sequences[0].logprobs = [-0.5, -0.4, -0.6]
 
         # Tokenizer.decode is called twice in the cache path:
-        #   1. decode(seq.tokens, skip_special_tokens=False)  → raw response
+        #   1. decode(seq.tokens, skip_special_tokens=True)  → clean response
         #   2. decode(model_input.to_ints(), skip_special_tokens=False)  → templated prompt
         tokenizer = MagicMock()
         tokenizer.encode.return_value = [1, 2, 3]
@@ -664,14 +664,19 @@ class TestCacheEndToEnd:
             "<|im_end|>\n<|im_start|>user\ntest<|im_end|>\n"
             "<|im_start|>assistant\n"
         )
-        raw_response = "<think>thinking about it</think>\n\nHere is my response"
-        tokenizer.decode.side_effect = [raw_response, templated_prompt]
+        clean_response = "thinking about it\n\nHere is my response"
+        tokenizer.decode.side_effect = [clean_response, templated_prompt]
+
+        mock_input = MagicMock()
+        mock_input.length = 5
+        mock_input.to_ints.return_value = [10, 20, 30, 40, 50]
 
         # Renderer simulates Qwen3: <think> consumed as special token,
         # orphaned </think> remains in parsed content
         renderer = _make_mock_renderer(
             "thinking about it\n</think>\n\nHere is my response",
         )
+        renderer.build_generation_prompt.return_value = mock_input
         _patch_holder(_holder, sampler, tokenizer, renderer)
 
         # Step 1: POST /v1/chat/completions — proxy strips thinking
@@ -686,7 +691,6 @@ class TestCacheEndToEnd:
         assert "</think>" not in visible
 
         # Step 2: GET /v1/completions/raw — eval runner hashes visible content
-        # (strip_thinking is a no-op here since proxy already stripped)
         content_hash = hashlib.sha256(visible.encode("utf-8")).hexdigest()
         raw_resp = proxy_client.get(
             "/v1/completions/raw",
@@ -700,11 +704,14 @@ class TestCacheEndToEnd:
         assert "<|im_start|>system" in data["prompt"]
         assert data["prompt"] != "test"
 
-        # Cached response is the RAW output WITH thinking (for training)
-        assert data["response"] == raw_response
-        assert "<think>" in data["response"]
+        # Cached response is decoded with skip_special_tokens=True (clean text)
+        assert data["response"] == clean_response
+        assert "<think>" not in data["response"]
 
         assert data["logprobs"] == pytest.approx([-0.5, -0.4, -0.6])
+
+        # prompt_token_ids are returned from the cache
+        assert data["prompt_token_ids"] == [10, 20, 30, 40, 50]
 
     def test_eval_fetch_cached_completion_gptoss(self, proxy_client):
         """Full round-trip: proxy extracts final channel, cache returns raw.
@@ -892,3 +899,44 @@ class TestChatScoreEndpoint:
             json={"completion": "Hello!"},
         )
         assert resp.status_code == 422
+
+
+class TestPromptTokenIdsInCache:
+    """Verify that prompt_token_ids are stored and returned from the cache."""
+
+    def test_raw_completion_returns_prompt_token_ids(self, proxy_client):
+        """GET /v1/completions/raw returns prompt_token_ids from the cache."""
+        import hashlib
+
+        from claas.proxy.tinker_inference_proxy import _completion_cache, _holder
+
+        _completion_cache._store.clear()
+
+        sampler, mock_resp = _make_mock_sampler()
+        mock_resp.sequences[0].logprobs = [-0.1, -0.2, -0.3]
+
+        tokenizer = _make_mock_tokenizer()
+
+        mock_input = MagicMock()
+        mock_input.length = 3
+        mock_input.to_ints.return_value = [100, 200, 300]
+
+        renderer = _make_mock_renderer("Hello world")
+        renderer.build_generation_prompt.return_value = mock_input
+        _patch_holder(_holder, sampler, tokenizer, renderer)
+
+        api_resp = proxy_client.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "Hi"}]},
+        )
+        assert api_resp.status_code == 200
+        visible = api_resp.json()["choices"][0]["message"]["content"]
+
+        content_hash = hashlib.sha256(visible.encode("utf-8")).hexdigest()
+        raw_resp = proxy_client.get(
+            "/v1/completions/raw",
+            params={"content_hash": content_hash},
+        )
+        assert raw_resp.status_code == 200
+        data = raw_resp.json()
+        assert data["prompt_token_ids"] == [100, 200, 300]

@@ -515,6 +515,9 @@ async def distill(request: DistillRequest) -> DistillResponse:
                     feedback=single_payload.feedback,
                     rollout_logprobs=single_payload.rollout_logprobs,
                     teacher_result=single_payload.teacher_result,
+                    prompt_token_ids=single_payload.prompt_token_ids,
+                    response_token_ids=single_payload.response_token_ids,
+                    user_prompt=single_payload.user_prompt,
                 )
             ],
         )
@@ -595,6 +598,9 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                         response=req.response,
                         feedback=req.feedback,
                         rollout_logprobs=req.rollout_logprobs,
+                        prompt_token_ids=req.prompt_token_ids,
+                        response_token_ids=req.response_token_ids,
+                        user_prompt=req.user_prompt,
                     )
                 )
 
@@ -708,6 +714,9 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                     response=req.response,
                     feedback=req.feedback,
                     rollout_logprobs=req.rollout_logprobs,
+                    prompt_token_ids=req.prompt_token_ids,
+                    response_token_ids=req.response_token_ids,
+                    user_prompt=req.user_prompt,
                 )
                 for req in batch_requests
             ],
