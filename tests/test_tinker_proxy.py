@@ -773,7 +773,7 @@ class TestCacheEndToEnd:
 
 
 class TestChatScoreEndpoint:
-    """Tests for the /v1/score/chat endpoint that applies chat templates."""
+    """Tests for /v1/score with messages (chat template path)."""
 
     def _setup_holder_with_chat_template(self, holder, logprobs_result):
         """Set up holder with a tokenizer that supports apply_chat_template."""
@@ -810,7 +810,7 @@ class TestChatScoreEndpoint:
         )
 
         resp = proxy_client.post(
-            "/v1/score/chat",
+            "/v1/score",
             json={
                 "messages": [
                     {"role": "system", "content": "You are helpful."},
@@ -838,7 +838,7 @@ class TestChatScoreEndpoint:
         )
 
         resp = proxy_client.post(
-            "/v1/score/chat",
+            "/v1/score",
             json={
                 "messages": [{"role": "user", "content": "Hi"}],
                 "completion": "Hello!",
@@ -864,7 +864,7 @@ class TestChatScoreEndpoint:
         _patch_holder(_holder, mock_sampler, mock_tokenizer, _make_mock_renderer())
 
         resp = proxy_client.post(
-            "/v1/score/chat",
+            "/v1/score",
             json={
                 "messages": [{"role": "user", "content": "Hi"}],
                 "completion": "",
@@ -881,14 +881,14 @@ class TestChatScoreEndpoint:
         """Missing messages or completion should return 422."""
         # Missing completion
         resp = proxy_client.post(
-            "/v1/score/chat",
+            "/v1/score",
             json={"messages": [{"role": "user", "content": "Hi"}]},
         )
         assert resp.status_code == 422
 
         # Missing messages
         resp = proxy_client.post(
-            "/v1/score/chat",
+            "/v1/score",
             json={"completion": "Hello!"},
         )
         assert resp.status_code == 422
