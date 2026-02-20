@@ -11,7 +11,7 @@ WORKDIR /app
 COPY . /app
 
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch && \
-    pip install --no-cache-dir ".[tinker]" uvicorn
+    pip install --no-cache-dir ".[tinker]" uvicorn httpx
 RUN groupadd --gid 10002 tinker && \
     useradd --uid 10002 --gid 10002 --create-home --shell /usr/sbin/nologin tinker && \
     chown -R tinker:tinker /app
@@ -20,4 +20,4 @@ USER tinker
 
 EXPOSE 8000
 
-ENTRYPOINT ["uvicorn", "claas.proxy.tinker_inference_proxy:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["uvicorn", "claas.proxy.inference_proxy:app", "--host", "0.0.0.0", "--port", "8000"]

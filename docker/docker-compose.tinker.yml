@@ -5,8 +5,9 @@ services:
   tinker-proxy:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tinker-proxy
+      dockerfile: docker/Dockerfile.proxy
     environment:
+      - CLAAS_PROXY_MODE=tinker
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
       - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
     ports:

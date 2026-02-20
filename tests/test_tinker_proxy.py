@@ -1,4 +1,4 @@
-"""Tests for the Tinker inference proxy FastAPI endpoints.
+"""Tests for the inference proxy FastAPI endpoints (Tinker mode).
 
 The tinker SDK is available but we mock the ServiceClient/SamplingClient
 so tests don't need a real Tinker API key or GPU.
@@ -6,9 +6,13 @@ so tests don't need a real Tinker API key or GPU.
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# Force tinker mode so that tinker-only endpoints are registered at import time.
+os.environ["CLAAS_PROXY_MODE"] = "tinker"
 
 tinker = pytest.importorskip("tinker")  # noqa: F841
 
@@ -17,8 +21,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _reset_holder():
-    """Reset the proxy singleton between tests."""
-    from claas.proxy.tinker_inference_proxy import _holder
+    """Reset the proxy singleton and config cache between tests."""
+    from claas.core.config import get_proxy_config
+    from claas.proxy.inference_proxy import _holder
+
+    get_proxy_config.cache_clear()
 
     _holder._service = None
     _holder._sampler = None
@@ -32,11 +39,13 @@ def _reset_holder():
     _holder._renderer = None
     _holder._model_path = None
 
+    get_proxy_config.cache_clear()
+
 
 @pytest.fixture()
 def proxy_client():
     """TestClient for the proxy FastAPI app."""
-    from claas.proxy.tinker_inference_proxy import app
+    from claas.proxy.inference_proxy import app
 
     return TestClient(app)
 
@@ -60,7 +69,7 @@ class TestSamplerStatus:
         assert "base_model" in body
 
     def test_status_after_manual_set(self, proxy_client):
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.proxy.inference_proxy import _holder
 
         _holder._model_path = "tinker://run-123/weights/step-1"
         resp = proxy_client.get("/v1/sampler/status")
@@ -70,7 +79,7 @@ class TestSamplerStatus:
 
 class TestSamplerRefresh:
     def test_refresh_calls_holder(self, proxy_client):
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.proxy.inference_proxy import _holder
 
         with patch.object(_holder, "refresh") as mock_refresh:
             resp = proxy_client.post(
@@ -85,7 +94,7 @@ class TestHolderInternals:
     """Test _ensure() and refresh() with mocked Tinker SDK."""
 
     def test_ensure_initializes_once(self):
-        from claas.proxy.tinker_inference_proxy import _SamplerHolder
+        from claas.proxy.inference_proxy import _SamplerHolder
 
         holder = _SamplerHolder()
         mock_sampler = MagicMock()
@@ -93,9 +102,9 @@ class TestHolderInternals:
         mock_service = MagicMock()
         mock_service.create_sampling_client.return_value = mock_sampler
 
-        with patch("claas.proxy.tinker_inference_proxy.tinker.ServiceClient", return_value=mock_service), \
-             patch("claas.proxy.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
-             patch("claas.proxy.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
+        with patch("tinker.ServiceClient", return_value=mock_service), \
+             patch("tinker_cookbook.model_info.get_recommended_renderer_name", return_value="chatml"), \
+             patch("tinker_cookbook.renderers.get_renderer", return_value=MagicMock()):
             # First call initializes
             holder._ensure()
             assert holder._sampler is mock_sampler
@@ -107,7 +116,7 @@ class TestHolderInternals:
             mock_service.create_sampling_client.assert_not_called()
 
     def test_refresh_with_model_path(self):
-        from claas.proxy.tinker_inference_proxy import _SamplerHolder
+        from claas.proxy.inference_proxy import _SamplerHolder
 
         holder = _SamplerHolder()
         mock_sampler = MagicMock()
@@ -116,8 +125,8 @@ class TestHolderInternals:
         mock_service.create_sampling_client.return_value = mock_sampler
         holder._service = mock_service
 
-        with patch("claas.proxy.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
-             patch("claas.proxy.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
+        with patch("tinker_cookbook.model_info.get_recommended_renderer_name", return_value="chatml"), \
+             patch("tinker_cookbook.renderers.get_renderer", return_value=MagicMock()):
             holder.refresh(model_path="tinker://run-1/weights/step-1")
 
         assert holder._model_path == "tinker://run-1/weights/step-1"
@@ -126,7 +135,7 @@ class TestHolderInternals:
         )
 
     def test_refresh_without_model_path_uses_base(self):
-        from claas.proxy.tinker_inference_proxy import _base_model, _SamplerHolder
+        from claas.proxy.inference_proxy import _base_model, _SamplerHolder
 
         holder = _SamplerHolder()
         mock_sampler = MagicMock()
@@ -135,8 +144,8 @@ class TestHolderInternals:
         mock_service.create_sampling_client.return_value = mock_sampler
         holder._service = mock_service
 
-        with patch("claas.proxy.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
-             patch("claas.proxy.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
+        with patch("tinker_cookbook.model_info.get_recommended_renderer_name", return_value="chatml"), \
+             patch("tinker_cookbook.renderers.get_renderer", return_value=MagicMock()):
             holder.refresh(model_path=None)
 
         assert holder._model_path is None
@@ -145,7 +154,7 @@ class TestHolderInternals:
         )
 
     def test_refresh_creates_service_if_missing(self):
-        from claas.proxy.tinker_inference_proxy import _SamplerHolder
+        from claas.proxy.inference_proxy import _SamplerHolder
 
         holder = _SamplerHolder()
         assert holder._service is None
@@ -155,9 +164,9 @@ class TestHolderInternals:
         mock_service = MagicMock()
         mock_service.create_sampling_client.return_value = mock_sampler
 
-        with patch("claas.proxy.tinker_inference_proxy.tinker.ServiceClient", return_value=mock_service), \
-             patch("claas.proxy.tinker_inference_proxy.model_info.get_recommended_renderer_name", return_value="chatml"), \
-             patch("claas.proxy.tinker_inference_proxy.get_renderer", return_value=MagicMock()):
+        with patch("tinker.ServiceClient", return_value=mock_service), \
+             patch("tinker_cookbook.model_info.get_recommended_renderer_name", return_value="chatml"), \
+             patch("tinker_cookbook.renderers.get_renderer", return_value=MagicMock()):
             holder.refresh(model_path="tinker://x")
 
         assert holder._service is mock_service
@@ -210,7 +219,7 @@ def _patch_holder(holder, sampler, tokenizer, renderer):
 
 class TestChatCompletions:
     def test_non_streaming(self, proxy_client):
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.proxy.inference_proxy import _holder
 
         sampler, _ = _make_mock_sampler()
         tokenizer = _make_mock_tokenizer()
@@ -233,7 +242,7 @@ class TestChatCompletions:
         assert body["usage"]["completion_tokens"] == 3
 
     def test_streaming(self, proxy_client):
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.proxy.inference_proxy import _holder
 
         sampler, _ = _make_mock_sampler()
         tokenizer = _make_mock_tokenizer()
@@ -255,7 +264,7 @@ class TestChatCompletions:
 
 class TestCompletions:
     def test_non_streaming(self, proxy_client):
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.proxy.inference_proxy import _holder
 
         sampler, _ = _make_mock_sampler()
         tokenizer = _make_mock_tokenizer()
@@ -273,7 +282,7 @@ class TestCompletions:
         assert body["choices"][0]["finish_reason"] == "stop"
 
     def test_streaming(self, proxy_client):
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.proxy.inference_proxy import _holder
 
         sampler, _ = _make_mock_sampler()
         tokenizer = _make_mock_tokenizer()
@@ -302,12 +311,12 @@ class TestHelperFunctions:
         ],
     )
     def test_coerce_content(self, raw, expected):
-        from claas.proxy.tinker_inference_proxy import _coerce_content
+        from claas.proxy.inference_proxy import _coerce_content
 
         assert _coerce_content(raw) == expected
 
     def test_bounded_int_and_float(self):
-        from claas.proxy.tinker_inference_proxy import _bounded_float, _bounded_int
+        from claas.proxy.inference_proxy import _bounded_float, _bounded_int
 
         assert _bounded_int(None, default=10, minimum=1, maximum=100) == 10
         assert _bounded_int(999, default=10, minimum=1, maximum=100) == 100
@@ -319,7 +328,7 @@ class TestHelperFunctions:
 
 class TestScoreEndpoint:
     def test_score_returns_logprobs(self, proxy_client):
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.proxy.inference_proxy import _holder
 
         # Set up mock sampler with compute_logprobs
         mock_sampler = MagicMock()
@@ -358,7 +367,7 @@ class TestScoreEndpoint:
         assert body["logprob_sum"] == pytest.approx(-0.8)
 
     def test_score_handles_none_logprobs(self, proxy_client):
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.proxy.inference_proxy import _holder
 
         mock_sampler = MagicMock()
         # None in completion region should become 0.0
@@ -399,7 +408,7 @@ class TestCompletionCache:
         """Helper: populate cache with content, look up by hash of visible_text."""
         import hashlib
 
-        from claas.proxy.tinker_inference_proxy import _completion_cache, _holder
+        from claas.proxy.inference_proxy import _completion_cache, _holder
 
         # Clear cache between sub-tests
         _completion_cache._store.clear()
@@ -452,7 +461,7 @@ class TestCompletionCache:
         """Hash of full content (with thinking) should NOT match the cache."""
         import hashlib
 
-        from claas.proxy.tinker_inference_proxy import _completion_cache, _holder
+        from claas.proxy.inference_proxy import _completion_cache, _holder
 
         _completion_cache._store.clear()
         content = "thinking\n</think>\n\nThe answer"
@@ -480,7 +489,7 @@ class TestContentStripping:
 
     def test_orphaned_think_tag_stripped_from_response(self, proxy_client):
         """Renderer returns content with orphaned </think>; response should be answer-only."""
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.proxy.inference_proxy import _holder
 
         raw_content = "Some internal reasoning\n</think>\n\nThe actual answer"
         sampler, _ = _make_mock_sampler()
@@ -498,7 +507,7 @@ class TestContentStripping:
 
     def test_proper_think_block_stripped_from_response(self, proxy_client):
         """Proper <think>...</think> block is stripped from response content."""
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.proxy.inference_proxy import _holder
 
         raw_content = "<think>Let me think about this...</think>Here is my answer"
         sampler, _ = _make_mock_sampler()
@@ -516,7 +525,7 @@ class TestContentStripping:
 
     def test_no_thinking_content_unchanged(self, proxy_client):
         """Content without thinking blocks is returned as-is."""
-        from claas.proxy.tinker_inference_proxy import _holder
+        from claas.proxy.inference_proxy import _holder
 
         raw_content = "Just a plain answer"
         sampler, _ = _make_mock_sampler()
@@ -540,7 +549,7 @@ class TestCacheEndToEnd:
         """Generate via /v1/chat/completions and return (api_content, cache_resp)."""
         import hashlib
 
-        from claas.proxy.tinker_inference_proxy import _completion_cache, _holder, _strip_thinking
+        from claas.proxy.inference_proxy import _completion_cache, _holder, _strip_thinking
 
         _completion_cache._store.clear()
 
@@ -640,14 +649,14 @@ class TestCacheEndToEnd:
 
         Flow:
         1. Renderer produces content with orphaned </think> (Qwen3 behavior)
-        2. Real proxy code strips thinking → API returns answer-only
+        2. Real proxy code strips thinking -> API returns answer-only
         3. Caller hashes the visible content (with defensive strip_thinking)
         4. Cache lookup returns the RAW response (with <think> block) +
            the full templated prompt + generation-time logprobs
         """
         import hashlib
 
-        from claas.proxy.tinker_inference_proxy import _completion_cache, _holder
+        from claas.proxy.inference_proxy import _completion_cache, _holder
 
         _completion_cache._store.clear()
 
@@ -655,8 +664,8 @@ class TestCacheEndToEnd:
         mock_resp.sequences[0].logprobs = [-0.5, -0.4, -0.6]
 
         # Tokenizer.decode is called twice in the cache path:
-        #   1. decode(seq.tokens, skip_special_tokens=False)  → raw response
-        #   2. decode(model_input.to_ints(), skip_special_tokens=False)  → templated prompt
+        #   1. decode(seq.tokens, skip_special_tokens=False)  -> raw response
+        #   2. decode(model_input.to_ints(), skip_special_tokens=False)  -> templated prompt
         tokenizer = MagicMock()
         tokenizer.encode.return_value = [1, 2, 3]
         templated_prompt = (
@@ -711,14 +720,14 @@ class TestCacheEndToEnd:
 
         Flow:
         1. Renderer produces GPT-OSS multi-channel output (analysis + final)
-        2. Real proxy code extracts final channel → API returns "GPT-OSS says hello"
+        2. Real proxy code extracts final channel -> API returns "GPT-OSS says hello"
         3. Caller hashes the visible content
         4. Cache lookup returns the RAW response (with analysis channel) +
            the full templated prompt + generation-time logprobs
         """
         import hashlib
 
-        from claas.proxy.tinker_inference_proxy import _completion_cache, _holder
+        from claas.proxy.inference_proxy import _completion_cache, _holder
 
         _completion_cache._store.clear()
 

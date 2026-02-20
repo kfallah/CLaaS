@@ -1,13 +1,22 @@
-"""OpenAI-compatible inference proxy backed by Tinker's SamplingClient.
+"""Unified OpenAI-compatible inference proxy (Tinker SDK or local vLLM).
 
-Exposes ``/v1/chat/completions`` and ``/v1/completions`` so that any
-OpenAI-compatible client (e.g. OpenClaw) can talk to a Tinker-hosted model
-without a local GPU.
+Exposes ``/v1/chat/completions``, ``/v1/completions``, and
+``/v1/completions/raw`` so that any OpenAI-compatible client (e.g. OpenClaw)
+can talk to a model without caring whether it is hosted on Tinker or a local
+vLLM instance.
+
+The proxy mode is determined by the ``CLAAS_PROXY_MODE`` env var (falls back
+to ``CLAAS_DISTILL_EXECUTION_MODE``, default ``"local"``).
 
 Usage::
 
-    TINKER_API_KEY=... CLAAS_TINKER_BASE_MODEL=gpt-oss/GPT-OSS-120B \
-        uvicorn claas.proxy.tinker_inference_proxy:app --host 0.0.0.0 --port 8000
+    # Tinker mode
+    CLAAS_PROXY_MODE=tinker TINKER_API_KEY=... CLAAS_TINKER_BASE_MODEL=gpt-oss/GPT-OSS-120B \
+        uvicorn claas.proxy.inference_proxy:app --host 0.0.0.0 --port 8000
+
+    # Local / vLLM mode
+    CLAAS_PROXY_MODE=local CLAAS_PROXY_VLLM_BACKEND_URL=http://vllm:8000 \
+        uvicorn claas.proxy.inference_proxy:app --host 0.0.0.0 --port 8000
 """
 
 from __future__ import annotations
@@ -25,13 +34,10 @@ from collections import OrderedDict
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-import tinker
-from fastapi import FastAPI
+import httpx
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from tinker import types as T
-from tinker_cookbook import model_info
-from tinker_cookbook.renderers import Message, Renderer, get_renderer
 
 from claas.core.config import get_proxy_config
 
@@ -42,7 +48,16 @@ if TYPE_CHECKING:
 else:
     PreTrainedTokenizerBase = Any
 
-app = FastAPI(title="CLaaS Tinker Inference Proxy")
+app = FastAPI(title="CLaaS Inference Proxy")
+
+
+# ---------------------------------------------------------------------------
+# Mode helpers
+# ---------------------------------------------------------------------------
+
+def _mode() -> str:
+    """Return ``"tinker"`` or ``"local"``."""
+    return get_proxy_config().mode
 
 
 def _base_model() -> str:
@@ -77,9 +92,11 @@ class _TokenizerChatRenderer:
     def __init__(self, tokenizer: PreTrainedTokenizerBase) -> None:
         self._tokenizer = tokenizer
 
-    def build_generation_prompt(self, messages: list[Message]) -> T.ModelInput:
+    def build_generation_prompt(self, messages: list[dict[str, str]]) -> Any:
         dicts = [{"role": m["role"], "content": m.get("content", "")} for m in messages]
         token_ids = _apply_chat_template_ids(self._tokenizer, dicts)
+        # Lazy import — only available in Tinker mode
+        import tinker.types as T  # noqa: N812
         return T.ModelInput.from_ints(token_ids)
 
     def parse_response(self, tokens: list[int]) -> tuple[dict[str, str], list[Any]]:
@@ -96,16 +113,19 @@ class _TokenizerChatRenderer:
 
 
 # ---------------------------------------------------------------------------
-# Lazy singleton for the sampling client
+# Lazy singleton for the Tinker sampling client (Tinker mode only)
 # ---------------------------------------------------------------------------
 
 def _make_renderer(
     base_model: str, tokenizer: PreTrainedTokenizerBase
-) -> Renderer | _TokenizerChatRenderer:
+) -> Any:
     """Return a tinker_cookbook renderer, falling back to the tokenizer's chat template."""
+    from tinker_cookbook import model_info
+    from tinker_cookbook.renderers import get_renderer
+
     try:
         renderer_name = model_info.get_recommended_renderer_name(base_model)
-        return get_renderer(renderer_name, tokenizer=tokenizer)  # type: ignore[arg-type]
+        return get_renderer(renderer_name, tokenizer=tokenizer)
     except (ValueError, KeyError):
         logger.warning(
             "No tinker_cookbook renderer for %s; falling back to tokenizer chat template",
@@ -115,13 +135,16 @@ def _make_renderer(
 
 
 class _SamplerHolder:
-    """Holds a lazily-initialized Tinker SamplingClient and tokenizer."""
+    """Holds a lazily-initialized Tinker SamplingClient and tokenizer.
+
+    Only used in Tinker mode.
+    """
 
     def __init__(self) -> None:
-        self._service: tinker.ServiceClient | None = None
-        self._sampler: tinker.SamplingClient | None = None
+        self._service: Any | None = None
+        self._sampler: Any | None = None
         self._tokenizer: PreTrainedTokenizerBase | None = None
-        self._renderer: Renderer | _TokenizerChatRenderer | None = None
+        self._renderer: Any | None = None
         self._model_path: str | None = None
         self._lock = threading.Lock()
 
@@ -133,6 +156,8 @@ class _SamplerHolder:
                 and self._renderer is not None
             ):
                 return
+            import tinker
+
             proxy_cfg = get_proxy_config()
             api_key = proxy_cfg.tinker_api_key
             if api_key:
@@ -145,7 +170,7 @@ class _SamplerHolder:
             self._renderer = _make_renderer(base_model, self._tokenizer)
 
     @property
-    def sampler(self) -> tinker.SamplingClient:
+    def sampler(self) -> Any:
         self._ensure()
         assert self._sampler is not None
         return self._sampler
@@ -157,13 +182,15 @@ class _SamplerHolder:
         return self._tokenizer
 
     @property
-    def renderer(self) -> Renderer | _TokenizerChatRenderer:
+    def renderer(self) -> Any:
         self._ensure()
         assert self._renderer is not None
         return self._renderer
 
     def refresh(self, model_path: str | None = None) -> None:
         """Refresh the sampling client (e.g. after a distillation step)."""
+        import tinker
+
         with self._lock:
             proxy_cfg = get_proxy_config()
             base_model = proxy_cfg.tinker_base_model
@@ -185,7 +212,7 @@ _holder = _SamplerHolder()
 
 
 # ---------------------------------------------------------------------------
-# Raw completion cache
+# Raw completion cache (shared by both modes)
 # ---------------------------------------------------------------------------
 
 _CACHE_TTL_SECS = 3600  # 1 hour
@@ -263,11 +290,11 @@ def _strip_thinking(text: str) -> str:
 
 
 async def _sample_async(
-    sampler: tinker.SamplingClient,
-    prompt: T.ModelInput,
-    sampling_params: T.SamplingParams,
-) -> T.SampleResponse:
-    """Run blocking sampling in a worker thread to avoid blocking the event loop."""
+    sampler: Any,
+    prompt: Any,
+    sampling_params: Any,
+) -> Any:
+    """Run blocking Tinker sampling in a worker thread."""
     return await asyncio.to_thread(
         lambda: sampler.sample(
             prompt=prompt,
@@ -275,6 +302,101 @@ async def _sample_async(
             sampling_params=sampling_params,
         ).result()
     )
+
+
+# ---------------------------------------------------------------------------
+# Local mode: forward to vLLM
+# ---------------------------------------------------------------------------
+
+_vllm_client: httpx.AsyncClient | None = None
+
+
+def _get_vllm_client() -> httpx.AsyncClient:
+    global _vllm_client  # noqa: PLW0603
+    if _vllm_client is None:
+        _vllm_client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
+    return _vllm_client
+
+
+def _vllm_backend_url() -> str:
+    """Return the upstream vLLM base URL (no trailing slash)."""
+    return get_proxy_config().vllm_backend_url.rstrip("/")
+
+
+def _vllm_api_key() -> str:
+    return get_proxy_config().vllm_api_key
+
+
+def _build_chatml_prompt(messages: list[dict[str, str]]) -> str:
+    """Reconstruct ChatML prompt from messages for cache storage."""
+    parts: list[str] = []
+    for m in messages:
+        parts.append(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>")
+    parts.append("<|im_start|>assistant\n")
+    return "\n".join(parts)
+
+
+async def _forward_to_vllm(req: ChatCompletionRequest) -> dict[str, Any]:
+    """Forward a chat completion request to the upstream vLLM and extract results."""
+    client = _get_vllm_client()
+
+    messages_dicts = [
+        {"role": m.role, "content": _coerce_content(m.content)}
+        for m in req.messages
+    ]
+
+    body: dict[str, Any] = {
+        "model": req.model,
+        "messages": messages_dicts,
+        "stream": False,
+        "logprobs": True,
+        "top_logprobs": 1,
+    }
+    if req.max_tokens is not None:
+        body["max_tokens"] = req.max_tokens
+    if req.temperature is not None:
+        body["temperature"] = req.temperature
+    if req.top_p is not None:
+        body["top_p"] = req.top_p
+    if req.stop:
+        body["stop"] = req.stop
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    api_key = _vllm_api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    resp = await client.post(
+        f"{_vllm_backend_url()}/v1/chat/completions",
+        json=body,
+        headers=headers,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    choice = data["choices"][0]
+    content = choice["message"]["content"]
+
+    # Extract logprobs if available
+    logprobs: list[float] | None = None
+    lp_data = choice.get("logprobs")
+    if lp_data and lp_data.get("content"):
+        logprobs = [entry["logprob"] for entry in lp_data["content"]]
+
+    raw_prompt = _build_chatml_prompt(messages_dicts)
+    raw_response = content
+
+    usage = data.get("usage", {})
+
+    return {
+        "content": content,
+        "raw_prompt": raw_prompt,
+        "raw_response": raw_response,
+        "token_ids": [],
+        "logprobs": logprobs,
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +443,78 @@ class RefreshRequest(BaseModel):
 
 @app.post("/v1/chat/completions", response_model=None)
 async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | StreamingResponse:
+    if _mode() == "local":
+        return await _chat_completions_local(req)
+    return await _chat_completions_tinker(req)
+
+
+async def _chat_completions_local(
+    req: ChatCompletionRequest,
+) -> dict[str, object] | StreamingResponse:
+    """Handle chat completions by forwarding to upstream vLLM."""
+    if not req.model:
+        # Use the first model from the upstream vLLM, or a sensible default
+        req.model = "default"
+
+    result = await _forward_to_vllm(req)
+
+    content: str = result["content"]
+    raw_prompt: str = result["raw_prompt"]
+    raw_response: str = result["raw_response"]
+    token_ids: list[int] = result["token_ids"]
+    logprobs: list[float] | None = result["logprobs"]
+    prompt_tokens: int = result["prompt_tokens"]
+    completion_tokens: int = result["completion_tokens"]
+
+    # Strip thinking and channel tags from visible content
+    visible = _extract_final_channel(content)
+    visible = _strip_thinking(visible)
+
+    # Cache raw completion for training pipeline retrieval
+    content_hash = hashlib.sha256(_strip_thinking(visible).encode("utf-8")).hexdigest()
+    _completion_cache.put(
+        content_hash,
+        _CompletionCacheEntry(
+            prompt=raw_prompt,
+            response=raw_response,
+            token_ids=token_ids,
+            logprobs=logprobs,
+        ),
+    )
+
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    created = int(time.time())
+
+    if req.stream:
+        return _stream_chat_response(completion_id, created, req.model, visible)
+
+    return {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": created,
+        "model": req.model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": visible},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+
+
+async def _chat_completions_tinker(
+    req: ChatCompletionRequest,
+) -> dict[str, object] | StreamingResponse:
+    """Handle chat completions via Tinker SDK (original code path)."""
+    import tinker.types as T  # noqa: N812
+    from tinker_cookbook.renderers import Message
+
     if not req.model:
         req.model = _base_model()
     renderer = _holder.renderer
@@ -398,6 +592,78 @@ async def chat_completions(req: ChatCompletionRequest) -> dict[str, object] | St
 
 @app.post("/v1/completions", response_model=None)
 async def completions(req: CompletionRequest) -> dict[str, object] | StreamingResponse:
+    if _mode() == "local":
+        return await _completions_local(req)
+    return await _completions_tinker(req)
+
+
+async def _completions_local(
+    req: CompletionRequest,
+) -> dict[str, object] | StreamingResponse:
+    """Forward text completions to upstream vLLM."""
+    client = _get_vllm_client()
+    body: dict[str, Any] = {
+        "model": req.model or "default",
+        "prompt": req.prompt,
+        "stream": False,
+    }
+    if req.max_tokens is not None:
+        body["max_tokens"] = req.max_tokens
+    if req.temperature is not None:
+        body["temperature"] = req.temperature
+    if req.top_p is not None:
+        body["top_p"] = req.top_p
+    if req.stop:
+        body["stop"] = req.stop
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    api_key = _vllm_api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    resp = await client.post(
+        f"{_vllm_backend_url()}/v1/completions",
+        json=body,
+        headers=headers,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    text: str = data["choices"][0]["text"]
+    usage = data.get("usage", {})
+
+    completion_id = f"cmpl-{uuid.uuid4().hex[:12]}"
+    created = int(time.time())
+
+    if req.stream:
+        return _stream_completion_response(completion_id, created, req.model or "default", text)
+
+    return {
+        "id": completion_id,
+        "object": "text_completion",
+        "created": created,
+        "model": req.model or "default",
+        "choices": [
+            {
+                "index": 0,
+                "text": text,
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "completion_tokens": usage.get("completion_tokens", 0),
+            "total_tokens": usage.get("total_tokens", 0),
+        },
+    }
+
+
+async def _completions_tinker(
+    req: CompletionRequest,
+) -> dict[str, object] | StreamingResponse:
+    """Handle text completions via Tinker SDK."""
+    import tinker.types as T  # noqa: N812
+
     if not req.model:
         req.model = _base_model()
     tokenizer = _holder.tokenizer
@@ -450,19 +716,6 @@ async def completions(req: CompletionRequest) -> dict[str, object] | StreamingRe
     }
 
 
-@app.post("/v1/sampler/refresh")
-async def refresh_sampler(body: RefreshRequest) -> dict[str, object]:
-    """Refresh the sampling client, optionally pointing at a new checkpoint."""
-    _holder.refresh(model_path=body.model_path)
-    return {"status": "ok", "model_path": body.model_path}
-
-
-@app.get("/v1/sampler/status")
-async def sampler_status() -> dict[str, object]:
-    """Return the currently loaded model path (null = base model only)."""
-    return {"model_path": _holder._model_path, "base_model": _base_model()}
-
-
 @app.get("/v1/completions/raw")
 async def get_raw_completion(content_hash: str) -> dict[str, object]:
     """Retrieve cached raw completion by SHA-256 hash of parsed content text."""
@@ -482,43 +735,21 @@ async def get_raw_completion(content_hash: str) -> dict[str, object]:
     }
 
 
-@app.post("/v1/score")
-async def score_completion(req: ScoreRequest) -> dict[str, object]:
-    """Score a prompt+completion pair and return per-token completion logprobs."""
-    tokenizer = _holder.tokenizer
-    sampler = _holder.sampler
-
-    prompt_tokens: list[int] = list(tokenizer.encode(req.prompt, add_special_tokens=True))
-    completion_tokens: list[int] = tokenizer.encode(
-        req.completion, add_special_tokens=False,
-    )
-    full_tokens = prompt_tokens + completion_tokens
-    prompt_len = len(prompt_tokens)
-    completion_len = len(completion_tokens)
-
-    model_input = T.ModelInput.from_ints(full_tokens)
-    logprobs_full = await asyncio.to_thread(
-        lambda: sampler.compute_logprobs(model_input).result(),
-    )
-
-    # Slice completion logprobs (same pattern as engine.py _slice_completion_logprobs)
-    raw = logprobs_full[prompt_len : prompt_len + completion_len]
-    logprobs = [lp if lp is not None else 0.0 for lp in raw]
-
-    token_strings = [tokenizer.decode([t]) for t in completion_tokens]
-    logprob_sum = sum(logprobs)
-
-    return {
-        "logprobs": logprobs,
-        "tokens": token_strings,
-        "prompt_tokens": prompt_len,
-        "completion_tokens": completion_len,
-        "logprob_sum": logprob_sum,
-    }
-
-
 @app.get("/v1/models")
-async def list_models() -> dict[str, object]:
+async def list_models() -> dict[str, object] | Response:
+    if _mode() == "local":
+        # Forward to upstream vLLM
+        client = _get_vllm_client()
+        headers: dict[str, str] = {}
+        api_key = _vllm_api_key()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        resp = await client.get(f"{_vllm_backend_url()}/v1/models", headers=headers)
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            media_type="application/json",
+        )
     return {
         "object": "list",
         "data": [
@@ -529,6 +760,94 @@ async def list_models() -> dict[str, object]:
             }
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Tinker-only endpoints (registered conditionally)
+# ---------------------------------------------------------------------------
+
+if _mode() == "tinker":
+    @app.post("/v1/sampler/refresh")
+    async def refresh_sampler(body: RefreshRequest) -> dict[str, object]:
+        """Refresh the sampling client, optionally pointing at a new checkpoint."""
+        _holder.refresh(model_path=body.model_path)
+        return {"status": "ok", "model_path": body.model_path}
+
+    @app.get("/v1/sampler/status")
+    async def sampler_status() -> dict[str, object]:
+        """Return the currently loaded model path (null = base model only)."""
+        return {"model_path": _holder._model_path, "base_model": _base_model()}
+
+    @app.post("/v1/score")
+    async def score_completion(req: ScoreRequest) -> dict[str, object]:
+        """Score a prompt+completion pair and return per-token completion logprobs."""
+        tokenizer = _holder.tokenizer
+        sampler = _holder.sampler
+
+        prompt_tokens: list[int] = list(tokenizer.encode(req.prompt, add_special_tokens=True))
+        completion_tokens: list[int] = tokenizer.encode(
+            req.completion, add_special_tokens=False,
+        )
+        full_tokens = prompt_tokens + completion_tokens
+        prompt_len = len(prompt_tokens)
+        completion_len = len(completion_tokens)
+
+        import tinker.types as T  # noqa: N812
+        model_input = T.ModelInput.from_ints(full_tokens)
+        logprobs_full = await asyncio.to_thread(
+            lambda: sampler.compute_logprobs(model_input).result(),
+        )
+
+        raw = logprobs_full[prompt_len : prompt_len + completion_len]
+        logprobs = [lp if lp is not None else 0.0 for lp in raw]
+
+        token_strings = [tokenizer.decode([t]) for t in completion_tokens]
+        logprob_sum = sum(logprobs)
+
+        return {
+            "logprobs": logprobs,
+            "tokens": token_strings,
+            "prompt_tokens": prompt_len,
+            "completion_tokens": completion_len,
+            "logprob_sum": logprob_sum,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Local-mode catch-all reverse proxy (forwards /health, etc. to vLLM)
+# ---------------------------------------------------------------------------
+
+if _mode() == "local":
+    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def _vllm_catch_all(request: Request, path: str) -> Response:
+        """Forward unhandled requests to upstream vLLM."""
+        client = _get_vllm_client()
+        url = f"{_vllm_backend_url()}/{path}"
+        if request.url.query:
+            url = f"{url}?{request.url.query}"
+
+        headers = dict(request.headers)
+        # Remove host header so upstream gets its own
+        headers.pop("host", None)
+        # Inject auth if configured
+        api_key = _vllm_api_key()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        body = await request.body()
+
+        resp = await client.request(
+            method=request.method,
+            url=url,
+            headers=headers,
+            content=body if body else None,
+        )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+            media_type=resp.headers.get("content-type"),
+        )
 
 
 # ---------------------------------------------------------------------------

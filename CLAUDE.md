@@ -55,7 +55,7 @@ claas/
 │
 └── proxy/                               # Inference proxy
     ├── __init__.py
-    └── tinker_inference_proxy.py         # Tinker SDK -> OpenAI-compatible proxy
+    └── inference_proxy.py               # Unified inference proxy (Tinker SDK or local vLLM)
 ```
 
 ## Modal Deployment
