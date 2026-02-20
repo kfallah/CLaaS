@@ -19,7 +19,7 @@ One-command setup for the full CLaaS + vLLM + OpenClaw stack with Telegram integ
 
 ```bash
 cd docker
-cp .env.example .env
+cp .env.local.example .env
 # Edit .env and set TELEGRAM_BOT_TOKEN
 docker compose --profile local up --build
 ```

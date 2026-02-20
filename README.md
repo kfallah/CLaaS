@@ -27,13 +27,13 @@ In practice, the flow is: request is answered by vLLM, then the engine performs 
 
 ### Local (GPU)
 
-Requires an NVIDIA GPU with >= 24 GB VRAM (L40S, A100, RTX 4090, etc.) and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
+Requires an NVIDIA GPU with >= 24 GB VRAM (L40S, A100, RTX 4090, RTX 5090, etc.) and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). The native (non-Docker) setup is tested on an RTX 5090.
 
 **Docker Compose (recommended):**
 
 ```bash
 cd docker
-cp .env.example .env
+cp .env.local.example .env
 # Edit .env — set TELEGRAM_BOT_TOKEN (from @BotFather)
 docker compose --profile local up --build
 ```
