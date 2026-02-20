@@ -1,138 +1,76 @@
-"""Centralized configuration for CLaaS.
+"""Centralized Hydra-backed configuration for CLaaS.
 
-Configuration is resolved from two sources:
+Configuration is resolved from:
+1. YAML profiles in ``claas/core/configs/``
+2. Secrets in environment variables
 
-1. **YAML config** — loaded via Hydra from ``claas/core/configs/``
-2. **Environment variables** — used only for secrets and the config selector
-
-The YAML profile is selected by ``CLAAS_CONFIG_NAME`` (default: ``"local"``).
-Use Hydra CLI overrides (``key=value``) to customize non-secret values.
-
-Usage::
-
-    from claas.core.config import get_config, get_proxy_config
-
-    cfg = get_config()          # CLaaSConfig subclass based on mode
-    proxy_cfg = get_proxy_config()  # standalone proxy config
+All YAML is validated against structured schemas registered in Hydra's
+``ConfigStore``. Invalid or unknown keys fail fast during composition.
 """
 
 from __future__ import annotations
 
-import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import TypeVar
+
+from hydra import compose, initialize_config_dir
+from hydra.core.config_store import ConfigStore
+from omegaconf import OmegaConf
 
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
-logger = logging.getLogger(__name__)
-
 _CONFIG_DIR = str(Path(__file__).parent / "configs")
 
-# ---------------------------------------------------------------------------
-# YAML loading via Hydra Compose API
-# ---------------------------------------------------------------------------
-
-def _load_yaml_config(config_name: str) -> dict[str, object]:
-    """Load a YAML config via Hydra Compose API.
-
-    Returns an empty dict if Hydra is unavailable or the config file is missing.
-    """
-    try:
-        from hydra import compose, initialize_config_dir
-        from omegaconf import OmegaConf
-
-        abs_dir = os.path.abspath(_CONFIG_DIR)
-        with initialize_config_dir(version_base=None, config_dir=abs_dir):
-            cfg = compose(config_name=config_name)
-        container = OmegaConf.to_container(cfg, resolve=True)
-        if isinstance(container, dict):
-            return container  # type: ignore[return-value]
-        return {}
-    except Exception:
-        logger.debug("Failed to load YAML config %r, falling back to defaults", config_name)
-        return {}
+_DEFAULT_ALLOWED_MODELS = ("Qwen/Qwen3-8B",)
+_SCHEMAS_REGISTERED = False
+T = TypeVar("T")
 
 
 # ---------------------------------------------------------------------------
-# YAML value helpers
-# ---------------------------------------------------------------------------
-
-def _yaml_str(yaml: dict[str, object], key: str, default: str = "") -> str:
-    val = yaml.get(key)
-    return str(val) if val is not None else default
-
-
-def _yaml_float(yaml: dict[str, object], key: str, default: float = 0.0) -> float:
-    val = yaml.get(key)
-    return float(str(val)) if val is not None else default
-
-
-def _yaml_bool(yaml: dict[str, object], key: str, default: bool = False) -> bool:
-    val = yaml.get(key)
-    if val is None:
-        return default
-    if isinstance(val, bool):
-        return val
-    return str(val).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _yaml_set(
-    yaml: dict[str, object], key: str, default: frozenset[str] = frozenset(),
-) -> frozenset[str]:
-    val = yaml.get(key)
-    if val is None:
-        return default
-    if isinstance(val, (list, tuple)):
-        return frozenset(str(item).strip() for item in val if str(item).strip())
-    return frozenset(
-        item.strip() for item in str(val).split(",") if item.strip()
-    )
-
-
-def _secret(name: str, default: str = "") -> str:
-    """Read a secret from an environment variable."""
-    raw = os.environ.get(name)
-    return raw.strip() if raw is not None else default
-
-
-# ---------------------------------------------------------------------------
-# Config hierarchy
+# Runtime config dataclasses (consumed by app code)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class CLaaSConfig:
     """Base configuration shared by all execution modes."""
 
-    mode: str = ""
+    mode: str = "local"
     feedback_log_dir: str = "./data/feedback"
     hf_token: str = ""
-    lora_root: str = ""
-    storage_backend: str = ""
-    allowed_init_base_models: frozenset[str] = field(default_factory=frozenset)
+    lora_root: str = "/loras"
+    storage_backend: str = "local_fs"
+    allowed_init_base_models: frozenset[str] = field(
+        default_factory=lambda: frozenset(_DEFAULT_ALLOWED_MODELS),
+    )
 
 
 @dataclass(frozen=True)
 class LocalConfig(CLaaSConfig):
     """Configuration for local GPU execution."""
 
-    vllm_base_url: str = ""
+    mode: str = "local"
+    storage_backend: str = "local_fs"
+    vllm_base_url: str = "http://127.0.0.1:8000"
     vllm_api_key: str = ""
     feedback_lock_timeout_s: float = 120.0
     feedback_wake_on_failure: bool = True
     feedback_min_free_vram_gb: float = 20.0
     feedback_sleep_verify_timeout_s: float = 30.0
     feedback_drain_timeout_s: float = 30.0
-    base_model_id: str = ""
-    attn_implementation: str = ""
+    base_model_id: str = "Qwen/Qwen3-8B"
+    attn_implementation: str = "flash_attention_2"
 
 
 @dataclass(frozen=True)
 class ModalConfig(CLaaSConfig):
     """Configuration for Modal remote execution."""
 
-    vllm_base_url: str = ""
+    mode: str = "modal"
+    storage_backend: str = "modal_volume"
+    vllm_base_url: str = "http://127.0.0.1:8000"
     vllm_api_key: str = ""
     feedback_lock_timeout_s: float = 120.0
     feedback_wake_on_failure: bool = True
@@ -146,10 +84,12 @@ class ModalConfig(CLaaSConfig):
 class TinkerConfig(CLaaSConfig):
     """Configuration for Tinker SDK execution."""
 
+    mode: str = "tinker"
+    storage_backend: str = "local_fs"
     tinker_api_key: str = ""
-    tinker_base_model: str = ""
-    tinker_state_path: str = ""
-    vllm_base_url: str = ""
+    tinker_base_model: str = "gpt-oss/GPT-OSS-120B"
+    tinker_state_path: str = "~/.claas/tinker_state.json"
+    vllm_base_url: str = "http://127.0.0.1:8000"
     vllm_api_key: str = ""
 
 
@@ -158,103 +98,182 @@ class ProxyConfig:
     """Standalone configuration for the Tinker inference proxy."""
 
     tinker_api_key: str = ""
-    tinker_base_model: str = ""
+    tinker_base_model: str = "gpt-oss/GPT-OSS-120B"
     completion_cache_size: int = 100
 
 
 # ---------------------------------------------------------------------------
-# Factory functions
+# Structured schema dataclasses (registered in Hydra ConfigStore)
 # ---------------------------------------------------------------------------
 
-def _build_base_fields(yaml: dict[str, object]) -> dict[str, object]:
+@dataclass
+class CLaaSConfigSchema:
+    mode: str = "local"
+    feedback_log_dir: str = "./data/feedback"
+    lora_root: str = "/loras"
+    storage_backend: str = "local_fs"
+    allowed_init_base_models: list[str] = field(
+        default_factory=lambda: list(_DEFAULT_ALLOWED_MODELS),
+    )
+
+
+@dataclass
+class LocalConfigSchema(CLaaSConfigSchema):
+    mode: str = "local"
+    storage_backend: str = "local_fs"
+    vllm_base_url: str = "http://127.0.0.1:8000"
+    feedback_lock_timeout_s: float = 120.0
+    feedback_wake_on_failure: bool = True
+    feedback_min_free_vram_gb: float = 20.0
+    feedback_sleep_verify_timeout_s: float = 30.0
+    feedback_drain_timeout_s: float = 30.0
+    base_model_id: str = "Qwen/Qwen3-8B"
+    attn_implementation: str = "flash_attention_2"
+
+
+@dataclass
+class ModalConfigSchema(CLaaSConfigSchema):
+    mode: str = "modal"
+    storage_backend: str = "modal_volume"
+    vllm_base_url: str = "http://127.0.0.1:8000"
+    feedback_lock_timeout_s: float = 120.0
+    feedback_wake_on_failure: bool = True
+    feedback_min_free_vram_gb: float = 20.0
+    feedback_sleep_verify_timeout_s: float = 30.0
+    feedback_drain_timeout_s: float = 30.0
+    hf_secret_name: str = ""
+
+
+@dataclass
+class TinkerConfigSchema(CLaaSConfigSchema):
+    mode: str = "tinker"
+    storage_backend: str = "local_fs"
+    tinker_base_model: str = "gpt-oss/GPT-OSS-120B"
+    tinker_state_path: str = "~/.claas/tinker_state.json"
+    vllm_base_url: str = "http://127.0.0.1:8000"
+
+
+@dataclass
+class ProxyConfigSchema:
+    tinker_base_model: str = "gpt-oss/GPT-OSS-120B"
+    completion_cache_size: int = 100
+
+
+# ---------------------------------------------------------------------------
+# Hydra helpers
+# ---------------------------------------------------------------------------
+
+def register_config_schemas() -> None:
+    """Register all core config schemas in Hydra's ConfigStore."""
+    global _SCHEMAS_REGISTERED
+    if _SCHEMAS_REGISTERED:
+        return
+
+    cs = ConfigStore.instance()
+    cs.store(name="_core_local_schema", node=LocalConfigSchema)
+    cs.store(name="_core_modal_schema", node=ModalConfigSchema)
+    cs.store(name="_core_tinker_schema", node=TinkerConfigSchema)
+    cs.store(name="_core_proxy_schema", node=ProxyConfigSchema)
+    _SCHEMAS_REGISTERED = True
+
+
+def _compose_structured(config_name: str, schema_type: type[T]) -> T:
+    register_config_schemas()
+    abs_dir = os.path.abspath(_CONFIG_DIR)
+    with initialize_config_dir(version_base=None, config_dir=abs_dir):
+        cfg = compose(config_name=config_name)
+
+    typed_cfg = OmegaConf.merge(OmegaConf.structured(schema_type), cfg)
+    obj = OmegaConf.to_object(typed_cfg)
+    if not isinstance(obj, schema_type):
+        raise TypeError(
+            f"Hydra compose for {config_name!r} did not produce {schema_type.__name__}",
+        )
+    return obj
+
+
+def _secret(name: str, default: str = "") -> str:
+    raw = os.environ.get(name)
+    return raw.strip() if raw is not None else default
+
+
+def _base_runtime_fields(schema: CLaaSConfigSchema) -> dict[str, object]:
     return {
-        "feedback_log_dir": _yaml_str(yaml, "feedback_log_dir", "./data/feedback"),
+        "mode": schema.mode,
+        "feedback_log_dir": schema.feedback_log_dir,
         "hf_token": _secret("HF_TOKEN"),
-        "lora_root": _yaml_str(yaml, "lora_root", "/loras"),
-        "storage_backend": _yaml_str(yaml, "storage_backend"),
-        "allowed_init_base_models": _yaml_set(yaml, "allowed_init_base_models"),
+        "lora_root": schema.lora_root,
+        "storage_backend": schema.storage_backend,
+        "allowed_init_base_models": frozenset(schema.allowed_init_base_models),
     }
 
 
-def _build_vllm_feedback_fields(yaml: dict[str, object]) -> dict[str, object]:
-    return {
-        "vllm_base_url": _yaml_str(yaml, "vllm_base_url", "http://127.0.0.1:8000"),
-        "vllm_api_key": _secret("VLLM_API_KEY"),
-        "feedback_lock_timeout_s": _yaml_float(yaml, "feedback_lock_timeout_s", 120.0),
-        "feedback_wake_on_failure": _yaml_bool(yaml, "feedback_wake_on_failure", True),
-        "feedback_min_free_vram_gb": _yaml_float(
-            yaml, "feedback_min_free_vram_gb", 20.0,
-        ),
-        "feedback_sleep_verify_timeout_s": _yaml_float(
-            yaml, "feedback_sleep_verify_timeout_s", 30.0,
-        ),
-        "feedback_drain_timeout_s": _yaml_float(yaml, "feedback_drain_timeout_s", 30.0),
-    }
+def _load_yaml_config(config_name: str) -> dict[str, object]:
+    """Compose a core YAML profile into a schema-validated dict."""
+    if config_name == "local":
+        return asdict(_compose_structured(config_name, LocalConfigSchema))
+    if config_name == "modal":
+        return asdict(_compose_structured(config_name, ModalConfigSchema))
+    if config_name == "tinker":
+        return asdict(_compose_structured(config_name, TinkerConfigSchema))
+    if config_name == "proxy":
+        return asdict(_compose_structured(config_name, ProxyConfigSchema))
+    raise ValueError(f"Unsupported config name: {config_name!r}")
 
 
 @lru_cache(maxsize=1)
 def get_config() -> CLaaSConfig:
-    """Return the application config for the current execution mode.
-
-    The mode is determined by ``CLAAS_CONFIG_NAME`` (default: ``"local"``),
-    which selects a YAML config from ``claas/core/configs/``.
-
-    The result is cached; call ``get_config.cache_clear()`` to re-read
-    (useful in tests).
-    """
+    """Return the application runtime config selected by ``CLAAS_CONFIG_NAME``."""
     config_name = os.environ.get("CLAAS_CONFIG_NAME", "local").strip().lower()
-    yaml = _load_yaml_config(config_name)
-
-    mode = _yaml_str(yaml, "mode", config_name)
-
-    base = _build_base_fields(yaml)
-
-    if mode == "local":
+    if config_name == "local":
+        schema = _compose_structured("local", LocalConfigSchema)
         return LocalConfig(
-            mode=mode,
-            **base,  # type: ignore[arg-type]
-            **_build_vllm_feedback_fields(yaml),
-            base_model_id=_yaml_str(yaml, "base_model_id"),
-            attn_implementation=_yaml_str(yaml, "attn_implementation"),
+            **_base_runtime_fields(schema),  # type: ignore[arg-type]
+            vllm_base_url=schema.vllm_base_url,
+            vllm_api_key=_secret("VLLM_API_KEY"),
+            feedback_lock_timeout_s=schema.feedback_lock_timeout_s,
+            feedback_wake_on_failure=schema.feedback_wake_on_failure,
+            feedback_min_free_vram_gb=schema.feedback_min_free_vram_gb,
+            feedback_sleep_verify_timeout_s=schema.feedback_sleep_verify_timeout_s,
+            feedback_drain_timeout_s=schema.feedback_drain_timeout_s,
+            base_model_id=schema.base_model_id,
+            attn_implementation=schema.attn_implementation,
         )
 
-    if mode == "modal":
+    if config_name == "modal":
+        schema = _compose_structured("modal", ModalConfigSchema)
         return ModalConfig(
-            mode=mode,
-            **base,  # type: ignore[arg-type]
-            **_build_vllm_feedback_fields(yaml),
-            hf_secret_name=_yaml_str(yaml, "hf_secret_name"),
+            **_base_runtime_fields(schema),  # type: ignore[arg-type]
+            vllm_base_url=schema.vllm_base_url,
+            vllm_api_key=_secret("VLLM_API_KEY"),
+            feedback_lock_timeout_s=schema.feedback_lock_timeout_s,
+            feedback_wake_on_failure=schema.feedback_wake_on_failure,
+            feedback_min_free_vram_gb=schema.feedback_min_free_vram_gb,
+            feedback_sleep_verify_timeout_s=schema.feedback_sleep_verify_timeout_s,
+            feedback_drain_timeout_s=schema.feedback_drain_timeout_s,
+            hf_secret_name=schema.hf_secret_name,
         )
 
-    if mode == "tinker":
-        raw_state_path = _yaml_str(
-            yaml, "tinker_state_path",
-            os.path.join("~", ".claas", "tinker_state.json"),
-        )
+    if config_name == "tinker":
+        schema = _compose_structured("tinker", TinkerConfigSchema)
         return TinkerConfig(
-            mode=mode,
-            **base,  # type: ignore[arg-type]
+            **_base_runtime_fields(schema),  # type: ignore[arg-type]
             tinker_api_key=_secret("CLAAS_TINKER_API_KEY"),
-            tinker_base_model=_yaml_str(yaml, "tinker_base_model"),
-            tinker_state_path=os.path.expanduser(raw_state_path),
-            vllm_base_url=_yaml_str(yaml, "vllm_base_url", "http://127.0.0.1:8000"),
+            tinker_base_model=schema.tinker_base_model,
+            tinker_state_path=os.path.expanduser(schema.tinker_state_path),
+            vllm_base_url=schema.vllm_base_url,
             vllm_api_key=_secret("VLLM_API_KEY"),
         )
 
-    raise ValueError(f"Unsupported CLAAS_CONFIG_NAME: {mode!r}")
+    raise ValueError(f"Unsupported CLAAS_CONFIG_NAME: {config_name!r}")
 
 
 @lru_cache(maxsize=1)
 def get_proxy_config() -> ProxyConfig:
-    """Return the standalone proxy config.
-
-    Cached; call ``get_proxy_config.cache_clear()`` to re-read.
-    """
-    yaml = _load_yaml_config("proxy")
+    """Return the standalone proxy config."""
+    schema = _compose_structured("proxy", ProxyConfigSchema)
     return ProxyConfig(
         tinker_api_key=_secret("CLAAS_TINKER_API_KEY"),
-        tinker_base_model=_yaml_str(yaml, "tinker_base_model"),
-        completion_cache_size=int(
-            _yaml_float(yaml, "completion_cache_size", 100),
-        ),
+        tinker_base_model=schema.tinker_base_model,
+        completion_cache_size=schema.completion_cache_size,
     )

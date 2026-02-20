@@ -1,3 +1,7 @@
+defaults:
+  - _core_local_schema
+  - _self_
+
 mode: local
 feedback_log_dir: ./data/feedback
 lora_root: /loras

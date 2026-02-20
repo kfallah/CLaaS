@@ -14,15 +14,40 @@ from omegaconf import OmegaConf
 
 from .types import EvalConfig, HarnessConfig
 
-# Register EvalConfig as the structured config schema
-cs = ConfigStore.instance()
-cs.store(name="_eval_schema", node=EvalConfig)
-
-# Default config directory (relative to this module)
 _DEFAULT_CONFIG_DIR = str(Path(__file__).parent / "configs")
+_SCHEMAS_REGISTERED = False
 
 # Pattern matching the timestamped run-id suffix (e.g. 20260220-012345Z)
 _RUN_ID_RE = re.compile(r"\d{8}-\d{6}Z$")
+
+
+def register_eval_schemas() -> None:
+    """Register eval schema(s) in Hydra's ConfigStore."""
+    global _SCHEMAS_REGISTERED
+    if _SCHEMAS_REGISTERED:
+        return
+
+    cs = ConfigStore.instance()
+    cs.store(name="_eval_schema", node=EvalConfig)
+    _SCHEMAS_REGISTERED = True
+
+
+def _compose_eval_config(
+    config_dir: str | None = None,
+    config_name: str = "base",
+    overrides: list[str] | None = None,
+) -> EvalConfig:
+    register_eval_schemas()
+    abs_dir = os.path.abspath(config_dir or _DEFAULT_CONFIG_DIR)
+
+    with initialize_config_dir(version_base=None, config_dir=abs_dir):
+        cfg = compose(config_name=config_name, overrides=overrides or [])
+
+    typed_cfg = OmegaConf.merge(OmegaConf.structured(EvalConfig), cfg)
+    obj = OmegaConf.to_object(typed_cfg)
+    if not isinstance(obj, EvalConfig):
+        raise TypeError("Hydra did not produce an EvalConfig instance")
+    return obj
 
 
 def load_config(
@@ -30,32 +55,18 @@ def load_config(
     config_name: str = "base",
     overrides: list[str] | None = None,
 ) -> HarnessConfig:
-    """Load config via Hydra Compose API and return a HarnessConfig.
-
-    Secrets (API keys) are NOT stored on the config object — they are
-    resolved from env vars at call sites in the runner.
-    """
-    abs_dir = os.path.abspath(config_dir or _DEFAULT_CONFIG_DIR)
-
-    with initialize_config_dir(version_base=None, config_dir=abs_dir):
-        cfg = compose(config_name=config_name, overrides=overrides or [])
-
-    container = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    eval_cfg = EvalConfig(**container)  # type: ignore[invalid-argument-type]
+    """Load config via Hydra Compose API and return a HarnessConfig."""
+    eval_cfg = _compose_eval_config(
+        config_dir=config_dir,
+        config_name=config_name,
+        overrides=overrides,
+    )
     return build_harness_config(eval_cfg)
 
 
 def build_harness_config(eval_cfg: EvalConfig) -> HarnessConfig:
     """Post-process EvalConfig → HarnessConfig (no secrets)."""
     fields = dataclasses.asdict(eval_cfg)
-
-    # Normalize preferences: bare string → single-element list
-    if "preferences" in fields:
-        val = fields["preferences"]
-        if isinstance(val, str):
-            fields["preferences"] = [val]
-        elif isinstance(val, list):
-            fields["preferences"] = [str(p) for p in val]
 
     # Tinker defaults: proxy_url fallback to vllm_url
     if fields["mode"] == "tinker" and not fields.get("proxy_url"):

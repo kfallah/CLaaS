@@ -1,3 +1,7 @@
+defaults:
+  - _core_modal_schema
+  - _self_
+
 mode: modal
 feedback_log_dir: ./data/feedback
 lora_root: /loras

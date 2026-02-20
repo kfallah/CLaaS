@@ -45,9 +45,9 @@ class TestLoadYamlConfig:
         assert cfg["tinker_base_model"] == "gpt-oss/GPT-OSS-120B"
         assert cfg["completion_cache_size"] == 100
 
-    def test_load_nonexistent_returns_empty(self):
-        cfg = _load_yaml_config("nonexistent_config_xyz")
-        assert cfg == {}
+    def test_load_nonexistent_raises(self):
+        with pytest.raises(ValueError, match="nonexistent_config_xyz"):
+            _load_yaml_config("nonexistent_config_xyz")
 
 
 # ---------------------------------------------------------------------------
