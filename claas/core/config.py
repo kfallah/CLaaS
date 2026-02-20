@@ -6,10 +6,9 @@ codebase uses typed, validated config objects instead of ad-hoc
 
 Usage::
 
-    from claas.core.config import get_config, get_proxy_config
+    from claas.core.config import get_config
 
     cfg = get_config()          # CLaaSConfig subclass based on mode
-    proxy_cfg = get_proxy_config()  # standalone proxy config
 """
 
 from __future__ import annotations
@@ -68,6 +67,7 @@ class CLaaSConfig:
     lora_root: str = ""
     storage_backend: str = ""
     allowed_init_base_models: frozenset[str] = field(default_factory=frozenset)
+    completion_cache_size: int = 100
 
 
 @dataclass(frozen=True)
@@ -110,18 +110,6 @@ class TinkerConfig(CLaaSConfig):
     vllm_api_key: str = ""
 
 
-@dataclass(frozen=True)
-class ProxyConfig:
-    """Standalone configuration for the inference proxy (Tinker or local/vLLM)."""
-
-    mode: str = ""                    # "tinker" or "local"
-    tinker_api_key: str = ""
-    tinker_base_model: str = ""
-    completion_cache_size: int = 100
-    vllm_backend_url: str = ""        # local mode: upstream vLLM base URL
-    vllm_api_key: str = ""            # local mode: vLLM API key
-
-
 # ---------------------------------------------------------------------------
 # Factory functions
 # ---------------------------------------------------------------------------
@@ -133,6 +121,7 @@ def _build_base_fields() -> dict[str, object]:
         "lora_root": _env("CLAAS_LORA_ROOT", "/loras"),
         "storage_backend": _env("CLAAS_STORAGE_BACKEND", "modal_volume"),
         "allowed_init_base_models": _env_set("CLAAS_ALLOWED_INIT_BASE_MODELS", "Qwen/Qwen3-8B"),
+        "completion_cache_size": _env_int("CLAAS_COMPLETION_CACHE_SIZE", 100),
     }
 
 
@@ -191,23 +180,3 @@ def get_config() -> CLaaSConfig:
         )
 
     raise ValueError(f"Unsupported CLAAS_DISTILL_EXECUTION_MODE: {mode!r}")
-
-
-@lru_cache(maxsize=1)
-def get_proxy_config() -> ProxyConfig:
-    """Return the standalone proxy config.
-
-    Cached; call ``get_proxy_config.cache_clear()`` to re-read.
-    """
-    mode = _env("CLAAS_PROXY_MODE", "") or _env("CLAAS_DISTILL_EXECUTION_MODE", "local")
-    mode = mode.lower()
-    if mode not in ("tinker", "local"):
-        mode = "local"
-    return ProxyConfig(
-        mode=mode,
-        tinker_api_key=_env("CLAAS_TINKER_API_KEY", ""),
-        tinker_base_model=_env("CLAAS_TINKER_BASE_MODEL", "gpt-oss/GPT-OSS-120B"),
-        completion_cache_size=_env_int("CLAAS_COMPLETION_CACHE_SIZE", 100),
-        vllm_backend_url=_env("CLAAS_PROXY_VLLM_BACKEND_URL", "") or _env("VLLM_BASE_URL", "http://127.0.0.1:8000"),
-        vllm_api_key=_env("CLAAS_PROXY_VLLM_API_KEY", "") or _env("VLLM_API_KEY", "sk-local"),
-    )

@@ -26,7 +26,7 @@ class TinkerStack:
 def tinker_stack():
     """Provide connection details for the Tinker Docker stack."""
     return TinkerStack(
-        proxy_url="http://127.0.0.1:8000",
+        proxy_url="http://127.0.0.1:8080",
         claas_url="http://127.0.0.1:8080",
         openclaw_url="http://127.0.0.1:18789",
         openclaw_token="openclaw-local-dev-token",

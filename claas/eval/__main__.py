@@ -7,7 +7,6 @@ Tinker stack (no GPU)::
 
     python -m claas.eval --mode tinker \\
         --openclaw-url http://localhost:18789 \\
-        --proxy-url http://localhost:8000 \\
         --claas-url http://localhost:8080 \\
         --base-model Qwen/Qwen3-Coder-30B-A3B-Instruct \\
         --preferences no_emoji --metrics logprob --num-steps 10
@@ -137,7 +136,7 @@ def add_eval_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--proxy-url",
         default=None,
-        help="Tinker proxy URL (enables Tinker mode, e.g. http://localhost:8000)",
+        help="URL for cached completions and scoring (defaults to --claas-url)",
     )
     parser.add_argument(
         "--base-model",
@@ -169,10 +168,10 @@ def build_config(args: argparse.Namespace) -> HarnessConfig:
         "OPENCLAW_GATEWAY_TOKEN", "openclaw-local-dev-token"
     )
 
-    # Tinker mode: default proxy_url to vllm_url if not explicitly set
+    # Default proxy_url to claas_url (inference is now served by the CLaaS API)
     proxy_url = args.proxy_url
-    if mode == "tinker" and not proxy_url:
-        proxy_url = args.vllm_url
+    if not proxy_url:
+        proxy_url = args.claas_url
 
     # Timestamped subdir under the base output directory
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")

@@ -251,7 +251,7 @@ def write_openclaw_config() -> None:
                     "enabled": True,
                     "config": {
                         "claasApiUrl": CLAAS_API_URL,
-                        "proxyUrl": VLLM_BASE_URL.split("/v1")[0].rstrip("/"),
+                        "proxyUrl": CLAAS_API_URL.rstrip("/"),
                         "loraId": f"{LORA_NAME}-latest",
                         "feedbackBatchSize": FEEDBACK_BATCH_SIZE,
                     },

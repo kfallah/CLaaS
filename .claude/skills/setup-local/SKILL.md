@@ -3,30 +3,36 @@ name: setup-local
 description: Set up the full CLaaS stack (vLLM + API + OpenClaw/Telegram) directly on the host without Docker. Use when Docker is unavailable or you want a native setup.
 ---
 
-# Setup Local (Dockerless)
+# Setup Local
 
-> **Docker is strongly preferred.** If Docker is available, use it instead:
-> ```bash
-> cd docker
-> cp .env.local.example .env
-> # Set TELEGRAM_BOT_TOKEN in .env
-> docker compose --profile local up --build
-> ```
-> See `docker/README.md`. Only continue below if Docker is unavailable.
+Ask for the Telegram bot token if not provided as an argument, then work through each step starting from Step 0.
+
+## Step 0: Check for Docker
+
+Run `docker compose version`. If Docker is installed, set up using Docker and **stop — do not continue to the remaining steps**:
+
+```bash
+cd docker
+cp .env.local.example .env
+# Set TELEGRAM_BOT_TOKEN in .env
+docker compose --profile local up --build
+```
+
+See `docker/README.md` for details. Report success and stop.
 
 ---
 
-Run the full CLaaS stack natively without Docker. **Tested on an NVIDIA RTX 5090.**
+## Native Setup (no Docker)
 
-## Prerequisites
+> **Do NOT follow these steps if Docker is installed.** Go back to Step 0 and use Docker instead.
+
+**Tested on an NVIDIA RTX 5090.**
+
+### Prerequisites
 
 - `uv`, Node.js 22+, npm
 - NVIDIA GPU with >= 24 GB VRAM, CUDA drivers and toolkit (`nvidia-smi` should work)
 - A Telegram bot token from @BotFather
-
-## Instructions
-
-Ask for the Telegram bot token if not provided as an argument, then work through each step.
 
 ### 1. Install dependencies
 

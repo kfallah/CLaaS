@@ -7,12 +7,10 @@ import pytest
 from claas.core.config import (
     LocalConfig,
     ModalConfig,
-    ProxyConfig,
     TinkerConfig,
     _env_bool,
     _env_set,
     get_config,
-    get_proxy_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -74,6 +72,15 @@ class TestEnvVarOverrides:
         cfg = get_config()
         assert cfg.allowed_init_base_models == frozenset({"A/B", "C/D"})
 
+    def test_completion_cache_size_override(self, monkeypatch):
+        monkeypatch.setenv("CLAAS_COMPLETION_CACHE_SIZE", "50")
+        cfg = get_config()
+        assert cfg.completion_cache_size == 50
+
+    def test_completion_cache_size_default(self):
+        cfg = get_config()
+        assert cfg.completion_cache_size == 100
+
 
 # ---------------------------------------------------------------------------
 # Frozen enforcement
@@ -84,11 +91,6 @@ class TestFrozen:
         cfg = get_config()
         with pytest.raises(AttributeError):
             cfg.mode = "modal"  # type: ignore[misc]
-
-    def test_proxy_config_frozen(self):
-        cfg = get_proxy_config()
-        with pytest.raises(AttributeError):
-            cfg.tinker_api_key = "new"  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -132,23 +134,6 @@ class TestEnvSet:
     def test_default(self):
         result = _env_set("_NONEXISTENT_SET_VAR", "x,y")
         assert result == frozenset({"x", "y"})
-
-
-# ---------------------------------------------------------------------------
-# Proxy config
-# ---------------------------------------------------------------------------
-
-class TestProxyConfig:
-    def test_defaults(self):
-        cfg = get_proxy_config()
-        assert isinstance(cfg, ProxyConfig)
-        assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-120B"
-        assert cfg.completion_cache_size == 100
-
-    def test_cache_size_override(self, monkeypatch):
-        monkeypatch.setenv("CLAAS_COMPLETION_CACHE_SIZE", "50")
-        cfg = get_proxy_config()
-        assert cfg.completion_cache_size == 50
 
 
 # ---------------------------------------------------------------------------

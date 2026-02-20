@@ -1,6 +1,6 @@
 ---
 name: setup-tinker
-description: Deploy the CLaaS Tinker stack (tinker-proxy + API + OpenClaw/Telegram) via Docker Compose. No GPU required.
+description: Deploy the CLaaS Tinker stack (API + OpenClaw/Telegram) via Docker Compose. No GPU required.
 ---
 
 # Setup Tinker Stack
@@ -43,7 +43,6 @@ Set the required variables in `docker/.env.tinker`:
 | `TINKER_API_KEY` | Yes | — |
 | `MODEL` | No | `gpt-oss/GPT-OSS-120B` |
 | `LORA_NAME` | No | `openclaw/assistant` |
-| `TINKER_PROXY_PORT` | No | `8000` |
 | `CLAAS_API_PORT` | No | `8080` |
 | `OPENCLAW_PORT` | No | `18789` |
 
@@ -60,10 +59,7 @@ docker compose -f docker/docker-compose.tinker.yml --env-file docker/.env.tinker
 Poll the services until they are ready (timeout after 3 minutes):
 
 ```bash
-# tinker-proxy
-until curl -sf http://localhost:8000/v1/models > /dev/null 2>&1; do sleep 5; done
-
-# claas-api
+# claas-api (serves both inference and training)
 until curl -sf http://localhost:8080/ > /dev/null 2>&1; do sleep 5; done
 ```
 
@@ -76,8 +72,8 @@ docker compose -f docker/docker-compose.tinker.yml --env-file docker/.env.tinker
 ### 5. Verify the stack
 
 ```bash
-# tinker-proxy models
-curl -s http://localhost:8000/v1/models
+# Models (served by CLaaS API)
+curl -s http://localhost:8080/v1/models
 
 # CLaaS health
 curl -s http://localhost:8080/v1/health

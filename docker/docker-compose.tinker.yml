@@ -1,32 +1,6 @@
 services:
   # ------------------------------------------------------------------
-  # tinker-proxy: OpenAI-compatible inference endpoint backed by Tinker
-  # ------------------------------------------------------------------
-  tinker-proxy:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.proxy
-    environment:
-      - CLAAS_PROXY_MODE=tinker
-      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
-      - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
-    ports:
-      - "${TINKER_PROXY_PORT:-8000}:8000"
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=5)",
-        ]
-      interval: 15s
-      timeout: 10s
-      start_period: 20s
-      retries: 20
-
-  # ------------------------------------------------------------------
-  # claas-api: Feedback API in Tinker execution mode
+  # claas-api: Feedback API + inference proxy in Tinker execution mode
   # ------------------------------------------------------------------
   claas-api:
     build:
@@ -39,7 +13,6 @@ services:
       - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:?set TINKER_API_KEY}
       - CLAAS_TINKER_BASE_MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
       - CLAAS_TINKER_STATE_PATH=/data/tinker_state.json
-      - VLLM_BASE_URL=http://tinker-proxy:8000
       - WAIT_FOR_BACKEND=0
     volumes:
       - claas-feedback-logs:/app/data/feedback
@@ -64,7 +37,7 @@ services:
       - CLAAS_DISTILL_EXECUTION_MODE=tinker
       - LORA_NAME=${LORA_NAME:-openclaw/assistant}
       - MODEL=${MODEL:-gpt-oss/GPT-OSS-120B}
-      - VLLM_BASE_URL=http://tinker-proxy:8000/v1
+      - VLLM_BASE_URL=http://claas-api:8080/v1
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - OPENCLAW_HOME=/openclaw-config
       - CLAAS_API_URL=http://claas-api:8080
@@ -73,13 +46,11 @@ services:
       - openclaw-config:/openclaw-config
       - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro
     depends_on:
-      tinker-proxy:
-        condition: service_healthy
       claas-api:
         condition: service_healthy
 
   # ------------------------------------------------------------------
-  # openclaw: Telegram bot gateway (uses tinker-proxy endpoint)
+  # openclaw: Telegram bot gateway (uses CLaaS API for inference)
   # ------------------------------------------------------------------
   openclaw:
     build:
@@ -87,14 +58,14 @@ services:
       dockerfile: docker/Dockerfile.tinker-openclaw
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - VLLM_BASE_URL=http://tinker-proxy:8000
-      - BACKEND_HEALTH_URL=http://tinker-proxy:8000/v1/models
+      - VLLM_BASE_URL=http://claas-api:8080
+      - BACKEND_HEALTH_URL=http://claas-api:8080/v1/models
     volumes:
       - openclaw-config:/home/node/.openclaw
     ports:
       - "${OPENCLAW_PORT:-18789}:18789"
     depends_on:
-      tinker-proxy:
+      claas-api:
         condition: service_healthy
       init:
         condition: service_completed_successfully

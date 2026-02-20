@@ -3,11 +3,20 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-WORKDIR /app
-COPY . /app
+# Install uv for fast dependency resolution
+RUN pip install --no-cache-dir uv
 
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch && \
-    pip install --no-cache-dir ".[tinker]" && \
-    pip install --no-cache-dir modal
+WORKDIR /app
+
+# Copy only dependency metadata first for layer caching
+COPY pyproject.toml README.md /app/
+COPY claas/__init__.py /app/claas/
+
+RUN uv pip install --system --index-url https://download.pytorch.org/whl/cpu torch && \
+    uv pip install --system ".[tinker]" && \
+    uv pip install --system modal
+
+# Now copy the full source
+COPY . /app
 
 ENTRYPOINT ["python", "/app/docker/scripts/init-stack.py"]

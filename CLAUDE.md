@@ -29,15 +29,23 @@ uv run pytest tests/ -v -m "not integration"
 ```text
 claas/
 ├── __init__.py
-├── api.py                               # FastAPI endpoints (entrypoint)
+├── api.py                               # FastAPI endpoints + inference proxy (entrypoint)
 ├── cli.py                               # Command-line interface (entrypoint)
 ├── deploy.py                            # Modal deployment entrypoint
 ├── index.html                           # Dashboard template
 │
 ├── core/                                # Shared types & config
 │   ├── __init__.py
-│   ├── config.py                        # Centralized env var config (get_config / get_proxy_config)
+│   ├── config.py                        # Centralized env var config (get_config)
 │   └── types.py                         # Pydantic models, TypedDicts (ChatMessage, etc.)
+│
+├── inference/                           # Inference backend abstraction
+│   ├── __init__.py                      # Factory: get_inference_backend(kind)
+│   ├── base.py                          # Abstract InferenceBackend + result dataclasses
+│   ├── tinker.py                        # Tinker SDK implementation
+│   ├── vllm.py                          # vLLM forwarding implementation
+│   ├── cache.py                         # CompletionCache + CompletionCacheEntry
+│   └── helpers.py                       # strip_thinking, extract_final_channel, SSE helpers
 │
 ├── training/                            # Training pipeline
 │   ├── __init__.py
@@ -52,10 +60,6 @@ claas/
 │       ├── local/engine.py              # Local GPU execution
 │       ├── modal/engine.py              # Modal remote execution
 │       └── tinker/engine.py, state.py   # Tinker SDK execution
-│
-└── proxy/                               # Inference proxy
-    ├── __init__.py
-    └── inference_proxy.py               # Unified inference proxy (Tinker SDK or local vLLM)
 ```
 
 ## Modal Deployment

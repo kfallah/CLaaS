@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from claas.core.config import get_config, get_proxy_config
+from claas.core.config import get_config
 
 
 @pytest.fixture(autouse=True)
@@ -15,7 +15,5 @@ def _clear_config_cache():
     between tests.
     """
     get_config.cache_clear()
-    get_proxy_config.cache_clear()
     yield
     get_config.cache_clear()
-    get_proxy_config.cache_clear()
