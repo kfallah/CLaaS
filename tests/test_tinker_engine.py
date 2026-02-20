@@ -601,10 +601,10 @@ def test_require_entry(tinker_env):
     from claas.training.engine.tinker.engine import _require_entry
 
     with pytest.raises(FileNotFoundError, match="not found"):
-        _require_entry("nonexistent/lora")
+        _require_entry("nonexistent/lora", tinker_env)
 
     set_tinker_path("test/lora", "tinker://ckpt", "m", 8, step=3)
-    entry = _require_entry("test/lora")
+    entry = _require_entry("test/lora", tinker_env)
     assert entry.tinker_path == "tinker://ckpt"
     assert entry.step == 3
 
