@@ -10,7 +10,7 @@ description: Set up the full CLaaS stack (vLLM + API + OpenClaw/Telegram) direct
 > cd docker
 > cp .env.local.example .env
 > # Set TELEGRAM_BOT_TOKEN in .env
-> docker compose --profile local up --build
+> docker compose -f docker-compose.local.yml --profile local up --build
 > ```
 > See `docker/README.md`. Only continue below if Docker is unavailable.
 

@@ -31,7 +31,7 @@ Requires an NVIDIA GPU with >= 24 GB VRAM (L40S, A100, RTX 4090, RTX 5090, etc.)
 cd docker
 cp .env.local.example .env
 # Edit .env — set TELEGRAM_BOT_TOKEN (from @BotFather)
-docker compose --profile local up --build
+docker compose -f docker-compose.local.yml --profile local up --build
 ```
 
 This brings up vLLM with Qwen3-8B, the CLaaS feedback API, and OpenClaw's Telegram gateway. See [`docker/README.md`](docker/README.md) for details.
