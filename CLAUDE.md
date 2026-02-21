@@ -31,7 +31,6 @@ claas/
 ├── __init__.py
 ├── api.py                               # FastAPI endpoints + inference proxy (entrypoint)
 ├── cli.py                               # Command-line interface (entrypoint)
-├── deploy.py                            # Modal deployment entrypoint
 ├── index.html                           # Dashboard template
 │
 ├── core/                                # Shared types & config

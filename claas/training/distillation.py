@@ -18,7 +18,7 @@ from claas.training.teacher_helpers import (
 
 if TYPE_CHECKING:
     import torch
-    from peft import PeftModel
+    from peft import PeftMixedModel, PeftModel
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 
@@ -45,7 +45,7 @@ class DistillationTrainer:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.device = torch.device("cuda")
-        hf_cache = os.environ["HF_HOME"]
+        hf_cache = os.environ.get("HF_HOME") or os.environ.get("TRANSFORMERS_CACHE")
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.base_model_id,
@@ -57,7 +57,7 @@ class DistillationTrainer:
 
         self.base_model = AutoModelForCausalLM.from_pretrained(
             self.base_model_id,
-            dtype=torch.bfloat16,
+            torch_dtype=torch.bfloat16,
             device_map="cuda",
             trust_remote_code=True,
             attn_implementation=self.attn_implementation,
@@ -79,11 +79,11 @@ class DistillationTrainer:
         """Move base model to CPU and release CUDA memory."""
         import torch
 
-        torch.nn.Module.to(self.base_model, "cpu")
+        self.base_model.to("cpu")
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-    def _load_or_create_lora(self, lora_path: str) -> "PeftModel":
+    def _load_or_create_lora(self, lora_path: str) -> "PeftModel | PeftMixedModel":
         """Load existing LoRA weights or instantiate from config.
 
         Args:
@@ -136,6 +136,10 @@ class DistillationTrainer:
 
         Returns:
             Pair of top-k logprobs and indices for each response token.
+
+        Reference:
+            Huebotter et al. (2026), "Reinforcement Learning via Self-Distillation"
+            (arXiv:2601.20802), Section 3.
         """
         import torch
 
@@ -189,158 +193,159 @@ class DistillationTrainer:
 
         lora_local_path = load_lora(payload.lora_id)
         try:
-            model = self._load_or_create_lora(lora_local_path)
-            model.train()
-            model.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": False},
+            try:
+                model = self._load_or_create_lora(lora_local_path)
+                model.train()
+                model.gradient_checkpointing_enable(
+                    gradient_checkpointing_kwargs={"use_reentrant": False},
+                )
+            except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError) as error:
+                raise RuntimeError(f"Failed to initialize LoRA adapter: {error}") from error
+
+            lora_params = [parameter for parameter in model.parameters() if parameter.requires_grad]
+            optimizer = self.optimizer_cls(
+                lora_params,
+                lr=config.learning_rate,
+                betas=(0.9, 0.999),
+                weight_decay=0.01,
             )
-        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError) as error:
-            cleanup_local_lora(lora_local_path)
-            raise RuntimeError(f"Failed to initialize LoRA adapter: {error}") from error
 
-        lora_params = [parameter for parameter in model.parameters() if parameter.requires_grad]
-        optimizer = self.optimizer_cls(
-            lora_params,
-            lr=config.learning_rate,
-            betas=(0.9, 0.999),
-            weight_decay=0.01,
-        )
+            batch_loss_tensors: list[torch.Tensor] = []
+            batch_distill_loss: list[float] = []
+            batch_kl_reg: list[float] = []
+            batch_mean_is_ratio: list[float] = []
+            batch_clip_fraction: list[float] = []
+            tokens_processed = 0
 
-        batch_loss_tensors: list[torch.Tensor] = []
-        batch_distill_loss: list[float] = []
-        batch_kl_reg: list[float] = []
-        batch_mean_is_ratio: list[float] = []
-        batch_clip_fraction: list[float] = []
-        tokens_processed = 0
+            for sample in payload.samples:
+                prompt_ids = self.tokenizer.encode(
+                    sample.prompt,
+                    add_special_tokens=True,
+                    return_tensors="pt",
+                ).to(self.device)
+                response_ids = self.tokenizer.encode(
+                    sample.response,
+                    add_special_tokens=False,
+                    return_tensors="pt",
+                ).to(self.device)
 
-        for sample in payload.samples:
-            prompt_ids = self.tokenizer.encode(
-                sample.prompt,
-                add_special_tokens=True,
-                return_tensors="pt",
-            ).to(self.device)
-            response_ids = self.tokenizer.encode(
-                sample.response,
-                add_special_tokens=False,
-                return_tensors="pt",
-            ).to(self.device)
+                full_ids = torch.cat([prompt_ids, response_ids], dim=-1)
+                response_start = prompt_ids.shape[-1]
+                response_token_count = response_ids.shape[-1]
+                tokens_processed += int(response_token_count)
 
-            full_ids = torch.cat([prompt_ids, response_ids], dim=-1)
-            response_start = prompt_ids.shape[-1]
-            response_token_count = response_ids.shape[-1]
-            tokens_processed += int(response_token_count)
+                response_mask = torch.zeros(1, full_ids.shape[-1], device=self.device)
+                response_mask[:, response_start:] = 1.0
 
-            response_mask = torch.zeros(1, full_ids.shape[-1], device=self.device)
-            response_mask[:, response_start:] = 1.0
+                with torch.no_grad():
+                    base_output = self.base_model(input_ids=full_ids)
+                    base_logits = base_output.logits[:, response_start - 1 : -1, :]
+                    base_logprobs = self.functional.log_softmax(base_logits, dim=-1).gather(
+                        -1, response_ids[:, :response_token_count].unsqueeze(-1)
+                    ).squeeze(-1)
 
-            with torch.no_grad():
-                base_output = self.base_model(input_ids=full_ids)
-                base_logits = base_output.logits[:, response_start - 1 : -1, :]
-                base_logprobs = self.functional.log_softmax(base_logits, dim=-1).gather(
-                    -1, response_ids[:, :response_token_count].unsqueeze(-1)
-                ).squeeze(-1)
+                del base_output, base_logits
+                torch.cuda.empty_cache()
 
-            del base_output, base_logits
+                student_output = model(input_ids=full_ids)
+                student_logits = student_output.logits[:, response_start - 1 : -1, :].contiguous()
+                del student_output
+
+                old_student_logprobs = torch.tensor(
+                    sample.rollout_logprobs,
+                    dtype=torch.float32,
+                    device=self.device,
+                ).unsqueeze(0)
+                if old_student_logprobs.shape[1] > response_token_count:
+                    old_student_logprobs = old_student_logprobs[:, :response_token_count]
+                elif old_student_logprobs.shape[1] < response_token_count:
+                    raise ValueError("rollout_logprobs length must match response token length")
+
+                if config.teacher_mode == "remote":
+                    if sample.teacher_result is None:
+                        raise ValueError("teacher_mode='remote' requires teacher_result")
+                    teacher_logprobs, teacher_indices = parse_teacher_result(
+                        sample.teacher_result,
+                        str(self.device),
+                    )
+                else:
+                    teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
+                        sample.prompt,
+                        sample.feedback,
+                        response_ids,
+                        config.teacher_top_k,
+                    )
+
+                if teacher_logprobs.shape[0] != response_token_count:
+                    raise ValueError("teacher logprob sequence length must match response length")
+
+                loss_input = SDPOLossInput(
+                    student_logits=student_logits,
+                    teacher_logprobs=teacher_logprobs.unsqueeze(0),
+                    teacher_indices=teacher_indices.unsqueeze(0),
+                    base_logprobs=base_logprobs,
+                    response_mask=response_mask[:, response_start:],
+                    old_student_logprobs=old_student_logprobs,
+                    response_ids=response_ids[:, :response_token_count],
+                    alpha=config.alpha,
+                    is_clip=config.is_clip,
+                    kl_reg_weight=config.kl_reg_weight,
+                )
+                loss_dict = compute_sdpo_loss(loss_input)
+                batch_loss_tensors.append(loss_dict["loss"])
+                batch_distill_loss.append(loss_dict["distill_loss"])
+                batch_kl_reg.append(loss_dict["kl_reg"])
+                batch_mean_is_ratio.append(loss_dict["mean_is_ratio"])
+                batch_clip_fraction.append(loss_dict["clip_fraction"])
+
+                del full_ids, prompt_ids, response_ids, response_mask
+                del student_logits, base_logprobs, old_student_logprobs
+                del teacher_logprobs, teacher_indices, loss_input
+
+            mean_loss = torch.stack(batch_loss_tensors).mean()
+            mean_loss.backward()
+
+            grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, config.max_grad_norm)
+            optimizer.step()
+            optimizer.zero_grad()
+
+            model.gradient_checkpointing_disable()
+
+            save_dir = tempfile.mkdtemp(prefix="lora_updated_")
+            try:
+                model.save_pretrained(save_dir)
+                if payload.save_in_place:
+                    new_lora_id = save_lora_inplace(save_dir, payload.lora_id)
+                else:
+                    new_lora_id = save_lora(save_dir, payload.lora_id)
+            finally:
+                cleanup_local_lora(save_dir)
+
+            total_loss = mean_loss.item()
+            distill_loss = sum(batch_distill_loss) / len(batch_distill_loss)
+            kl_reg = sum(batch_kl_reg) / len(batch_kl_reg)
+            mean_is_ratio = sum(batch_mean_is_ratio) / len(batch_mean_is_ratio)
+            clip_fraction = sum(batch_clip_fraction) / len(batch_clip_fraction)
+            grad_norm_value = grad_norm.item() if hasattr(grad_norm, "item") else float(grad_norm)
+
+            del model, optimizer, batch_loss_tensors
             torch.cuda.empty_cache()
 
-            student_output = model(input_ids=full_ids)
-            student_logits = student_output.logits[:, response_start - 1 : -1, :].contiguous()
-            del student_output
-
-            old_student_logprobs = torch.tensor(
-                sample.rollout_logprobs,
-                dtype=torch.float32,
-                device=self.device,
-            ).unsqueeze(0)
-            if old_student_logprobs.shape[1] > response_token_count:
-                old_student_logprobs = old_student_logprobs[:, :response_token_count]
-            elif old_student_logprobs.shape[1] < response_token_count:
-                raise ValueError("rollout_logprobs length must match response token length")
-
-            if config.teacher_mode == "remote":
-                if sample.teacher_result is None:
-                    raise ValueError("teacher_mode='remote' requires teacher_result")
-                teacher_logprobs, teacher_indices = parse_teacher_result(
-                    sample.teacher_result,
-                    str(self.device),
-                )
-            else:
-                teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
-                    sample.prompt,
-                    sample.feedback,
-                    response_ids,
-                    config.teacher_top_k,
-                )
-
-            if teacher_logprobs.shape[0] != response_token_count:
-                raise ValueError("teacher logprob sequence length must match response length")
-
-            loss_input = SDPOLossInput(
-                student_logits=student_logits,
-                teacher_logprobs=teacher_logprobs.unsqueeze(0),
-                teacher_indices=teacher_indices.unsqueeze(0),
-                base_logprobs=base_logprobs,
-                response_mask=response_mask[:, response_start:],
-                old_student_logprobs=old_student_logprobs,
-                response_ids=response_ids[:, :response_token_count],
-                alpha=config.alpha,
-                is_clip=config.is_clip,
-                kl_reg_weight=config.kl_reg_weight,
+            return DistillResponse.model_validate(
+                {
+                    "lora_id": new_lora_id,
+                    "metadata": {
+                        "total_loss": total_loss,
+                        "distill_loss": distill_loss,
+                        "kl_reg": kl_reg,
+                        "mean_is_ratio": mean_is_ratio,
+                        "clip_fraction": clip_fraction,
+                        "grad_norm": grad_norm_value,
+                        "tokens_processed": tokens_processed,
+                        "teacher_mode": config.teacher_mode,
+                        "batch_size": len(payload.samples),
+                    },
+                }
             )
-            loss_dict = compute_sdpo_loss(loss_input)
-            batch_loss_tensors.append(loss_dict["loss"])
-            batch_distill_loss.append(loss_dict["distill_loss"])
-            batch_kl_reg.append(loss_dict["kl_reg"])
-            batch_mean_is_ratio.append(loss_dict["mean_is_ratio"])
-            batch_clip_fraction.append(loss_dict["clip_fraction"])
-
-            del full_ids, prompt_ids, response_ids, response_mask
-            del student_logits, base_logprobs, old_student_logprobs
-            del teacher_logprobs, teacher_indices, loss_input
-
-        mean_loss = torch.stack(batch_loss_tensors).mean()
-        mean_loss.backward()
-
-        grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, config.max_grad_norm)
-        optimizer.step()
-        optimizer.zero_grad()
-
-        model.gradient_checkpointing_disable()
-
-        save_dir = tempfile.mkdtemp(prefix="lora_updated_")
-        try:
-            model.save_pretrained(save_dir)
-            if payload.save_in_place:
-                new_lora_id = save_lora_inplace(save_dir, payload.lora_id)
-            else:
-                new_lora_id = save_lora(save_dir, payload.lora_id)
         finally:
-            cleanup_local_lora(save_dir)
-
-        total_loss = mean_loss.item()
-        distill_loss = sum(batch_distill_loss) / len(batch_distill_loss)
-        kl_reg = sum(batch_kl_reg) / len(batch_kl_reg)
-        mean_is_ratio = sum(batch_mean_is_ratio) / len(batch_mean_is_ratio)
-        clip_fraction = sum(batch_clip_fraction) / len(batch_clip_fraction)
-        grad_norm_value = grad_norm.item() if hasattr(grad_norm, "item") else float(grad_norm)
-
-        del model, optimizer, batch_loss_tensors
-        cleanup_local_lora(lora_local_path)
-        torch.cuda.empty_cache()
-
-        return DistillResponse.model_validate(
-            {
-                "lora_id": new_lora_id,
-                "metadata": {
-                    "total_loss": total_loss,
-                    "distill_loss": distill_loss,
-                    "kl_reg": kl_reg,
-                    "mean_is_ratio": mean_is_ratio,
-                    "clip_fraction": clip_fraction,
-                    "grad_norm": grad_norm_value,
-                    "tokens_processed": tokens_processed,
-                    "teacher_mode": config.teacher_mode,
-                    "batch_size": len(payload.samples),
-                },
-            }
-        )
+            cleanup_local_lora(lora_local_path)

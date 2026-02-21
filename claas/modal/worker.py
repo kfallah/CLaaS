@@ -44,8 +44,8 @@ training_image = (
         {
             "HF_HOME": "/models/hf_cache",
             "TRANSFORMERS_CACHE": "/models/hf_cache",
-            "HF_TOKEN": os.environ["HF_TOKEN"],
-            "HUGGING_FACE_HUB_TOKEN": os.environ["HF_TOKEN"],
+            "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
+            "HUGGING_FACE_HUB_TOKEN": os.environ.get("HF_TOKEN", ""),
         }
     )
 )
@@ -65,8 +65,10 @@ training_image = (
 class DistillWorker:
     """Modal worker that delegates training to ``DistillationTrainer``."""
 
-    base_model_id: str = os.environ["CLAAS_BASE_MODEL_ID"]
-    attn_implementation: str = os.environ["CLAAS_ATTN_IMPLEMENTATION"]
+    # Defaults are captured at deploy/import time. Move env reads into runtime
+    # initialization if container-level overrides are required.
+    base_model_id: str = os.environ.get("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3-8B")
+    attn_implementation: str = os.environ.get("CLAAS_ATTN_IMPLEMENTATION", "sdpa")
 
     @modal.enter(snap=True)
     def load_base_model(self) -> None:
@@ -87,9 +89,10 @@ class DistillWorker:
         Returns:
             Distillation response payload.
         """
-        response = self.trainer.distill(request)
-        self.trainer.offload_base_model()
-        return response
+        try:
+            return self.trainer.distill(request)
+        finally:
+            self.trainer.offload_base_model()
 
     @modal.method()
     def health_check(self) -> WorkerHealthResponse:
