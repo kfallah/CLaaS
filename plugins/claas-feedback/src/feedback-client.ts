@@ -10,6 +10,9 @@ export interface DistillRequestPayload {
   response: string;
   feedback: string;
   rollout_logprobs: number[];
+  prompt_token_ids?: number[] | null;
+  response_token_ids?: number[] | null;
+  user_prompt?: string | null;
   training: {
     teacher_mode: string;
   };

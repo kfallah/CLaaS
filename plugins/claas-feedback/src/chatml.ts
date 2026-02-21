@@ -100,7 +100,8 @@ export function buildChatML(
 export interface RawCompletion {
   prompt: string;
   response: string;
-  token_ids: number[];
+  token_ids: number[] | null;
+  prompt_token_ids: number[] | null;
   logprobs: number[] | null;
 }
 

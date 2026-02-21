@@ -165,6 +165,14 @@ export default function register(api: OpenClawPluginApi) {
       if (!parsedContent) {
         return { text: "No bot response found in the last conversation." };
       }
+      const assistantIdx = cached.messages.lastIndexOf(lastAssistant);
+      const lastUserBeforeAssistant = cached.messages
+        .slice(0, Math.max(assistantIdx, 0))
+        .reverse()
+        .find((m: Record<string, unknown>) => m.role === "user");
+      const userPrompt = lastUserBeforeAssistant
+        ? extractContent((lastUserBeforeAssistant as Record<string, unknown>).content)
+        : null;
       // Strip proper <think>...</think> blocks, then strip orphaned </think>
       // (when <think> was consumed as a special token by the tokenizer).
       let visibleContent = parsedContent.replace(/<think>[\s\S]*?<\/think>/g, "");
@@ -178,11 +186,15 @@ export default function register(api: OpenClawPluginApi) {
       let rawPrompt: string;
       let rawResponse: string;
       let rolloutLogprobs: number[] | null = null;
+      let promptTokenIds: number[] | null = null;
+      let responseTokenIds: number[] | null = null;
       try {
         const raw = await fetchRawCompletion(proxyUrl, contentHash);
         rawPrompt = raw.prompt;
         rawResponse = raw.response;
         rolloutLogprobs = raw.logprobs;
+        promptTokenIds = raw.prompt_token_ids;
+        responseTokenIds = raw.token_ids;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[claas-feedback] raw completion fetch failed: ${msg}`);
@@ -207,7 +219,16 @@ export default function register(api: OpenClawPluginApi) {
       }
 
       // Submit to CLaaS
-      const { pendingSize } = appendFeedback(senderKey, rawPrompt, rawResponse, feedbackText, rolloutLogprobs);
+      const { pendingSize } = appendFeedback(
+        senderKey,
+        rawPrompt,
+        rawResponse,
+        feedbackText,
+        rolloutLogprobs,
+        promptTokenIds,
+        responseTokenIds,
+        userPrompt,
+      );
       if (pendingSize < feedbackBatchSize) {
         return {
           text: `✅ Feedback queued (buffer: ${pendingSize}/${feedbackBatchSize})`,
@@ -228,6 +249,9 @@ export default function register(api: OpenClawPluginApi) {
             response: item.response,
             feedback: item.feedback,
             rollout_logprobs: item.rollout_logprobs,
+            prompt_token_ids: item.prompt_token_ids,
+            response_token_ids: item.response_token_ids,
+            user_prompt: item.user_prompt,
             training: { teacher_mode: "self" },
           })),
           orchestration: {
