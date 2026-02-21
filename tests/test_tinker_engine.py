@@ -668,3 +668,89 @@ def test_engine_export_lora(tinker_engine):
 
     assert result.filename == "test%2Fexport.zip"
     assert result.content == fake_zip
+
+
+def test_engine_distill_uses_response_token_ids(tinker_engine, mock_training_client):
+    """When response_token_ids is set, the engine uses them directly."""
+    engine, mock_service = tinker_engine
+
+    set_tinker_path("test/lora", "tinker://ckpt", "gpt-oss/GPT-OSS-120B", 32, step=0)
+    mock_service.create_training_client_from_state_async = AsyncMock(
+        return_value=mock_training_client
+    )
+
+    teacher_sampler = MagicMock()
+    teacher_sampler.compute_logprobs_async = AsyncMock(return_value=[-0.3] * 100)
+    mock_service.create_sampling_client_async = AsyncMock(return_value=teacher_sampler)
+
+    prompt_ids = [10, 20, 30]
+    response_ids = [40, 50, 60]
+
+    payload = DistillBatchRequestPayload(
+        lora_id="test/lora",
+        training=TrainingConfig(),
+        samples=[
+            DistillBatchItem(
+                prompt="(ignored prompt text)",
+                response="(ignored response text)",
+                feedback="Nice",
+                rollout_logprobs=[-0.1, -0.2, -0.3],
+                prompt_token_ids=prompt_ids,
+                response_token_ids=response_ids,
+            )
+        ],
+    )
+
+    result = asyncio.run(engine.distill(payload))
+
+    assert isinstance(result, DistillResponse)
+    assert result.metadata["step"] == 1
+    assert result.metadata["completion_len"] == 3
+
+    tok = mock_training_client.get_tokenizer()
+    encode_calls = [c for c in tok.encode.call_args_list if "(ignored" in str(c)]
+    assert len(encode_calls) == 0
+
+
+def test_engine_distill_uses_user_prompt_for_teacher(tinker_engine, mock_training_client):
+    """When user_prompt is set, teacher builder receives the clean prompt."""
+    engine, mock_service = tinker_engine
+
+    set_tinker_path("test/lora", "tinker://ckpt", "gpt-oss/GPT-OSS-120B", 32, step=0)
+    mock_service.create_training_client_from_state_async = AsyncMock(
+        return_value=mock_training_client
+    )
+
+    teacher_sampler = MagicMock()
+    teacher_sampler.compute_logprobs_async = AsyncMock(return_value=[-0.3] * 100)
+    mock_service.create_sampling_client_async = AsyncMock(return_value=teacher_sampler)
+
+    payload = DistillBatchRequestPayload(
+        lora_id="test/lora",
+        training=TrainingConfig(),
+        samples=[
+            DistillBatchItem(
+                prompt=(
+                    "<|im_start|>system\nYou are helpful<|im_end|>\n"
+                    "<|im_start|>user\nWhat is 2+2?<|im_end|>\n"
+                    "<|im_start|>assistant\n"
+                ),
+                response="Four",
+                feedback="Good",
+                rollout_logprobs=[-0.1, -0.2, -0.3, -0.4],
+                user_prompt="What is 2+2?",
+            )
+        ],
+    )
+
+    with patch("claas.training.engine.tinker.engine.build_teacher_messages") as mock_build:
+        mock_build.return_value = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "What is 2+2?"},
+        ]
+        asyncio.run(engine.distill(payload))
+
+    mock_build.assert_called_once()
+    called_prompt = mock_build.call_args[0][0]
+    assert called_prompt == "What is 2+2?"
+    assert "<|im_start|>" not in called_prompt

@@ -470,6 +470,95 @@ def test_feedback_forwards_required_rollout_logprobs(monkeypatch, tmp_path):
     assert captured["request"]["samples"][0]["rollout_logprobs"] == [-0.1, -0.2]
 
 
+def test_feedback_propagates_token_id_fields(monkeypatch, tmp_path):
+    from claas import api
+
+    _mock_config(monkeypatch, "tinker")
+    captured_payload = {}
+
+    class _Engine:
+        async def lora_exists(self, _lora_id):
+            return LoraExistsPayload(exists=True)
+
+    async def fake_run_distill(payload):
+        captured_payload["samples"] = [s.model_dump() for s in payload.samples]
+        return DistillResponse(lora_id="user/model", metadata={})
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
+    monkeypatch.setattr(api, "_run_distill", fake_run_distill)
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "templated prompt",
+                    "response": "response text",
+                    "feedback": "good",
+                    "rollout_logprobs": [-0.1, -0.2],
+                    "training": {"teacher_mode": "self"},
+                    "prompt_token_ids": [10, 20, 30],
+                    "response_token_ids": [40, 50],
+                    "user_prompt": "clean prompt",
+                }
+            ],
+            "orchestration": {"sleep_before": False, "wake_after": False},
+        },
+    )
+
+    assert response.status_code == 200
+    sample = captured_payload["samples"][0]
+    assert sample["prompt_token_ids"] == [10, 20, 30]
+    assert sample["response_token_ids"] == [40, 50]
+    assert sample["user_prompt"] == "clean prompt"
+
+
+def test_feedback_token_id_fields_default_to_none(monkeypatch, tmp_path):
+    from claas import api
+
+    _mock_config(monkeypatch, "tinker")
+    captured_payload = {}
+
+    class _Engine:
+        async def lora_exists(self, _lora_id):
+            return LoraExistsPayload(exists=True)
+
+    async def fake_run_distill(payload):
+        captured_payload["samples"] = [s.model_dump() for s in payload.samples]
+        return DistillResponse(lora_id="user/model", metadata={})
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
+    monkeypatch.setattr(api, "_run_distill", fake_run_distill)
+    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "p",
+                    "response": "r",
+                    "feedback": "f",
+                    "rollout_logprobs": [-0.1],
+                    "training": {"teacher_mode": "self"},
+                }
+            ],
+            "orchestration": {"sleep_before": False, "wake_after": False},
+        },
+    )
+
+    assert response.status_code == 200
+    sample = captured_payload["samples"][0]
+    assert sample["prompt_token_ids"] is None
+    assert sample["response_token_ids"] is None
+    assert sample["user_prompt"] is None
+
+
 async def _noop_coro():
     pass
 

@@ -64,6 +64,7 @@ def _make_mock_renderer(content="Mocked response"):
     mock_renderer = MagicMock()
     mock_input = MagicMock()
     mock_input.length = 5
+    mock_input.to_ints.return_value = [10, 20, 30, 40, 50]
     mock_renderer.build_generation_prompt.return_value = mock_input
     mock_renderer.get_stop_sequences.return_value = ["<|im_end|>"]
     mock_renderer.parse_response.return_value = ({"content": content}, None)
@@ -620,12 +621,17 @@ class TestCacheEndToEnd:
             "<|im_end|>\n<|im_start|>user\ntest<|im_end|>\n"
             "<|im_start|>assistant\n"
         )
-        raw_response = "<think>thinking about it</think>\n\nHere is my response"
-        tokenizer.decode.side_effect = [raw_response, templated_prompt]
+        clean_response = "thinking about it\n\nHere is my response"
+        tokenizer.decode.side_effect = [clean_response, templated_prompt]
+
+        mock_input = MagicMock()
+        mock_input.length = 5
+        mock_input.to_ints.return_value = [10, 20, 30, 40, 50]
 
         renderer = _make_mock_renderer(
             "thinking about it\n</think>\n\nHere is my response",
         )
+        renderer.build_generation_prompt.return_value = mock_input
         _patch_holder(backend.holder, sampler, tokenizer, renderer)
 
         api_resp = api_client.post(
@@ -649,9 +655,10 @@ class TestCacheEndToEnd:
         assert data["prompt"] == templated_prompt
         assert "<|im_start|>system" in data["prompt"]
         assert data["prompt"] != "test"
-        assert data["response"] == raw_response
-        assert "<think>" in data["response"]
+        assert data["response"] == clean_response
+        assert "<think>" not in data["response"]
         assert data["logprobs"] == pytest.approx([-0.5, -0.4, -0.6])
+        assert data["prompt_token_ids"] == [10, 20, 30, 40, 50]
 
     def test_eval_fetch_cached_completion_gptoss(self, api_client):
         import hashlib

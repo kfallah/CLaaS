@@ -129,6 +129,18 @@ class DistillRequest(BaseModel):
         default_factory=TrainingConfig,
         description="Training configuration",
     )
+    prompt_token_ids: list[int] | None = Field(
+        default=None,
+        description="Pre-tokenized prompt token IDs (avoids decode/re-encode mismatch).",
+    )
+    response_token_ids: list[int] | None = Field(
+        default=None,
+        description="Pre-tokenized response token IDs (avoids decode/re-encode mismatch).",
+    )
+    user_prompt: str | None = Field(
+        default=None,
+        description="Clean user prompt for teacher construction (without chat template decoration).",
+    )
 
 
 class TeacherTokenLogprobs(BaseModel):
@@ -148,6 +160,9 @@ class DistillRequestPayload(BaseModel):
     rollout_logprobs: list[float]
     training: TrainingConfig
     teacher_result: list[TeacherTokenLogprobs] | None = None
+    prompt_token_ids: list[int] | None = None
+    response_token_ids: list[int] | None = None
+    user_prompt: str | None = None
     save_in_place: bool = False
 
 
@@ -159,6 +174,9 @@ class DistillBatchItem(BaseModel):
     feedback: str
     rollout_logprobs: list[float]
     teacher_result: list[TeacherTokenLogprobs] | None = None
+    prompt_token_ids: list[int] | None = None
+    response_token_ids: list[int] | None = None
+    user_prompt: str | None = None
 
 
 class DistillBatchRequestPayload(BaseModel):
@@ -434,4 +452,5 @@ class RawCompletionResponse(BaseModel):
     prompt: str
     response: str
     token_ids: list[int] | None = None
+    prompt_token_ids: list[int] | None = None
     logprobs: list[float] | None = None
