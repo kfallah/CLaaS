@@ -16,6 +16,7 @@ from claas.core.types import (  # noqa: E402
     LoraInitRequest,
     TrainingConfig,
 )
+from claas.core.config import LocalConfig  # noqa: E402
 from claas.training import storage  # noqa: E402
 from claas.training.engine.local.engine import LocalTrainingEngine  # noqa: E402
 
@@ -76,7 +77,8 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
             state,
         ),
     )
-    local_engine = LocalTrainingEngine()
+    cfg = LocalConfig(base_model_id="Qwen/Qwen3-8B", attn_implementation="sdpa")
+    local_engine = LocalTrainingEngine(cfg)
 
     init_response = asyncio.run(local_engine.init_lora(LoraInitRequest(lora_id="user/integration")))
     lora_id = init_response.lora_id
@@ -136,10 +138,11 @@ def test_local_engine_cleanup_failure_propagates(monkeypatch):
             state,
         ),
     )
+    cfg = LocalConfig(base_model_id="Qwen/Qwen3-8B", attn_implementation="sdpa")
 
     with pytest.raises(RuntimeError, match="cleanup failure"):
         asyncio.run(
-            LocalTrainingEngine().distill(
+            LocalTrainingEngine(cfg).distill(
                 DistillBatchRequestPayload(
                     lora_id="user/integration",
                     training=TrainingConfig(),

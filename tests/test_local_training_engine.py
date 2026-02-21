@@ -12,6 +12,7 @@ from claas.core.types import (  # noqa: E402
     DistillResponse,
     TrainingConfig,
 )
+from claas.core.config import LocalConfig  # noqa: E402
 from claas.training.engine.local.engine import LocalTrainingEngine  # noqa: E402
 
 
@@ -36,10 +37,11 @@ def test_local_engine_distill_propagates_cleanup_error(monkeypatch):
     monkeypatch.setenv("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3-8B")
     monkeypatch.setenv("CLAAS_ATTN_IMPLEMENTATION", "sdpa")
     monkeypatch.setattr(local_engine, "DistillationTrainer", _Trainer)
+    cfg = LocalConfig(base_model_id="Qwen/Qwen3-8B", attn_implementation="sdpa")
 
     with pytest.raises(OSError, match="cleanup failed"):
         asyncio.run(
-            LocalTrainingEngine().distill(
+            LocalTrainingEngine(cfg).distill(
                 DistillBatchRequestPayload(
                     lora_id="user/model",
                     training=TrainingConfig(),
