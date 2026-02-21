@@ -276,19 +276,27 @@ class TinkerBackend(InferenceBackend):
         content = text_msg.get("content", "") if isinstance(text_msg, dict) else str(text_msg)
 
         tokenizer = self._holder.tokenizer
-        raw_completion_text = tokenizer.decode(seq.tokens, skip_special_tokens=False)
         prompt_token_ids = list(model_input.to_ints())
+        prompt_len = model_input.length
+
+        # seq.tokens is the full sequence (prompt + completion).
+        # Slice to only the generated tokens so downstream training
+        # gets the correct response without redundant prompt IDs.
+        response_token_ids = list(seq.tokens[prompt_len:])
+        response_logprobs = list(seq.logprobs[prompt_len:]) if seq.logprobs is not None else None
+
+        raw_completion_text = tokenizer.decode(response_token_ids, skip_special_tokens=False)
         prompt_text = tokenizer.decode(prompt_token_ids, skip_special_tokens=False)
 
         return CompletionResult(
             content=content,
             raw_prompt=prompt_text,
             raw_response=raw_completion_text,
-            token_ids=list(seq.tokens),
+            token_ids=response_token_ids,
             prompt_token_ids=prompt_token_ids,
-            logprobs=list(seq.logprobs) if seq.logprobs is not None else None,
-            prompt_tokens=model_input.length,
-            completion_tokens=len(seq.tokens),
+            logprobs=response_logprobs,
+            prompt_tokens=prompt_len,
+            completion_tokens=len(response_token_ids),
         )
 
     async def text_completion(
