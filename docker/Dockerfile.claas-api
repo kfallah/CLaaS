@@ -1,31 +1,24 @@
-FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
+FROM nvcr.io/nvidia/pytorch:25.01-py3
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        python3.12 python3.12-venv python3-pip curl && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN python3.12 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Install uv for fast dependency resolution
-RUN pip install --no-cache-dir uv
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
+
+# Reuse NGC's preinstalled torch + flash-attn from system site-packages.
+RUN python3 -m venv --system-site-packages /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy only dependency files first for layer caching
 COPY pyproject.toml README.md ./
 RUN mkdir -p claas && touch claas/__init__.py
 
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
-RUN uv pip install --index-url "$TORCH_INDEX_URL" torch && \
-    uv pip install ".[local]" modal
+RUN pip install --no-cache-dir ".[local]" modal
 
 # Now copy the full source and reinstall the package (no-deps: deps cached above)
 COPY . /app
-RUN uv pip install --no-deps --reinstall "."
+RUN pip install --no-cache-dir --no-deps --force-reinstall "."
 
 COPY docker/scripts/claas-api-entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

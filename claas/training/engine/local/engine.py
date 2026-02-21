@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 
+from claas.core.config import LocalConfig
 from claas.core.types import (
     DistillBatchRequestPayload,
     DistillResponse,
@@ -35,8 +35,10 @@ from claas.training.storage import (
 class LocalTrainingEngine(TrainingEngine):
     """Executes training and LoRA operations on local infrastructure."""
 
-    def __init__(self) -> None:
+    def __init__(self, cfg: LocalConfig) -> None:
         configure_storage_backend("local_fs")
+        self._base_model_id = cfg.base_model_id
+        self._attn_implementation = cfg.attn_implementation
 
     async def distill(
         self,
@@ -51,8 +53,8 @@ class LocalTrainingEngine(TrainingEngine):
             Distillation response.
         """
         trainer = DistillationTrainer(
-            base_model_id=os.environ["CLAAS_BASE_MODEL_ID"],
-            attn_implementation=os.environ["CLAAS_ATTN_IMPLEMENTATION"],
+            base_model_id=self._base_model_id,
+            attn_implementation=self._attn_implementation,
         )
         await asyncio.to_thread(trainer.load_base_model)
         try:

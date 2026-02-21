@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from claas.core.config import CoreConfig, TinkerConfig
+from claas.core.config import CoreConfig, LocalConfig, TinkerConfig
 from claas.training.engine.base import EngineKind, TrainingEngine
 
 if TYPE_CHECKING:
@@ -17,7 +17,9 @@ def get_training_engine(kind: EngineKind, cfg: CoreConfig) -> TrainingEngine:
     if kind == "local":
         from claas.training.engine.local.engine import LocalTrainingEngine
 
-        return LocalTrainingEngine()
+        if not isinstance(cfg, LocalConfig):
+            raise ValueError("Local engine requires a LocalConfig instance")
+        return LocalTrainingEngine(cfg)
     if kind == "modal":
         from claas.training.engine.modal.engine import ModalTrainingEngine
 
