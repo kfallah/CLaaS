@@ -9,6 +9,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from claas.core.config import LocalConfig  # noqa: E402
 from claas.core.types import (  # noqa: E402
     DistillBatchItem,
     DistillBatchRequestPayload,
@@ -16,7 +17,6 @@ from claas.core.types import (  # noqa: E402
     LoraInitRequest,
     TrainingConfig,
 )
-from claas.core.config import LocalConfig  # noqa: E402
 from claas.training import storage  # noqa: E402
 from claas.training.engine.local.engine import LocalTrainingEngine  # noqa: E402
 
