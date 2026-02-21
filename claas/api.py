@@ -7,8 +7,8 @@ inference proxy. Runtime backend config is selected via Hydra config name
 Inference is proxied through the API rather than served directly so that
 chain-of-thought (thinking) tags can be stripped from user-facing responses
 while the raw completion is cached for the training pipeline. This cache
-also lets the ``/feedback`` endpoint retrieve the full generation (including
-thinking) when creating preference pairs for online distillation.
+also lets the ``/feedback`` endpoint retrieve the on-policy rollout (including
+thinking) needed for self-distillation.
 
 Endpoints:
 - POST /v1/chat/completions: Chat completion (forwarded to inference backend)
