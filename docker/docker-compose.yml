@@ -58,6 +58,7 @@ services:
     environment:
       - VLLM_API_KEY=sk-local
       - HF_TOKEN=${HF_TOKEN:-}
+      - HF_HOME=/root/.cache/huggingface
     volumes:
       - lora-storage:/loras
       - hf-cache:/root/.cache/huggingface
@@ -93,9 +94,12 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - OPENCLAW_HOME=/openclaw-config
       - CLAAS_API_URL=http://claas-api:8080
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN:-}
     volumes:
       - lora-storage:/loras
       - openclaw-config:/openclaw-config
+      - hf-cache:/root/.cache/huggingface
       - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro
 
   openclaw-local:
