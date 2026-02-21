@@ -10,12 +10,22 @@ RUN apt-get update && \
 RUN python3.12 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Install uv for fast dependency resolution
+RUN pip install --no-cache-dir uv
+
 WORKDIR /app
-COPY . /app
+
+# Copy only dependency files first for layer caching
+COPY pyproject.toml README.md ./
+RUN mkdir -p claas && touch claas/__init__.py
 
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
-RUN pip install --no-cache-dir --index-url "$TORCH_INDEX_URL" torch && \
-    pip install --no-cache-dir ".[local]" modal
+RUN uv pip install --index-url "$TORCH_INDEX_URL" torch && \
+    uv pip install ".[local]" modal
+
+# Now copy the full source and reinstall the package (no-deps: deps cached above)
+COPY . /app
+RUN uv pip install --no-deps --reinstall "."
 
 COPY docker/scripts/claas-api-entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

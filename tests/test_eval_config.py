@@ -64,9 +64,9 @@ def test_unknown_key_rejected() -> None:
         _compose_eval_config(config_dir=tmpdir)
 
 
-def test_tinker_proxy_default() -> None:
-    config = build_harness_config(_compose_eval_config(["mode=tinker", "proxy_url=null"]))
-    assert config.proxy_url == config.vllm_url
+def test_tinker_vllm_url_equals_claas_url() -> None:
+    config = build_harness_config(_compose_eval_config(["mode=tinker"]))
+    assert config.vllm_url == config.claas_url
 
 
 def test_timestamped_output_dir() -> None:
@@ -85,14 +85,14 @@ def test_steps_per_batch_from_config() -> None:
     assert config.steps_per_batch == 3
 
 
-def test_build_harness_config_tinker_proxy() -> None:
+def test_build_harness_config_tinker_vllm_url() -> None:
     config = build_harness_config(EvalConfig(mode="tinker"))
-    assert config.proxy_url == config.vllm_url
+    assert config.vllm_url == config.claas_url
 
 
-def test_build_harness_config_local_no_proxy() -> None:
+def test_build_harness_config_local_vllm_url_unchanged() -> None:
     config = build_harness_config(EvalConfig(mode="local"))
-    assert config.proxy_url is None
+    assert config.vllm_url == "http://localhost:8000"
 
 
 def test_hydra_config_custom_dir() -> None:

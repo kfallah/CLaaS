@@ -2,13 +2,13 @@
 # Run the full Tinker integration test suite.
 #
 # Usage:
-#   TINKER_API_KEY=... ./scripts/run_integration_tests.sh
+#   TINKER_API_KEY=... ./tests/integration/run_tinker_stack_integration.sh
 #
 # Requires: docker, uv
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$PROJECT_ROOT/docker/docker-compose.yml"
 
 export MODEL="${MODEL:-meta-llama/Llama-3.2-1B}"
@@ -38,9 +38,6 @@ echo "==> Starting tinker stack (model=$MODEL) ..."
 compose up -d --build
 
 # ── 2. Wait for health ─────────────────────────────────────────────
-echo "==> Waiting for tinker-proxy ..."
-timeout 180 bash -c 'until curl -sf http://127.0.0.1:8000/v1/models >/dev/null 2>&1; do sleep 5; done'
-
 echo "==> Waiting for CLaaS API ..."
 timeout 120 bash -c 'until curl -sf http://127.0.0.1:8080/ >/dev/null 2>&1; do sleep 5; done'
 

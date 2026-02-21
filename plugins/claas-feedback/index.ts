@@ -51,9 +51,7 @@ export default function register(api: OpenClawPluginApi) {
     "http://claas-api:8080";
   const proxyUrl =
     (typeof config.proxyUrl === "string" && config.proxyUrl.trim()) ||
-    (typeof process.env.CLAAS_TINKER_PROXY_URL === "string" && process.env.CLAAS_TINKER_PROXY_URL.trim()) ||
-    (typeof process.env.CLAAS_VLLM_BASE_URL === "string" && process.env.CLAAS_VLLM_BASE_URL.trim()) ||
-    "http://tinker-proxy:8000";
+    claasApiUrl;
   const loraId = config.loraId ?? "openclaw/assistant-latest";
   const debugEnabled = config.debug === true || process.env.CLAAS_FEEDBACK_DEBUG === "true";
   const feedbackBatchSize = Math.max(1, config.feedbackBatchSize ?? 4);

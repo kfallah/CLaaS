@@ -169,13 +169,13 @@ async def _generate_response(
 
 
 async def _fetch_cached_completion(
-    proxy_url: str,
+    claas_url: str,
     visible_content: str,
 ) -> tuple[str, str, list[float]]:
-    """Fetch the cached raw completion from the proxy by content hash.
+    """Fetch the cached raw completion from the API by content hash.
 
-    The proxy caches ``{prompt, response, logprobs}`` keyed by
-    ``SHA-256(stripped_content)``.  Since the proxy now strips thinking
+    The API caches ``{prompt, response, logprobs}`` keyed by
+    ``SHA-256(stripped_content)``.  Since the API strips thinking
     before returning content, ``visible_content`` already matches the
     cache key.  We apply ``strip_thinking`` defensively in case the caller
     passes un-stripped text.
@@ -185,7 +185,7 @@ async def _fetch_cached_completion(
     content_hash = hashlib.sha256(
         strip_thinking(visible_content).encode("utf-8"),
     ).hexdigest()
-    async with httpx.AsyncClient(base_url=proxy_url, timeout=60.0) as client:
+    async with httpx.AsyncClient(base_url=claas_url, timeout=60.0) as client:
         resp = await client.get(
             "/v1/completions/raw",
             params={"content_hash": content_hash},
@@ -201,21 +201,21 @@ async def _generate_and_collect(
     model: str,
     prompt: str,
 ) -> tuple[str, str, str, list[float]]:
-    """Generate via OpenClaw, then fetch cached raw completion from the proxy.
+    """Generate via OpenClaw, then fetch cached raw completion from the API.
 
     When ``config.openclaw_url`` is set, generation routes through the OpenClaw
-    gateway which prepends the full agent system prompt and context.  The proxy
+    gateway which prepends the full agent system prompt and context.  The API
     strips thinking from the returned content and caches the raw completion
     (with the full OpenClaw-templated prompt and generation-time logprobs)
     keyed by ``SHA-256(visible_content)``.
 
     Returns ``(visible_content, real_prompt, raw_response, rollout_logprobs)``.
     """
-    assert config.proxy_url is not None
+    assert config.claas_url is not None
     content = await _generate_response(config, model, prompt, temperature=0.7)
 
     real_prompt, raw_response, rollout_lps = await _fetch_cached_completion(
-        config.proxy_url, content,
+        config.claas_url, content,
     )
     return content, real_prompt, raw_response, rollout_lps
 
@@ -317,7 +317,7 @@ async def _measure_eval_metrics(
         generate=generate,
         openclaw_url=config.openclaw_url,
         openclaw_api_key=openclaw_api_key,
-        proxy_url=config.proxy_url,
+        mode=config.mode,
     )
 
     for metric in enabled_metrics:

@@ -20,6 +20,7 @@ dependencies = [
     "uvicorn>=0.40.0",
     "matplotlib>=3.8.0",
     "hydra-core>=1.3.0",
+    "huggingface_hub>=0.20.0",
 ]
 
 [project.optional-dependencies]

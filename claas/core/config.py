@@ -29,6 +29,7 @@ class CLaaSConfig:
     lora_root: str = "/loras"
     storage_backend: str = "local_fs"
     allowed_init_base_models: list[str] = field(default_factory=list)
+    completion_cache_size: int = 100
 
 
 @dataclass
@@ -66,20 +67,12 @@ class TinkerConfig(CLaaSConfig):
 
     mode: str = "tinker"
     storage_backend: str = "local_fs"
-    tinker_base_model: str = "gpt-oss/GPT-OSS-120B"
+    tinker_base_model: str = "Qwen/Qwen3-30B-A3B"
     tinker_state_path: str = "~/.claas/tinker_state.json"
     vllm_base_url: str = "http://127.0.0.1:8000"
 
 
 CoreConfig = LocalConfig | ModalConfig | TinkerConfig
-
-
-@dataclass
-class ProxyConfig:
-    """Standalone configuration for the Tinker inference proxy."""
-
-    tinker_base_model: str = "gpt-oss/GPT-OSS-120B"
-    completion_cache_size: int = 100
 
 
 def register_config_schemas() -> None:
@@ -92,7 +85,6 @@ def register_config_schemas() -> None:
     cs.store(name="_core_local_schema", node=LocalConfig)
     cs.store(name="_core_modal_schema", node=ModalConfig)
     cs.store(name="_core_tinker_schema", node=TinkerConfig)
-    cs.store(name="_core_proxy_schema", node=ProxyConfig)
     _SCHEMAS_REGISTERED = True
 
 
@@ -130,22 +122,4 @@ def load_core_config(
     if not isinstance(obj, TinkerConfig):
         raise TypeError("Hydra compose for 'tinker' did not produce TinkerConfig")
     obj.tinker_state_path = os.path.expanduser(obj.tinker_state_path)
-    return obj
-
-
-def load_proxy_config(
-    *,
-    overrides: list[str] | None = None,
-    config_dir: str | None = None,
-) -> ProxyConfig:
-    """Compose and return the standalone proxy config."""
-    register_config_schemas()
-    abs_dir = os.path.abspath(config_dir or _CONFIG_DIR)
-    with initialize_config_dir(version_base=None, config_dir=abs_dir):
-        cfg = compose(config_name="proxy", overrides=overrides or [])
-
-    typed_cfg = OmegaConf.merge(OmegaConf.structured(ProxyConfig), cfg)
-    obj = OmegaConf.to_object(typed_cfg)
-    if not isinstance(obj, ProxyConfig):
-        raise TypeError("Hydra compose for 'proxy' did not produce ProxyConfig")
     return obj

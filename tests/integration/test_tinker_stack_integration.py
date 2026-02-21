@@ -30,15 +30,15 @@ logger = logging.getLogger(__name__)
 
 def _fetch_raw_completion(
     client: httpx.Client,
-    proxy_url: str,
+    claas_url: str,
     response_content: str,
 ) -> tuple[str, list[float]]:
-    """Fetch raw completion text and rollout logprobs from the proxy cache.
+    """Fetch raw completion text and rollout logprobs from the API cache.
 
     Mirrors the OpenClaw feedback plugin: hash the parsed content, hit
     ``/v1/completions/raw``, and return ``(raw_text, logprobs)``.
 
-    Returns the raw response and logprobs as-is from the proxy cache.
+    Returns the raw response and logprobs as-is from the API cache.
     """
     visible = _THINK_RE.sub("", response_content)
     idx = visible.find("</think>")
@@ -47,7 +47,7 @@ def _fetch_raw_completion(
     visible = visible.strip()
     content_hash = hashlib.sha256(visible.encode("utf-8")).hexdigest()
     resp = client.get(
-        f"{proxy_url}/v1/completions/raw",
+        f"{claas_url}/v1/completions/raw",
         params={"content_hash": content_hash},
         timeout=15.0,
     )
@@ -56,7 +56,7 @@ def _fetch_raw_completion(
     )
     data = resp.json()
     logprobs = data["logprobs"]
-    assert logprobs is not None, "Proxy returned null logprobs"
+    assert logprobs is not None, "API returned null logprobs"
 
     return data["response"], logprobs
 
@@ -69,9 +69,9 @@ def _fetch_raw_completion(
 class TestTinkerStackReachability:
     """Verify that all Tinker stack services are reachable."""
 
-    def test_tinker_proxy_models(self, tinker_stack: TinkerStack) -> None:
+    def test_claas_api_models(self, tinker_stack: TinkerStack) -> None:
         with httpx.Client(timeout=15.0) as client:
-            resp = client.get(f"{tinker_stack.proxy_url}/v1/models")
+            resp = client.get(f"{tinker_stack.claas_url}/v1/models")
         assert resp.status_code == 200
 
     def test_claas_api_root(self, tinker_stack: TinkerStack) -> None:
@@ -103,7 +103,7 @@ class TestTinkerStackReachability:
 
 
 # ---------------------------------------------------------------------------
-# Full lifecycle round-trip (direct via tinker-proxy)
+# Full lifecycle round-trip (direct via CLaaS API)
 # ---------------------------------------------------------------------------
 
 
@@ -111,7 +111,6 @@ class TestTinkerStackRoundTrip:
     """End-to-end LoRA lifecycle: init -> list -> inference -> distill -> delete."""
 
     def test_full_lifecycle(self, tinker_stack: TinkerStack) -> None:
-        proxy_url = tinker_stack.proxy_url
         claas_url = tinker_stack.claas_url
 
         suffix = uuid.uuid4().hex[:8]
@@ -149,7 +148,7 @@ class TestTinkerStackRoundTrip:
                 assert list_resp.status_code == 200
                 assert lora_id in list_resp.json()["loras"]
 
-                # 3. Inference through tinker-proxy
+                # 3. Inference through CLaaS API
                 chat_messages = [{"role": "user", "content": user_prompt}]
                 chat_payload = {
                     "model": tinker_stack.model,
@@ -160,7 +159,7 @@ class TestTinkerStackRoundTrip:
                     "POST /v1/chat/completions:\n%s", json.dumps(chat_payload, indent=2)
                 )
                 chat_resp = client.post(
-                    f"{proxy_url}/v1/chat/completions",
+                    f"{claas_url}/v1/chat/completions",
                     json=chat_payload,
                     timeout=120.0,
                 )
@@ -171,12 +170,12 @@ class TestTinkerStackRoundTrip:
                 assert len(response_content) > 0
                 logger.info("Model response: %s", response_content)
 
-                # 3b. Fetch raw response + rollout logprobs from proxy cache
+                # 3b. Fetch raw response + rollout logprobs from API cache
                 raw_response, rollout_logprobs = _fetch_raw_completion(
-                    client, proxy_url, response_content,
+                    client, claas_url, response_content,
                 )
                 logger.info(
-                    "Fetched %d rollout logprobs from proxy cache",
+                    "Fetched %d rollout logprobs from API cache",
                     len(rollout_logprobs),
                 )
 
@@ -221,24 +220,24 @@ class TestTinkerStackRoundTrip:
                 step = fb_data["distill_result"]["metadata"].get("step")
                 assert step is not None and step >= 1
 
-                # Verify tinker-proxy was refreshed with new weights
+                # Verify inference backend was refreshed with new weights
                 assert fb_data["vllm"]["woke"] is True, (
-                    "Expected tinker-proxy refresh after distillation"
+                    "Expected inference backend refresh after distillation"
                 )
 
-                # 5. Verify the proxy switched to the distilled LoRA
+                # 5. Verify the API switched to the distilled LoRA
                 expected_path = fb_data["distill_result"]["metadata"][
                     "sampler_weights_path"
                 ]
                 status_resp = client.get(
-                    f"{proxy_url}/v1/sampler/status",
+                    f"{claas_url}/v1/sampler/status",
                     timeout=15.0,
                 )
                 assert status_resp.status_code == 200
                 actual_path = status_resp.json()["model_path"]
                 logger.info("Post-distillation sampler model_path: %s", actual_path)
                 assert actual_path == expected_path, (
-                    f"Proxy should be serving distilled LoRA {expected_path!r}, "
+                    f"API should be serving distilled LoRA {expected_path!r}, "
                     f"got {actual_path!r}"
                 )
 
@@ -250,7 +249,7 @@ class TestTinkerStackRoundTrip:
                 }
                 logger.info("Post-distillation inference check ...")
                 post_resp = client.post(
-                    f"{proxy_url}/v1/chat/completions",
+                    f"{claas_url}/v1/chat/completions",
                     json=post_payload,
                     timeout=120.0,
                 )

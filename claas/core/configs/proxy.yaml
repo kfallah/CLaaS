@@ -1,6 +1,0 @@
-defaults:
-  - _core_proxy_schema
-  - _self_
-
-tinker_base_model: gpt-oss/GPT-OSS-120B
-completion_cache_size: 100
