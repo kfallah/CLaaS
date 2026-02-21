@@ -276,7 +276,7 @@ class TinkerBackend(InferenceBackend):
         content = text_msg.get("content", "") if isinstance(text_msg, dict) else str(text_msg)
 
         tokenizer = self._holder.tokenizer
-        raw_completion_text = tokenizer.decode(seq.tokens, skip_special_tokens=True)
+        raw_completion_text = tokenizer.decode(seq.tokens, skip_special_tokens=False)
         prompt_token_ids = list(model_input.to_ints())
         prompt_text = tokenizer.decode(prompt_token_ids, skip_special_tokens=False)
 
