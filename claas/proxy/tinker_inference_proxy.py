@@ -155,7 +155,8 @@ class _SamplerHolder:
             base_model = proxy_cfg.tinker_base_model
             self._service = tinker.ServiceClient()
             self._sampler = self._service.create_sampling_client(base_model=base_model)
-            self._tokenizer = self._sampler.get_tokenizer()
+            from transformers import AutoTokenizer
+            self._tokenizer = AutoTokenizer.from_pretrained(base_model)
 
             self._renderer = _make_renderer(base_model, self._tokenizer)
 
@@ -191,7 +192,8 @@ class _SamplerHolder:
                 self._sampler = self._service.create_sampling_client(model_path=model_path)
             else:
                 self._sampler = self._service.create_sampling_client(base_model=base_model)
-            self._tokenizer = self._sampler.get_tokenizer()
+            from transformers import AutoTokenizer
+            self._tokenizer = AutoTokenizer.from_pretrained(base_model)
             self._renderer = _make_renderer(base_model, self._tokenizer)
             self._model_path = model_path
 
