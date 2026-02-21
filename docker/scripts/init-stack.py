@@ -51,7 +51,7 @@ def _default_base_model(config_name: str) -> str:
 
 def _default_vllm_base_url(config_name: str) -> str:
     if config_name == "tinker":
-        return "http://tinker-proxy:8000/v1"
+        return "http://claas-api:8080/v1"
     return "http://vllm:8000/v1"
 
 

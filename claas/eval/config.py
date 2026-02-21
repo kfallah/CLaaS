@@ -22,9 +22,9 @@ def build_harness_config(eval_cfg: EvalConfig) -> HarnessConfig:
     """Post-process EvalConfig → HarnessConfig (no secrets)."""
     fields = dataclasses.asdict(eval_cfg)
 
-    # Tinker defaults: proxy_url fallback to vllm_url
-    if fields["mode"] == "tinker" and not fields.get("proxy_url"):
-        fields["proxy_url"] = fields["vllm_url"]
+    # Tinker mode: the unified API serves inference, so vllm_url = claas_url
+    if fields["mode"] == "tinker":
+        fields["vllm_url"] = fields["claas_url"]
 
     # Timestamped output subdir (skip if output_dir already ends with a run-id,
     # which allows resuming an existing run by passing its directory).

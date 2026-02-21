@@ -11,7 +11,7 @@ The eval harness uses [Hydra](https://hydra.cc/) for configuration. The default 
 ```yaml
 mode: tinker                         # execution backend: local | tinker | modal
 claas_url: http://localhost:8080     # CLaaS API endpoint
-vllm_url: http://localhost:8000      # vLLM / Tinker proxy endpoint
+vllm_url: http://localhost:8000      # vLLM endpoint (auto-set to claas_url in tinker mode)
 vllm_model_name: qwen3-8b           # model identifier for vLLM API calls
 base_model: Qwen/Qwen3-30B-A3B      # base model for LoRA init (Tinker name)
 
@@ -37,7 +37,6 @@ lora_id_prefix: eval
 output_dir: ./data/evals
 
 openclaw_url: null                   # OpenClaw gateway (null = use vllm_url directly)
-proxy_url: null                      # Tinker proxy (auto-set to vllm_url in tinker mode)
 ```
 
 ### Overriding config via CLI
@@ -90,22 +89,14 @@ Secrets are resolved from env vars at runtime, NOT stored in config:
 uv sync --extra tinker --extra dev
 ```
 
-### 2. Start the Tinker inference proxy
-
-```bash
-CLAAS_TINKER_API_KEY="tml-..." \
-  uv run uvicorn claas.proxy.tinker_inference_proxy:app \
-    --host 0.0.0.0 --port 8000
-```
-
-### 3. Start the CLaaS API
+### 2. Start the CLaaS API
 
 ```bash
 CLAAS_TINKER_API_KEY="tml-..." \
   uv run python -m claas.api --config-name tinker
 ```
 
-### 4. Run the eval
+### 3. Run the eval
 
 ```bash
 CLAAS_TINKER_API_KEY="tml-..." \

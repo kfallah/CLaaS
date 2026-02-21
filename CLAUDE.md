@@ -74,9 +74,9 @@ claas/
 │   ├── verifiers.py                     # Programmatic compliance verifiers
 │   ├── capability.py                    # General capability probes
 │   ├── collapse.py                      # Collapse detection
-│   ├── gemini.py                        # Gemini-based evaluation
 │   ├── plotting.py                      # Matplotlib plot generation
-│   └── dashboard.py                     # Web dashboard for results
+│   ├── dashboard.py                     # Web dashboard for results
+│   └── README.md                        # Eval harness documentation
 ```
 
 ## Modal Deployment
