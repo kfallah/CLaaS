@@ -276,14 +276,16 @@ class TinkerBackend(InferenceBackend):
         content = text_msg.get("content", "") if isinstance(text_msg, dict) else str(text_msg)
 
         tokenizer = self._holder.tokenizer
-        raw_completion_text = tokenizer.decode(seq.tokens, skip_special_tokens=False)
-        prompt_text = tokenizer.decode(model_input.to_ints(), skip_special_tokens=False)
+        raw_completion_text = tokenizer.decode(seq.tokens, skip_special_tokens=True)
+        prompt_token_ids = list(model_input.to_ints())
+        prompt_text = tokenizer.decode(prompt_token_ids, skip_special_tokens=False)
 
         return CompletionResult(
             content=content,
             raw_prompt=prompt_text,
             raw_response=raw_completion_text,
             token_ids=list(seq.tokens),
+            prompt_token_ids=prompt_token_ids,
             logprobs=list(seq.logprobs) if seq.logprobs is not None else None,
             prompt_tokens=model_input.length,
             completion_tokens=len(seq.tokens),

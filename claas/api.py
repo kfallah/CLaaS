@@ -615,6 +615,7 @@ async def chat_completions(
             prompt=result.raw_prompt,
             response=result.raw_response,
             token_ids=result.token_ids,
+            prompt_token_ids=result.prompt_token_ids,
             logprobs=result.logprobs,
         ),
     )
@@ -693,6 +694,7 @@ async def get_raw_completion(content_hash: str) -> RawCompletionResponse | JSONR
         prompt=entry.prompt,
         response=entry.response,
         token_ids=entry.token_ids,
+        prompt_token_ids=entry.prompt_token_ids,
         logprobs=entry.logprobs,
     )
 
@@ -745,6 +747,9 @@ async def distill(request: DistillRequest) -> DistillResponse:
                     feedback=single_payload.feedback,
                     rollout_logprobs=single_payload.rollout_logprobs,
                     teacher_result=single_payload.teacher_result,
+                    prompt_token_ids=single_payload.prompt_token_ids,
+                    response_token_ids=single_payload.response_token_ids,
+                    user_prompt=single_payload.user_prompt,
                 )
             ],
         )
@@ -752,7 +757,7 @@ async def distill(request: DistillRequest) -> DistillResponse:
         # Remote teacher is optional; self-distillation is the default path.
         if request.training.teacher_mode == "remote" and _uses_modal_teacher():
             teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-            teacher_prompt = format_teacher_prompt(request.prompt, request.feedback)
+            teacher_prompt = format_teacher_prompt(request.user_prompt or request.prompt, request.feedback)
             teacher_scored = await teacher_score_fn.remote.aio(
                 prompts=[teacher_prompt],
                 completions=[request.response],
@@ -825,6 +830,9 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                         response=req.response,
                         feedback=req.feedback,
                         rollout_logprobs=req.rollout_logprobs,
+                        prompt_token_ids=req.prompt_token_ids,
+                        response_token_ids=req.response_token_ids,
+                        user_prompt=req.user_prompt,
                     )
                 )
 
@@ -857,7 +865,7 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             if first_request.training.teacher_mode == "remote" and _uses_modal_teacher():
                 teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
                 teacher_scored = await teacher_score_fn.remote.aio(
-                    prompts=[format_teacher_prompt(s.prompt, s.feedback) for s in batch_samples],
+                    prompts=[format_teacher_prompt(s.user_prompt or s.prompt, s.feedback) for s in batch_samples],
                     completions=[s.response for s in batch_samples],
                     top_k=first_request.training.teacher_top_k,
                 )
@@ -941,6 +949,9 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                     response=req.response,
                     feedback=req.feedback,
                     rollout_logprobs=req.rollout_logprobs,
+                    prompt_token_ids=req.prompt_token_ids,
+                    response_token_ids=req.response_token_ids,
+                    user_prompt=req.user_prompt,
                 )
                 for req in batch_requests
             ],

@@ -12,18 +12,20 @@ _CACHE_TTL_SECS = 3600  # 1 hour
 class CompletionCacheEntry:
     """A single cached completion with prompt, response, token IDs, and logprobs."""
 
-    __slots__ = ("prompt", "response", "token_ids", "logprobs", "created_at")
+    __slots__ = ("prompt", "response", "token_ids", "prompt_token_ids", "logprobs", "created_at")
 
     def __init__(
         self,
         prompt: str,
         response: str,
         token_ids: list[int],
+        prompt_token_ids: list[int] | None,
         logprobs: list[float] | None,
     ) -> None:
         self.prompt = prompt
         self.response = response
         self.token_ids = token_ids
+        self.prompt_token_ids = prompt_token_ids
         self.logprobs = logprobs
         self.created_at = time.monotonic()
 

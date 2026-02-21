@@ -7,6 +7,9 @@ export interface FeedbackHistoryEntry {
   response: string;
   feedback: string;
   rollout_logprobs: number[] | null;
+  prompt_token_ids: number[] | null;
+  response_token_ids: number[] | null;
+  user_prompt: string | null;
   timestamp: number;
 }
 
@@ -24,12 +27,18 @@ export function appendFeedback(
   response: string,
   feedback: string,
   rolloutLogprobs: number[] | null,
+  promptTokenIds: number[] | null,
+  responseTokenIds: number[] | null,
+  userPrompt: string | null,
 ): { pendingSize: number } {
   const entry: FeedbackHistoryEntry = {
     prompt,
     response,
     feedback,
     rollout_logprobs: rolloutLogprobs,
+    prompt_token_ids: promptTokenIds,
+    response_token_ids: responseTokenIds,
+    user_prompt: userPrompt,
     timestamp: Date.now(),
   };
 

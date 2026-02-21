@@ -218,16 +218,31 @@ class DistillationTrainer:
             tokens_processed = 0
 
             for sample in payload.samples:
-                prompt_ids = self.tokenizer.encode(
-                    sample.prompt,
-                    add_special_tokens=True,
-                    return_tensors="pt",
-                ).to(self.device)
-                response_ids = self.tokenizer.encode(
-                    sample.response,
-                    add_special_tokens=False,
-                    return_tensors="pt",
-                ).to(self.device)
+                if sample.prompt_token_ids is not None:
+                    prompt_ids = torch.tensor(
+                        [sample.prompt_token_ids],
+                        device=self.device,
+                        dtype=torch.int64,
+                    )
+                else:
+                    prompt_ids = self.tokenizer.encode(
+                        sample.prompt,
+                        add_special_tokens=True,
+                        return_tensors="pt",
+                    ).to(self.device)
+
+                if sample.response_token_ids is not None:
+                    response_ids = torch.tensor(
+                        [sample.response_token_ids],
+                        device=self.device,
+                        dtype=torch.int64,
+                    )
+                else:
+                    response_ids = self.tokenizer.encode(
+                        sample.response,
+                        add_special_tokens=False,
+                        return_tensors="pt",
+                    ).to(self.device)
 
                 full_ids = torch.cat([prompt_ids, response_ids], dim=-1)
                 response_start = prompt_ids.shape[-1]
@@ -269,8 +284,9 @@ class DistillationTrainer:
                         str(self.device),
                     )
                 else:
+                    teacher_prompt_source = sample.user_prompt or sample.prompt
                     teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
-                        sample.prompt,
+                        teacher_prompt_source,
                         sample.feedback,
                         response_ids,
                         config.teacher_top_k,
