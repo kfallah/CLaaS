@@ -157,6 +157,10 @@ Heavy dependencies (torch, vllm, transformers, tinker) are not installed locally
 
 Never add code to kill, restart, or spawn vLLM from within the API process. vLLM is managed externally (by the user, systemd, Docker, etc.). The API communicates with vLLM only via its HTTP API (sleep/wake, load/unload LoRA). Adding process management (pkill, subprocess.Popen, etc.) to the API is fragile, creates tight coupling, and is not how this system is designed.
 
+## Docker
+
+Docker env files live in `docker/`. For the Tinker stack, API keys and config are in `docker/.env.tinker` — use `--env-file docker/.env.tinker` when running compose commands. Never hardcode secrets; they come from env files.
+
 ## Long-Running Commands
 
 Always launch long-running commands (servers, evals, deployments, training runs, etc.) inside a `tmux` session so they survive if the Claude Code session ends. Use `run_in_background` for the Bash tool when appropriate, but for any process that must persist beyond the current session, wrap it in tmux:

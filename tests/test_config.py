@@ -34,7 +34,7 @@ def test_load_tinker_config() -> None:
     assert isinstance(cfg, TinkerConfig)
     assert cfg.mode == "tinker"
     assert cfg.storage_backend == "local_fs"
-    assert cfg.tinker_base_model == "gpt-oss/GPT-OSS-120B"
+    assert cfg.tinker_base_model == "Qwen/Qwen3-30B-A3B"
     assert cfg.tinker_state_path == "/data/tinker_state.json"
 
 

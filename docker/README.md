@@ -26,24 +26,22 @@ docker compose --profile local up --build
 
 The first run downloads Qwen3-8B (~16 GB) — expect the vLLM health check to take 10-20 minutes. Subsequent runs use the cached model.
 
-## Tinker Compose Stack
+## Tinker Profile
 
-Use this when you want CLaaS distillation + inference to run against hosted Tinker instead of local vLLM:
+Use this when you want CLaaS distillation + inference to run against hosted Tinker instead of local vLLM. No local GPU required — images install CPU-only PyTorch wheels and use Tinker-hosted inference/training.
 
 ```bash
 cd docker
 cp .env.tinker.example .env.tinker
 # Edit .env.tinker (set TELEGRAM_BOT_TOKEN + TINKER_API_KEY)
-docker compose -f docker-compose.tinker.yml --env-file .env.tinker up --build
+docker compose --env-file .env.tinker --profile tinker up --build
 ```
-
-`docker-compose.tinker.yml` does not require a local GPU. The images install CPU-only PyTorch wheels and use Tinker-hosted inference/training.
 
 This stack brings up:
 - `tinker-proxy` (OpenAI-compatible `/v1/chat/completions` + `/v1/completions`)
-- `claas-api` started with `python -m claas.api --config-name tinker`
-- `init` (creates `{LORA_NAME}-latest` through the API + writes OpenClaw config)
-- `openclaw` (Telegram gateway pointed at `tinker-proxy`)
+- `claas-api-tinker` started with `python -m claas.api --config-name tinker`
+- `init-tinker` (creates `{LORA_NAME}-latest` through the API + writes OpenClaw config)
+- `openclaw-tinker` (Telegram gateway pointed at `tinker-proxy`)
 
 
 ## Services
@@ -65,8 +63,6 @@ This stack brings up:
 | `claas-api-tinker` | 8080 | CLaaS feedback API in Tinker execution mode |
 | `openclaw-tinker` | 18789 | OpenClaw gateway with Telegram bot |
 | `init-tinker` | — | One-shot: creates LoRA via API + writes OpenClaw config |
-
-> **Note:** `docker-compose.tinker.yml` uses the base service names `claas-api`, `openclaw`, and `init` (no `-tinker` suffix).
 
 ## Architecture
 
@@ -129,7 +125,7 @@ Send a DM to your Telegram bot — it should respond using the `openclaw-assista
 
 ## Configuration
 
-Settings live in `.env` (local profile) and `.env.tinker` (tinker stack).
+Settings live in `.env` (local profile) and `.env.tinker` (tinker profile).
 
 ### Docker Compose variables
 
@@ -138,7 +134,7 @@ Settings live in `.env` (local profile) and `.env.tinker` (tinker stack).
 | `TELEGRAM_BOT_TOKEN` | *(required)* | Bot token from @BotFather |
 | `TINKER_API_KEY` | *(tinker only)* | API key for Tinker SDK |
 | `HF_TOKEN` | — | HuggingFace token for gated models (local only) |
-| `MODEL` | `Qwen/Qwen3-8B` (local) / `gpt-oss/GPT-OSS-120B` (tinker) | Base model ID |
+| `MODEL` | `Qwen/Qwen3-8B` (local) / *(required, tinker)* | Base model ID |
 | `MAX_MODEL_LEN` | `32768` | Max sequence length (local only) |
 | `GPU_MEMORY_UTILIZATION` | `0.70` | GPU VRAM fraction (local only) |
 | `LORA_NAME` | `openclaw/assistant` | LoRA adapter identity |

@@ -45,7 +45,7 @@ FEEDBACK_BATCH_SIZE = _parse_feedback_batch_size()
 
 def _default_base_model(config_name: str) -> str:
     if config_name == "tinker":
-        return "gpt-oss/GPT-OSS-120B"
+        return "Qwen/Qwen3-30B-A3B"
     return "Qwen/Qwen3-8B"
 
 

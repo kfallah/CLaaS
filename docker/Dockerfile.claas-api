@@ -15,9 +15,9 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-# Copy only dependency metadata first for layer caching
-COPY pyproject.toml README.md /app/
-COPY claas/__init__.py /app/claas/
+# Copy only dependency files first for layer caching
+COPY pyproject.toml README.md ./
+RUN mkdir -p claas && touch claas/__init__.py
 
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 RUN uv pip install --index-url "$TORCH_INDEX_URL" torch && \

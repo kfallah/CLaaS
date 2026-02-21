@@ -2,13 +2,13 @@
 # Run the full Tinker integration test suite.
 #
 # Usage:
-#   TINKER_API_KEY=... ./scripts/run_integration_tests.sh
+#   TINKER_API_KEY=... ./tests/integration/run_tinker_stack_integration.sh
 #
 # Requires: docker, uv
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$PROJECT_ROOT/docker/docker-compose.yml"
 
 export MODEL="${MODEL:-meta-llama/Llama-3.2-1B}"

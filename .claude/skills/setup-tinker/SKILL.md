@@ -41,7 +41,7 @@ Set the required variables in `docker/.env.tinker`:
 |----------|----------|---------|
 | `TELEGRAM_BOT_TOKEN` | Yes | — |
 | `TINKER_API_KEY` | Yes | — |
-| `MODEL` | No | `gpt-oss/GPT-OSS-120B` |
+| `MODEL` | No | `Qwen/Qwen3-30B-A3B` |
 | `LORA_NAME` | No | `openclaw/assistant` |
 | `CLAAS_API_PORT` | No | `8080` |
 | `OPENCLAW_PORT` | No | `18789` |
@@ -51,7 +51,7 @@ Prompt the user for `TELEGRAM_BOT_TOKEN` and `TINKER_API_KEY` if they were not p
 ### 3. Start the stack
 
 ```bash
-docker compose -f docker/docker-compose.tinker.yml --env-file docker/.env.tinker up --build -d
+docker compose -f docker/docker-compose.yml --env-file docker/.env.tinker --profile tinker up --build -d
 ```
 
 ### 4. Wait for health
@@ -63,10 +63,10 @@ Poll the services until they are ready (timeout after 3 minutes):
 until curl -sf http://localhost:8080/ > /dev/null 2>&1; do sleep 5; done
 ```
 
-Then wait for the `init` container to complete:
+Then wait for the `init-tinker` container to complete:
 
 ```bash
-docker compose -f docker/docker-compose.tinker.yml --env-file docker/.env.tinker logs -f init 2>&1 | head -50
+docker compose -f docker/docker-compose.yml --env-file docker/.env.tinker --profile tinker logs -f init-tinker 2>&1 | head -50
 ```
 
 ### 5. Verify the stack
@@ -82,7 +82,7 @@ curl -s http://localhost:8080/v1/health
 curl -s http://localhost:8080/v1/lora
 
 # OpenClaw logs — look for Telegram bot username
-docker compose -f docker/docker-compose.tinker.yml --env-file docker/.env.tinker logs openclaw 2>&1 | tail -20
+docker compose -f docker/docker-compose.yml --env-file docker/.env.tinker --profile tinker logs openclaw-tinker 2>&1 | tail -20
 ```
 
 Report the status of all services and the Telegram bot username from the OpenClaw logs.
@@ -95,6 +95,6 @@ Tell the user the stack is running and they can send a DM to their Telegram bot.
 
 - **Docker not running**: Start Docker Desktop or the Docker daemon and re-run `/setup-tinker`.
 - **Invalid bot token (401 from Telegram)**: Double-check the `TELEGRAM_BOT_TOKEN` in `docker/.env.tinker`. Generate a new token from @BotFather if needed.
-- **Model not supported by Tinker**: The `MODEL` value must match a model ID supported by Tinker (e.g. `gpt-oss/GPT-OSS-120B`). Check available models via Tinker's `get_server_capabilities` endpoint.
-- **Plugin ECONNREFUSED on port 8080**: The OpenClaw feedback plugin must reach `http://claas-api:8080` (Docker service DNS), not `localhost`. Re-run the init container: `docker compose -f docker/docker-compose.tinker.yml --env-file docker/.env.tinker up init`.
-- **Containers keep restarting**: Check logs with `docker compose -f docker/docker-compose.tinker.yml --env-file docker/.env.tinker logs -f <service>`.
+- **Model not supported by Tinker**: The `MODEL` value must match a model ID supported by Tinker (e.g. `Qwen/Qwen3-30B-A3B`). Check available models via Tinker's `get_server_capabilities` endpoint.
+- **Plugin ECONNREFUSED on port 8080**: The OpenClaw feedback plugin must reach `http://claas-api:8080` (Docker service DNS), not `localhost`. Re-run the init container: `docker compose -f docker/docker-compose.yml --env-file docker/.env.tinker --profile tinker up init-tinker`.
+- **Containers keep restarting**: Check logs with `docker compose -f docker/docker-compose.yml --env-file docker/.env.tinker --profile tinker logs -f <service>`.

@@ -6,12 +6,12 @@ services:
     image: vllm/vllm-openai:v0.15.1
     entrypoint: ["/scripts/start_vllm_qwen3_8b.sh"]
     environment:
-      - MODEL=${MODEL:-Qwen/Qwen3-8B}
+      - MODEL=${MODEL}
       - HOST=0.0.0.0
       - API_KEY=sk-local
       - SERVED_MODEL_NAMES=qwen3-8b
-      - MAX_MODEL_LEN=${MAX_MODEL_LEN:-32768}
-      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.70}
+      - MAX_MODEL_LEN=${MAX_MODEL_LEN}
+      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION}
       - ENABLE_SLEEP_MODE=1
       - VLLM_SERVER_DEV_MODE=1
       - VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
@@ -22,7 +22,7 @@ services:
       - INCLUDE_ALIAS_LORAS=1
       - HF_TOKEN=${HF_TOKEN:-}
     volumes:
-      - ../scripts/openclaw-local/start_vllm_qwen3_8b.sh:/scripts/start_vllm_qwen3_8b.sh:ro
+      - ./scripts/start_vllm_qwen3_8b.sh:/scripts/start_vllm_qwen3_8b.sh:ro
       - hf-cache:/root/.cache/huggingface
       - lora-storage:/loras
     ports:
@@ -52,7 +52,7 @@ services:
     command:
       [
         "local",
-        "base_model_id=${MODEL:-Qwen/Qwen3-8B}",
+        "base_model_id=${MODEL}",
         "vllm_base_url=http://vllm:8000",
       ]
     environment:
@@ -84,13 +84,13 @@ services:
       [
         "--config-name",
         "local",
-        "--base-model=${MODEL:-Qwen/Qwen3-8B}",
+        "--base-model=${MODEL}",
         "--vllm-base-url=http://vllm:8000/v1",
         "--lora-root=/loras",
       ]
     environment:
-      - LORA_NAME=${LORA_NAME:-openclaw/assistant}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - LORA_NAME=${LORA_NAME}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - OPENCLAW_HOME=/openclaw-config
       - CLAAS_API_URL=http://claas-api:8080
     volumes:
@@ -122,20 +122,20 @@ services:
     profiles: [tinker]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tinker-claas-api
+      dockerfile: docker/Dockerfile.tinker
+      target: api
     command:
       [
         "tinker",
-        "tinker_base_model=${MODEL:-gpt-oss/GPT-OSS-120B}",
+        "tinker_base_model=${MODEL}",
         "tinker_state_path=/data/tinker_state.json",
-        "vllm_base_url=http://tinker-proxy:8000",
       ]
     networks:
       default:
         aliases:
           - claas-api
     environment:
-      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY:-}
+      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY}
       - WAIT_FOR_BACKEND=0
     volumes:
       - claas-feedback-logs:/app/data/feedback
@@ -158,16 +158,16 @@ services:
       [
         "--config-name",
         "tinker",
-        "--base-model=${MODEL:-gpt-oss/GPT-OSS-120B}",
-        "--vllm-base-url=http://tinker-proxy:8000/v1",
+        "--base-model=${MODEL}",
+        "--vllm-base-url=http://claas-api:8080/v1",
         "--lora-root=/loras",
       ]
     environment:
-      - LORA_NAME=${LORA_NAME:-openclaw/assistant}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - LORA_NAME=${LORA_NAME}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - OPENCLAW_HOME=/openclaw-config
       - CLAAS_API_URL=http://claas-api:8080
-      - FEEDBACK_BATCH_SIZE=${FEEDBACK_BATCH_SIZE:-4}
+      - FEEDBACK_BATCH_SIZE=${FEEDBACK_BATCH_SIZE}
     volumes:
       - openclaw-config:/openclaw-config
       - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro

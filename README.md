@@ -42,7 +42,7 @@ This brings up vLLM with Qwen3-8B, the CLaaS feedback API, and OpenClaw's Telegr
 uv sync --extra local
 ```
 
-Then start vLLM and the API yourself. See [Quick Start](#quick-start) and [`scripts/openclaw-local/README.md`](scripts/openclaw-local/README.md) for the full supervised local stack.
+Then start vLLM and the API yourself. See [Quick Start](#quick-start) and [`docker/README.md`](docker/README.md) for the full supervised local stack.
 
 If you use [Claude Code](https://claude.ai/claude-code), `/setup-local <TELEGRAM_BOT_TOKEN>` installs all deps and starts the full local stack automatically.
 
@@ -56,7 +56,7 @@ Uses the Tinker SDK for hosted distillation and inference. Requires a `TINKER_AP
 cd docker
 cp .env.tinker.example .env.tinker
 # Edit .env.tinker — set TELEGRAM_BOT_TOKEN and TINKER_API_KEY
-docker compose -f docker-compose.tinker.yml --env-file .env.tinker up --build
+docker compose --env-file .env.tinker --profile tinker up --build
 ```
 
 **Manual install:**
@@ -118,7 +118,7 @@ curl -X POST http://localhost:8080/v1/feedback \
   }'
 ```
 
-For the full supervised local stack (vLLM + gateway + auto-restart, multi-LoRA, Telegram), see [`scripts/openclaw-local/README.md`](scripts/openclaw-local/README.md).
+For the full supervised local stack (vLLM + gateway + Telegram), see [`docker/README.md`](docker/README.md).
 
 ## Hybrid engine
 

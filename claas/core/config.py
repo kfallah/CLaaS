@@ -67,7 +67,7 @@ class TinkerConfig(CLaaSConfig):
 
     mode: str = "tinker"
     storage_backend: str = "local_fs"
-    tinker_base_model: str = "gpt-oss/GPT-OSS-120B"
+    tinker_base_model: str = "Qwen/Qwen3-30B-A3B"
     tinker_state_path: str = "~/.claas/tinker_state.json"
     vllm_base_url: str = "http://127.0.0.1:8000"
 
