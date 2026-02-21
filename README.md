@@ -23,7 +23,7 @@ flowchart TD
 
 ### Local (GPU)
 
-Requires an NVIDIA GPU with >= 24 GB VRAM (L40S, A100, RTX 4090, RTX 5090, etc.) and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). The native (non-Docker) setup is tested on an RTX 5090.
+Requires an NVIDIA GPU with >= 24 GB VRAM (L40S, A100, RTX 4090, RTX 5090, etc.) and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). Local GPU setup is pinned to CUDA **12.8** (`cu128` / NGC PyTorch `25.01`), so your NVIDIA driver must support CUDA 12.8. The native (non-Docker) setup is tested on an RTX 5090.
 
 **Docker Compose (recommended):**
 
@@ -83,7 +83,7 @@ Deploy:
 # Set HF_TOKEN if using gated models
 export HF_TOKEN=...
 export CLAAS_BASE_MODEL_ID=Qwen/Qwen3-8B
-uv run modal deploy -m claas.deploy
+uv run modal deploy -m claas.modal.deploy
 ```
 
 The deployed app exposes the same API at `https://your-app--claas-distill-fastapi-app.modal.run`. LoRAs are stored in the `claas-loras` Modal Volume.

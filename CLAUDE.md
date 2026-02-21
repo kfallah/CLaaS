@@ -31,7 +31,6 @@ claas/
 ├── __init__.py
 ├── api.py                               # FastAPI endpoints + inference proxy (entrypoint)
 ├── cli.py                               # Command-line interface (entrypoint)
-├── deploy.py                            # Modal deployment entrypoint
 ├── index.html                           # Dashboard template
 │
 ├── core/                                # Shared types & config
@@ -49,17 +48,22 @@ claas/
 │
 ├── training/                            # Training pipeline
 │   ├── __init__.py
+│   ├── distillation.py                  # Shared SDPO trainer logic
 │   ├── sdpo_loss.py                     # SDPO loss computation (core algorithm)
-│   ├── worker.py                        # Distill worker (local/Modal)
 │   ├── storage.py                       # LoRA storage (Modal Volume or local fs)
 │   ├── teacher_helpers.py               # Pure teacher prompt functions
-│   ├── teacher_service.py               # Modal TeacherService class
 │   └── engine/                          # Pluggable training backends
 │       ├── __init__.py                  # get_training_engine() factory
 │       ├── base.py                      # TrainingEngine abstract interface
 │       ├── local/engine.py              # Local GPU execution
 │       ├── modal/engine.py              # Modal remote execution
 │       └── tinker/engine.py, state.py   # Tinker SDK execution
+│
+├── modal/                               # Modal deployment modules
+│   ├── __init__.py
+│   ├── deploy.py                        # Unified Modal app deployment
+│   ├── worker.py                        # Modal DistillWorker class
+│   └── teacher_service.py               # Modal TeacherService class
 │
 ├── eval/                                # Eval harness (Hydra config)
 │   ├── __init__.py
@@ -84,13 +88,13 @@ claas/
 Deploy to Modal:
 
 ```bash
-modal deploy -m claas.deploy
+modal deploy -m claas.modal.deploy
 ```
 
 Run locally for development:
 
 ```bash
-modal serve -m claas.deploy
+modal serve -m claas.modal.deploy
 ```
 
 ## Key Patterns

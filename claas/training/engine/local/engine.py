@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import gc
 import re
 
+from claas.core.config import LocalConfig
 from claas.core.types import (
     DistillBatchRequestPayload,
     DistillResponse,
@@ -18,6 +18,7 @@ from claas.core.types import (
     LoraRuntimeRef,
     ServiceHealth,
 )
+from claas.training.distillation import DistillationTrainer
 from claas.training.engine.base import TrainingEngine
 from claas.training.storage import (
     configure_storage_backend,
@@ -29,14 +30,15 @@ from claas.training.storage import (
     lora_exists,
     resolve_lora_id,
 )
-from claas.training.worker import DistillWorker
 
 
 class LocalTrainingEngine(TrainingEngine):
     """Executes training and LoRA operations on local infrastructure."""
 
-    def __init__(self) -> None:
+    def __init__(self, cfg: LocalConfig) -> None:
         configure_storage_backend("local_fs")
+        self._base_model_id = cfg.base_model_id
+        self._attn_implementation = cfg.attn_implementation
 
     async def distill(
         self,
@@ -50,18 +52,15 @@ class LocalTrainingEngine(TrainingEngine):
         Returns:
             Distillation response.
         """
-        worker = DistillWorker()
+        trainer = DistillationTrainer(
+            base_model_id=self._base_model_id,
+            attn_implementation=self._attn_implementation,
+        )
+        await asyncio.to_thread(trainer.load_base_model)
         try:
-            result = await asyncio.to_thread(worker.distill.local, payload.model_dump())
-            return DistillResponse.model_validate(result)
+            return await asyncio.to_thread(trainer.distill, payload)
         finally:
-            try:
-                await asyncio.to_thread(worker._offload_base_model)
-            except (RuntimeError, OSError, ValueError):
-                # Training already completed; cleanup failures should not fail the request.
-                pass
-            del worker
-            gc.collect()
+            await asyncio.to_thread(trainer.offload_base_model)
 
     async def init_lora(self, request: LoraInitRequest) -> LoraInitResponse:
         """Initialize a LoRA adapter locally.
