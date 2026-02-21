@@ -307,15 +307,43 @@ async def _build_sample_datum(
         teacher_prompt_text,
         add_special_tokens=False,
     )
-    teacher_full_tokens = teacher_prompt_tokens + response_tokens
+    # Filter added/special tokens (e.g. <think>, </think>) that fall outside
+    # the base-model sampling client's vocabulary.
+    vocab_size = getattr(tokenizer, 'vocab_size', None)
+    oov_positions: set[int] = set()
+    if vocab_size is not None:
+        oov_positions = {i for i, tok in enumerate(response_tokens) if tok >= vocab_size}
+    if oov_positions:
+        logger.debug("Filtering %d OOV tokens from teacher response", len(oov_positions))
+    teacher_response_tokens = (
+        [tok for i, tok in enumerate(response_tokens) if i not in oov_positions]
+        if oov_positions
+        else response_tokens
+    )
+
+    teacher_full_tokens = teacher_prompt_tokens + teacher_response_tokens
     teacher_prompt_len = len(teacher_prompt_tokens)
     teacher_full = T.ModelInput.from_ints(teacher_full_tokens)
 
     # ── Compute teacher logprobs (base model = self-distillation) ──
     teacher_logprobs_full = await teacher_sampling.compute_logprobs_async(teacher_full)
-    teacher_logprobs = _slice_completion_logprobs(
-        teacher_logprobs_full, teacher_prompt_len, completion_len
+    clean_teacher_logprobs = _slice_completion_logprobs(
+        teacher_logprobs_full, teacher_prompt_len, len(teacher_response_tokens)
     )
+
+    # At OOV positions use the student logprob so the advantage is zero
+    # (teacher provides no learning signal for special tokens).
+    if oov_positions:
+        teacher_logprobs: list[float] = []
+        clean_idx = 0
+        for i in range(completion_len):
+            if i in oov_positions:
+                teacher_logprobs.append(student_logprobs[i])
+            else:
+                teacher_logprobs.append(clean_teacher_logprobs[clean_idx])
+                clean_idx += 1
+    else:
+        teacher_logprobs = clean_teacher_logprobs
 
     # ── Compute advantages with adaptive KL scaling ──
     raw_kl_deltas = [t - s for s, t in zip(student_logprobs, teacher_logprobs, strict=True)]
