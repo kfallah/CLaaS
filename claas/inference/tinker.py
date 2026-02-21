@@ -78,7 +78,7 @@ def _make_renderer(
 
     try:
         renderer_name = model_info.get_recommended_renderer_name(base_model)
-        return get_renderer(renderer_name, tokenizer=tokenizer)
+        return get_renderer(renderer_name, tokenizer=tokenizer)  # type: ignore[arg-type]
     except (ValueError, KeyError):
         logger.warning(
             "No tinker_cookbook renderer for %s; falling back to tokenizer chat template",
