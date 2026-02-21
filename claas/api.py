@@ -757,7 +757,7 @@ async def distill(request: DistillRequest) -> DistillResponse:
         # Remote teacher is optional; self-distillation is the default path.
         if request.training.teacher_mode == "remote" and _uses_modal_teacher():
             teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-            teacher_prompt = format_teacher_prompt(request.prompt, request.feedback)
+            teacher_prompt = format_teacher_prompt(request.user_prompt or request.prompt, request.feedback)
             teacher_scored = await teacher_score_fn.remote.aio(
                 prompts=[teacher_prompt],
                 completions=[request.response],
@@ -865,7 +865,7 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             if first_request.training.teacher_mode == "remote" and _uses_modal_teacher():
                 teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
                 teacher_scored = await teacher_score_fn.remote.aio(
-                    prompts=[format_teacher_prompt(s.prompt, s.feedback) for s in batch_samples],
+                    prompts=[format_teacher_prompt(s.user_prompt or s.prompt, s.feedback) for s in batch_samples],
                     completions=[s.response for s in batch_samples],
                     top_k=first_request.training.teacher_top_k,
                 )
