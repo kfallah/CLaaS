@@ -279,11 +279,10 @@ class TinkerBackend(InferenceBackend):
         prompt_token_ids = list(model_input.to_ints())
         prompt_len = model_input.length
 
-        # seq.tokens is the full sequence (prompt + completion).
-        # Slice to only the generated tokens so downstream training
-        # gets the correct response without redundant prompt IDs.
-        response_token_ids = list(seq.tokens[prompt_len:])
-        response_logprobs = list(seq.logprobs[prompt_len:]) if seq.logprobs is not None else None
+        # seq.tokens contains only the generated completion tokens
+        # (the Tinker sampler does not echo the prompt).
+        response_token_ids = list(seq.tokens)
+        response_logprobs = list(seq.logprobs) if seq.logprobs is not None else None
 
         raw_completion_text = tokenizer.decode(response_token_ids, skip_special_tokens=False)
         prompt_text = tokenizer.decode(prompt_token_ids, skip_special_tokens=False)

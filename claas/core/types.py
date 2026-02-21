@@ -225,6 +225,34 @@ class LoraRuntimeRef(BaseModel):
 
 
 
+class FeedbackItem(BaseModel):
+    """Simplified feedback request — the API resolves cached completion data internally."""
+
+    content_hash: str = Field(
+        ...,
+        min_length=1,
+        description="SHA-256 of visible content (completion cache key)",
+    )
+    feedback: str = Field(
+        ...,
+        min_length=1,
+        description="User's feedback text",
+    )
+    user_prompt: str = Field(
+        ...,
+        min_length=1,
+        description="Clean user prompt for teacher construction (required)",
+    )
+    lora_id: str = Field(
+        ...,
+        description="LoRA identifier (e.g., 'user123/coder-v1')",
+    )
+    training: TrainingConfig = Field(
+        default_factory=TrainingConfig,
+        description="Training configuration",
+    )
+
+
 class FeedbackOrchestration(BaseModel):
     """Runtime orchestration options for feedback updates."""
 
@@ -237,7 +265,7 @@ class FeedbackOrchestration(BaseModel):
 class FeedbackBatchRequest(BaseModel):
     """Request for a feedback-triggered batched LoRA update."""
 
-    requests: list[DistillRequest] = Field(min_length=1)
+    requests: list[FeedbackItem] = Field(min_length=1)
     orchestration: FeedbackOrchestration = Field(default_factory=FeedbackOrchestration)
 
 
@@ -281,7 +309,7 @@ class FeedbackLogRecord(BaseModel):
     phase: str
     lora_id: str
     teacher_mode: str
-    requests: list[DistillRequest]
+    requests: list[FeedbackItem]
     vllm: FeedbackLogVllmState
     timing_ms: FeedbackTimingMs
     batch_samples: list[DistillBatchItem]

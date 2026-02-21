@@ -28,37 +28,18 @@ pytestmark = pytest.mark.integration
 logger = logging.getLogger(__name__)
 
 
-def _fetch_raw_completion(
-    client: httpx.Client,
-    claas_url: str,
-    response_content: str,
-) -> tuple[str, list[float]]:
-    """Fetch raw completion text and rollout logprobs from the API cache.
+def _content_hash(response_content: str) -> str:
+    """Compute the SHA-256 content hash matching the API's cache key.
 
-    Mirrors the OpenClaw feedback plugin: hash the parsed content, hit
-    ``/v1/completions/raw``, and return ``(raw_text, logprobs)``.
-
-    Returns the raw response and logprobs as-is from the API cache.
+    Mirrors the OpenClaw feedback plugin: strip ``<think>`` blocks,
+    strip orphaned ``</think>`` prefixes, then SHA-256 the visible text.
     """
     visible = _THINK_RE.sub("", response_content)
     idx = visible.find("</think>")
     if idx >= 0:
         visible = visible[idx + len("</think>"):]
     visible = visible.strip()
-    content_hash = hashlib.sha256(visible.encode("utf-8")).hexdigest()
-    resp = client.get(
-        f"{claas_url}/v1/completions/raw",
-        params={"content_hash": content_hash},
-        timeout=15.0,
-    )
-    assert resp.status_code == 200, (
-        f"Failed to fetch raw completion (hash={content_hash[:12]}…): {resp.text}"
-    )
-    data = resp.json()
-    logprobs = data["logprobs"]
-    assert logprobs is not None, "API returned null logprobs"
-
-    return data["response"], logprobs
+    return hashlib.sha256(visible.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -170,16 +151,27 @@ class TestTinkerStackRoundTrip:
                 assert len(response_content) > 0
                 logger.info("Model response: %s", response_content)
 
-                # 3b. Fetch raw response + rollout logprobs from API cache
-                raw_response, rollout_logprobs = _fetch_raw_completion(
-                    client, claas_url, response_content,
+                # 3b. Compute content hash (the API resolves cache internally)
+                ch = _content_hash(response_content)
+                logger.info("Content hash: %s", ch)
+
+                # Verify the cache entry exists (debugging aid)
+                raw_resp = client.get(
+                    f"{claas_url}/v1/completions/raw",
+                    params={"content_hash": ch},
+                    timeout=15.0,
+                )
+                assert raw_resp.status_code == 200, (
+                    f"Cache miss for content_hash={ch[:16]}…: {raw_resp.text}"
                 )
                 logger.info(
-                    "Fetched %d rollout logprobs from API cache",
-                    len(rollout_logprobs),
+                    "Cache hit: %d rollout logprobs available",
+                    len(raw_resp.json()["logprobs"]),
                 )
 
                 # 4. Distill via feedback endpoint (teacher_mode=self)
+                #    The API resolves prompt, response, and logprobs from
+                #    the completion cache using content_hash.
                 teacher_messages = build_teacher_messages(user_prompt, feedback_text)
                 logger.info(
                     "Teacher messages (built by engine for self-distillation):\n%s",
@@ -190,10 +182,9 @@ class TestTinkerStackRoundTrip:
                     "requests": [
                         {
                             "lora_id": lora_id,
-                            "prompt": user_prompt,
-                            "response": raw_response,
+                            "content_hash": ch,
                             "feedback": feedback_text,
-                            "rollout_logprobs": rollout_logprobs,
+                            "user_prompt": user_prompt,
                             "training": {"teacher_mode": "self"},
                         },
                     ],

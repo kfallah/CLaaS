@@ -295,7 +295,12 @@ async def _build_sample_datum(
     student_logprobs = list(sample.rollout_logprobs)
 
     # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
-    teacher_prompt_source = sample.user_prompt or sample.prompt
+    if sample.user_prompt is None:
+        raise ValueError(
+            "user_prompt is required for teacher prompt construction; "
+            "the fallback to sample.prompt produces incorrect teacher conditioning"
+        )
+    teacher_prompt_source = sample.user_prompt
     teacher_messages = build_teacher_messages(teacher_prompt_source, sample.feedback)
     template_messages = teacher_messages_to_chat_template(teacher_messages)
     teacher_prompt_text = tokenizer.apply_chat_template(

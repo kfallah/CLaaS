@@ -4,22 +4,18 @@
 
 const TIMEOUT_MS = 10 * 60 * 1000;
 
-export interface DistillRequestPayload {
+export interface FeedbackItemPayload {
   lora_id: string;
-  prompt: string;
-  response: string;
+  content_hash: string;
   feedback: string;
-  rollout_logprobs: number[];
-  prompt_token_ids?: number[] | null;
-  response_token_ids?: number[] | null;
-  user_prompt?: string | null;
+  user_prompt: string;
   training: {
     teacher_mode: string;
   };
 }
 
 export interface FeedbackBatchPayload {
-  requests: DistillRequestPayload[];
+  requests: FeedbackItemPayload[];
   orchestration: {
     sleep_before: boolean;
     wake_after: boolean;

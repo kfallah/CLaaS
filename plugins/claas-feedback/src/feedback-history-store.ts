@@ -3,13 +3,9 @@
  */
 
 export interface FeedbackHistoryEntry {
-  prompt: string;
-  response: string;
+  content_hash: string;
   feedback: string;
-  rollout_logprobs: number[] | null;
-  prompt_token_ids: number[] | null;
-  response_token_ids: number[] | null;
-  user_prompt: string | null;
+  user_prompt: string;
   timestamp: number;
 }
 
@@ -23,21 +19,13 @@ const MAX_PENDING_PER_SESSION = 200;
  */
 export function appendFeedback(
   sessionKey: string,
-  prompt: string,
-  response: string,
+  contentHash: string,
   feedback: string,
-  rolloutLogprobs: number[] | null,
-  promptTokenIds: number[] | null,
-  responseTokenIds: number[] | null,
-  userPrompt: string | null,
+  userPrompt: string,
 ): { pendingSize: number } {
   const entry: FeedbackHistoryEntry = {
-    prompt,
-    response,
+    content_hash: contentHash,
     feedback,
-    rollout_logprobs: rolloutLogprobs,
-    prompt_token_ids: promptTokenIds,
-    response_token_ids: responseTokenIds,
     user_prompt: userPrompt,
     timestamp: Date.now(),
   };

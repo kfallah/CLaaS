@@ -462,7 +462,7 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
         metrics_json = json.dumps(metrics_payload, indent=2, sort_keys=True)
         vllm_json = json.dumps(record.vllm.model_dump(mode="json"), indent=2, sort_keys=True)
         error_value = record.error or ""
-        batch_size = len(record.requests)
+        batch_size = len(record.batch_samples)
         detail_row_id = f"feedback-detail-{idx}"
 
         # -- Batch summary row --
@@ -493,7 +493,7 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
 
         # -- Expandable detail row --
         sample_sections: list[str] = []
-        for item_index, req in enumerate(record.requests):
+        for item_index, sample in enumerate(record.batch_samples):
             sample_sections.append(
                 """
                 <details{open_attr}>
@@ -508,10 +508,10 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
                     open_attr=" open" if batch_size == 1 else "",
                     item_number=item_index + 1,
                     batch_size=batch_size,
-                    prompt_preview=html.escape(_feedback_prompt_preview(req.prompt, limit=80)),
-                    prompt=html.escape(req.prompt),
-                    response=html.escape(req.response),
-                    feedback=html.escape(req.feedback),
+                    prompt_preview=html.escape(_feedback_prompt_preview(sample.prompt, limit=80)),
+                    prompt=html.escape(sample.prompt),
+                    response=html.escape(sample.response),
+                    feedback=html.escape(sample.feedback),
                 )
             )
 
@@ -810,6 +810,32 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
         if req.training.model_dump(mode="json") != training_ref:
             raise HTTPException(status_code=400, detail="all requests must use the same training config")
 
+    # Resolve cache entries before acquiring lock or doing orchestration.
+    batch_samples: list[DistillBatchItem] = []
+    for req in batch_requests:
+        entry = completion_cache.get(req.content_hash)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No cached completion for content_hash={req.content_hash[:16]}…",
+            )
+        if entry.logprobs is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Cached completion has no logprobs (content_hash={req.content_hash[:16]}…)",
+            )
+        batch_samples.append(
+            DistillBatchItem(
+                prompt=entry.prompt,
+                response=entry.response,
+                feedback=req.feedback,
+                rollout_logprobs=entry.logprobs,
+                prompt_token_ids=entry.prompt_token_ids,
+                response_token_ids=entry.token_ids,
+                user_prompt=req.user_prompt,
+            )
+        )
+
     try:
         exists_payload = await _get_training_engine().lora_exists(lora_id)
         if not exists_payload.exists:
@@ -822,20 +848,6 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
         await asyncio.wait_for(lock.acquire(), timeout=lock_timeout)
 
         try:
-            batch_samples: list[DistillBatchItem] = []
-            for req in batch_requests:
-                batch_samples.append(
-                    DistillBatchItem(
-                        prompt=req.prompt,
-                        response=req.response,
-                        feedback=req.feedback,
-                        rollout_logprobs=req.rollout_logprobs,
-                        prompt_token_ids=req.prompt_token_ids,
-                        response_token_ids=req.response_token_ids,
-                        user_prompt=req.user_prompt,
-                    )
-                )
-
             if request.orchestration.sleep_before and _get_engine_kind() != "tinker":
                 phase = "drain"
                 try:
@@ -865,7 +877,7 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             if first_request.training.teacher_mode == "remote" and _uses_modal_teacher():
                 teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
                 teacher_scored = await teacher_score_fn.remote.aio(
-                    prompts=[format_teacher_prompt(s.user_prompt or s.prompt, s.feedback) for s in batch_samples],
+                    prompts=[format_teacher_prompt(req.user_prompt, s.feedback) for req, s in zip(batch_requests, batch_samples, strict=True)],
                     completions=[s.response for s in batch_samples],
                     top_k=first_request.training.teacher_top_k,
                 )
@@ -888,7 +900,7 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                 woke = True
 
             if _get_engine_kind() == "tinker" and distill_result is not None:
-                sampler_path = (distill_result.metadata or {}).get("sampler_weights_path")
+                sampler_path = distill_result.metadata.get("sampler_weights_path")
                 if sampler_path:
                     phase = "wake"
                     wake_start = time.perf_counter()
@@ -943,18 +955,7 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             requests=batch_requests,
             vllm=FeedbackLogVllmState(slept=slept, woke=woke),
             timing_ms=timing_ms,
-            batch_samples=[
-                DistillBatchItem(
-                    prompt=req.prompt,
-                    response=req.response,
-                    feedback=req.feedback,
-                    rollout_logprobs=req.rollout_logprobs,
-                    prompt_token_ids=req.prompt_token_ids,
-                    response_token_ids=req.response_token_ids,
-                    user_prompt=req.user_prompt,
-                )
-                for req in batch_requests
-            ],
+            batch_samples=batch_samples,
             distill_result=distill_result,
             error=error_message,
         )

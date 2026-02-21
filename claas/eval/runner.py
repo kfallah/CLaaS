@@ -15,9 +15,8 @@ import time
 import httpx
 
 from claas.core.types import (
-    DistillBatchItem,
-    DistillRequest,
     FeedbackBatchRequest,
+    FeedbackItem,
     FeedbackOrchestration,
     TrainingConfig,
 )
@@ -87,22 +86,27 @@ async def _load_lora_into_vllm(
         resp.raise_for_status()
 
 
+@dataclasses.dataclass
+class _EvalSample:
+    """Lightweight sample for eval feedback: just the fields the API needs."""
+
+    content_hash: str
+    feedback: str
+    user_prompt: str
+
+
 async def _submit_feedback(
     config: HarnessConfig,
     lora_id: str,
-    samples: list[DistillBatchItem],
+    samples: list[_EvalSample],
 ) -> LocalDistillMetrics | TinkerDistillMetrics | None:
     """Submit batched feedback via CLaaS API and return SDPO metrics."""
     payload = FeedbackBatchRequest(
         requests=[
-            DistillRequest(
+            FeedbackItem(
                 lora_id=lora_id,
-                prompt=s.prompt,
-                response=s.response,
+                content_hash=s.content_hash,
                 feedback=s.feedback,
-                rollout_logprobs=s.rollout_logprobs,
-                prompt_token_ids=s.prompt_token_ids,
-                response_token_ids=s.response_token_ids,
                 user_prompt=s.user_prompt,
                 training=TrainingConfig(teacher_mode="self"),
             )
@@ -119,7 +123,7 @@ async def _submit_feedback(
     if not distill_result:
         return None
 
-    metadata = distill_result.get("metadata") or {}
+    metadata = distill_result["metadata"]
 
     if config.mode == "tinker" and "adv_mean" in metadata:
         return TinkerDistillMetrics(
@@ -129,8 +133,8 @@ async def _submit_feedback(
             kl_gain=metadata["kl_gain"],
             adv_abs_mean=metadata["adv_abs_mean"],
             adv_abs_mean_raw=metadata["adv_abs_mean_raw"],
-            completion_len=metadata.get("completion_len", 0),
-            batch_size=metadata.get("batch_size", 0),
+            completion_len=metadata["completion_len"],
+            batch_size=metadata["batch_size"],
         )
 
     return LocalDistillMetrics(
@@ -171,130 +175,11 @@ async def _generate_response(
         return resp.json()["choices"][0]["message"]["content"]
 
 
-async def _fetch_cached_completion(
-    claas_url: str,
-    visible_content: str,
-) -> tuple[str, str, list[float], list[int] | None, list[int] | None]:
-    """Fetch the cached raw completion from the API by content hash.
-
-    The API caches ``{prompt, response, logprobs, prompt_token_ids, token_ids}`` keyed by
-    ``SHA-256(stripped_content)``.  Since the API strips thinking
-    before returning content, ``visible_content`` already matches the
-    cache key.  We apply ``strip_thinking`` defensively in case the caller
-    passes un-stripped text.
-
-    Returns ``(real_prompt, raw_response, rollout_logprobs, prompt_token_ids, response_token_ids)``.
-    """
-    content_hash = hashlib.sha256(
+def _content_hash(visible_content: str) -> str:
+    """Compute the SHA-256 cache key from visible content."""
+    return hashlib.sha256(
         strip_thinking(visible_content).encode("utf-8"),
     ).hexdigest()
-    async with httpx.AsyncClient(base_url=claas_url, timeout=60.0) as client:
-        resp = await client.get(
-            "/v1/completions/raw",
-            params={"content_hash": content_hash},
-        )
-        resp.raise_for_status()
-
-    data = resp.json()
-    return (
-        data["prompt"],
-        data["response"],
-        data["logprobs"] or [],
-        data.get("prompt_token_ids"),
-        data.get("token_ids"),
-    )
-
-
-async def _generate_and_collect(
-    config: HarnessConfig,
-    model: str,
-    prompt: str,
-) -> tuple[str, str, str, list[float], list[int] | None, list[int] | None]:
-    """Generate via OpenClaw, then fetch cached raw completion from the API.
-
-    When ``config.openclaw_url`` is set, generation routes through the OpenClaw
-    gateway which prepends the full agent system prompt and context.  The API
-    strips thinking from the returned content and caches the raw completion
-    (with the full OpenClaw-templated prompt and generation-time logprobs)
-    keyed by ``SHA-256(visible_content)``.
-
-    Returns ``(visible_content, real_prompt, raw_response, rollout_logprobs, prompt_token_ids, response_token_ids)``.
-    """
-    assert config.claas_url is not None
-    content = await _generate_response(config, model, prompt, temperature=0.7)
-
-    real_prompt, raw_response, rollout_lps, prompt_token_ids, response_token_ids = await _fetch_cached_completion(
-        config.claas_url, content,
-    )
-    return content, real_prompt, raw_response, rollout_lps, prompt_token_ids, response_token_ids
-
-
-async def _fetch_rollout_logprobs_vllm(
-    config: HarnessConfig,
-    model: str,
-    prompt: str,
-    response_text: str,
-    *,
-    vllm_api_key: str = "",
-) -> list[float]:
-    """Score a prompt+response via vLLM and return per-token logprobs.
-
-    Uses vLLM's message-based /tokenize endpoint so the real tokenizer
-    chat template is applied server-side (no manual ChatML construction).
-    """
-    headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
-    params = direct_vllm_chat_params(config.vllm_url, vllm_api_key, model, prompt)
-    messages = params.messages
-
-    async with httpx.AsyncClient(base_url=config.vllm_url, timeout=60.0) as client:
-        # Tokenize prompt messages to learn token count
-        tok_resp = await client.post(
-            "/tokenize",
-            json={"model": model, "messages": messages},
-            headers=headers,
-        )
-        tok_resp.raise_for_status()
-        prompt_token_count: int = tok_resp.json()["count"]
-
-        # Tokenize full conversation (prompt + response) to get token IDs
-        full_messages = list(messages) + [
-            {"role": "assistant", "content": response_text},
-        ]
-        full_tok_resp = await client.post(
-            "/tokenize",
-            json={
-                "model": model,
-                "messages": full_messages,
-                "add_generation_prompt": False,
-            },
-            headers=headers,
-        )
-        full_tok_resp.raise_for_status()
-        full_token_ids = full_tok_resp.json()["tokens"]
-
-        # Get logprobs for the full sequence
-        comp_resp = await client.post(
-            "/v1/completions",
-            json={
-                "model": model,
-                "prompt": full_token_ids,
-                "max_tokens": 1,
-                "prompt_logprobs": 1,
-            },
-            headers=headers,
-        )
-        comp_resp.raise_for_status()
-
-    raw_logprobs = comp_resp.json()["choices"][0]["prompt_logprobs"]
-    logprobs: list[float] = []
-    for entry in raw_logprobs[prompt_token_count:]:
-        if entry is None:
-            logprobs.append(0.0)
-            continue
-        top = next(iter(entry.values()))
-        logprobs.append(top["logprob"])
-
-    return logprobs
 
 
 async def _measure_eval_metrics(
@@ -555,7 +440,7 @@ async def run_preference_experiment(
         feedback_str = " ".join([pref.feedback_string] * config.feedback_repetitions)
 
         # Collect samples for this step (batch_size >= 1)
-        samples: list[DistillBatchItem] = []
+        samples: list[_EvalSample] = []
         response_text: str | None = None
 
         for i in range(config.batch_size):
@@ -563,59 +448,24 @@ async def run_preference_experiment(
                 (step * config.batch_size + i) % len(pref.probe_prompts)
             ]
 
-            if config.mode == "tinker":
-                # Tinker mode: generate via OpenClaw, fetch cached completion
-                try:
-                    (
-                        content,
-                        real_prompt,
-                        raw_response,
-                        rollout_lps,
-                        prompt_token_ids,
-                        response_token_ids,
-                    ) = (
-                        await _generate_and_collect(config, vllm_model, prompt)
-                    )
-                    if response_text is None:
-                        response_text = content
-                    samples.append(DistillBatchItem(
-                        prompt=real_prompt,
-                        response=raw_response,
-                        feedback=feedback_str,
-                        rollout_logprobs=rollout_lps,
-                        prompt_token_ids=prompt_token_ids,
-                        response_token_ids=response_token_ids,
-                        user_prompt=prompt,
-                    ))
-                except (httpx.HTTPError, KeyError, ValueError) as e:
-                    logger.warning(
-                        "[%s] Step %d sample %d proxy generation failed: %s",
-                        pref.name, step, i, e,
-                    )
-            else:
-                # vLLM mode: generate, score logprobs via vLLM
-                try:
-                    gen_text = await _generate_response(
-                        config, vllm_model, prompt, temperature=0,
-                    )
-                    if response_text is None:
-                        response_text = gen_text
-                    rollout_lps = await _fetch_rollout_logprobs_vllm(
-                        config, vllm_model, prompt, gen_text,
-                        vllm_api_key=vllm_api_key,
-                    )
-                    samples.append(DistillBatchItem(
-                        prompt=prompt,
-                        response=gen_text,
-                        feedback=feedback_str,
-                        rollout_logprobs=rollout_lps,
-                        user_prompt=prompt,
-                    ))
-                except (httpx.HTTPError, KeyError, ValueError) as e:
-                    logger.warning(
-                        "[%s] Step %d sample %d vLLM generation failed: %s",
-                        pref.name, step, i, e,
-                    )
+            # Generate via CLaaS proxy (caches completion for feedback lookup)
+            try:
+                temperature = 0.7 if config.mode == "tinker" else 0
+                content = await _generate_response(
+                    config, vllm_model, prompt, temperature=temperature,
+                )
+                if response_text is None:
+                    response_text = content
+                samples.append(_EvalSample(
+                    content_hash=_content_hash(content),
+                    feedback=feedback_str,
+                    user_prompt=prompt,
+                ))
+            except (httpx.HTTPError, KeyError, ValueError) as e:
+                logger.warning(
+                    "[%s] Step %d sample %d generation failed: %s",
+                    pref.name, step, i, e,
+                )
 
         if response_text is None:
             response_text = "I'd be happy to help you with that."
