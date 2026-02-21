@@ -16,10 +16,12 @@ When this skill is invoked, perform the following steps:
 2. **List all checkpoints** by paginating through the Tinker REST API:
    ```
    GET https://tinker.thinkingmachines.dev/services/tinker-prod/api/v1/checkpoints
-   Headers: X-API-Key: <key>
+   Headers: X-API-Key: <key>, User-Agent: CLaaS/0.1
    Params: limit=100, offset=0
    ```
-   Paginate using the `cursor.total_count` field until all checkpoints are fetched.
+   The response JSON has `checkpoints` (array) and `cursor` (with `total_count`, `offset`, `limit`).
+   Paginate by incrementing `offset` until all checkpoints are fetched.
+   **Important:** A custom `User-Agent` header is required — Cloudflare blocks Python's default user-agent.
 
 3. **Display a summary** to the user before deleting:
    - Total number of checkpoints

@@ -56,7 +56,7 @@ Uses the Tinker SDK for hosted distillation and inference. Requires a `TINKER_AP
 cd docker
 cp .env.tinker.example .env.tinker
 # Edit .env.tinker — set TELEGRAM_BOT_TOKEN and TINKER_API_KEY
-docker compose -f docker-compose.tinker.yml --env-file .env.tinker up --build
+docker compose --env-file .env.tinker --profile tinker up --build
 ```
 
 **Manual install:**

@@ -68,8 +68,10 @@ jobs:
         env:
           TINKER_API_KEY: ${{ secrets.TINKER_API_KEY }}
           MODEL: meta-llama/Llama-3.2-1B
-        run: ./scripts/run_integration_tests.sh
+        run: ./tests/integration/run_tinker_stack_integration.sh
 
       - name: Dump docker logs on failure
         if: failure()
+        env:
+          TINKER_API_KEY: ${{ secrets.TINKER_API_KEY }}
         run: docker compose -f docker/docker-compose.yml --profile tinker logs --tail=200
