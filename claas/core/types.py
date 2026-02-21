@@ -139,6 +139,7 @@ class DistillRequest(BaseModel):
     )
     user_prompt: str | None = Field(
         default=None,
+        min_length=1,
         description="Clean user prompt for teacher construction (without chat template decoration).",
     )
 
