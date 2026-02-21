@@ -1,5 +1,13 @@
 # CLaaS - Claude Code Guidelines
 
+## Debugging Philosophy
+
+**Understand the root cause before writing any code.** When something breaks, trace the error back to its systemic origin — don't patch at the point where the symptom appears. Check logs, environment variables, config, and runtime state before assuming the code is wrong.
+
+**Never add local workarounds for systemic issues.** Do not add try/except fallbacks, filtering, isinstance guards, or other defensive code to mask an error you don't fully understand. These hacks erode the codebase over time and hide real bugs. If the fix feels like a bandaid, you haven't found the real problem yet.
+
+**Treat errors as signals, not obstacles.** An unexpected value or failed assertion means something upstream is wrong. Trace the data flow end-to-end: where was this value produced? What configuration or state fed into it? The goal is durable, correct software — not silencing errors.
+
 ## Code Quality Rules
 
 ### After Every Change
