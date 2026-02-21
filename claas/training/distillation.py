@@ -79,9 +79,7 @@ class DistillationTrainer:
         """Move base model to CPU and release CUDA memory."""
         import torch
 
-        # Call the base nn.Module implementation directly for consistent behavior
-        # across wrapped model types.
-        torch.nn.Module.to(self.base_model, "cpu")
+        self.base_model.to("cpu")  # type: ignore[arg-type]
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
