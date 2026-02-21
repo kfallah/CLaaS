@@ -12,7 +12,7 @@ import os
 import threading
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -34,14 +34,34 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _apply_chat_template_ids(tokenizer: Any, dicts: list[dict[str, str]]) -> list[int]:
+def _coerce_template_ids(result: Any) -> list[int]:
+    """Normalize ``tokenizer.apply_chat_template`` output to token IDs."""
+    if isinstance(result, list):
+        return [int(tok) for tok in result]
+    if isinstance(result, dict):
+        maybe_ids = result.get("input_ids")
+        if isinstance(maybe_ids, list):
+            return [int(tok) for tok in maybe_ids]
+    if hasattr(result, "tolist"):
+        maybe_ids = result.tolist()
+        if isinstance(maybe_ids, list):
+            return [int(tok) for tok in maybe_ids]
+    raise TypeError("Unsupported apply_chat_template result shape")
+
+
+def _apply_chat_template_ids(
+    tokenizer: Any,
+    dicts: list[dict[str, str]],
+    *,
+    add_generation_prompt: bool,
+) -> list[int]:
     """Tokenize messages via apply_chat_template, returning token ids."""
     result = tokenizer.apply_chat_template(
-        dicts, add_generation_prompt=True, tokenize=True,
+        dicts,
+        add_generation_prompt=add_generation_prompt,
+        tokenize=True,
     )
-    if isinstance(result, list):
-        return result
-    return result["input_ids"]
+    return _coerce_template_ids(result)
 
 
 class _TokenizerChatRenderer:
@@ -52,7 +72,9 @@ class _TokenizerChatRenderer:
 
     def build_generation_prompt(self, messages: list[dict[str, str]]) -> Any:
         dicts = [{"role": m["role"], "content": m.get("content", "")} for m in messages]
-        token_ids = _apply_chat_template_ids(self._tokenizer, dicts)
+        token_ids = _apply_chat_template_ids(
+            self._tokenizer, dicts, add_generation_prompt=True,
+        )
         import tinker.types as T  # noqa: N812
         return T.ModelInput.from_ints(token_ids)
 
@@ -186,7 +208,8 @@ class RefreshRequest(BaseModel):
 
 
 class ScoreRequest(BaseModel):
-    prompt: str
+    prompt: str | None = None
+    messages: list[dict[str, Any]] | None = None
     completion: str
 
 
@@ -324,41 +347,84 @@ class TinkerBackend(InferenceBackend):
 
     def register_routes(self, app: FastAPI) -> None:
         """Register Tinker-specific endpoints: refresh, status, score."""
-        holder = self._holder
+        def _current_backend() -> TinkerBackend:
+            backend = getattr(app.state, "inference_backend", None)
+            if isinstance(backend, TinkerBackend):
+                return backend
+            return self
+
+        def _current_holder() -> _SamplerHolder:
+            return _current_backend().holder
 
         @app.post("/v1/sampler/refresh")
         async def refresh_sampler(body: RefreshRequest) -> dict[str, object]:
             """Refresh the sampling client, optionally pointing at a new checkpoint."""
+            holder = _current_holder()
             holder.refresh(model_path=body.model_path)
             return {"status": "ok", "model_path": body.model_path}
 
         @app.get("/v1/sampler/status")
         async def sampler_status() -> dict[str, object]:
             """Return the currently loaded model path (null = base model only)."""
-            return {"model_path": holder._model_path, "base_model": self._base_model()}
+            backend = _current_backend()
+            holder = backend.holder
+            return {"model_path": holder._model_path, "base_model": backend._base_model()}
 
         @app.post("/v1/score")
         async def score_completion(req: ScoreRequest) -> dict[str, object]:
-            """Score a prompt+completion pair and return per-token completion logprobs."""
+            """Score a prompt/completion pair or chat messages/completion pair."""
+            if req.messages is None and req.prompt is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="either prompt or messages must be provided",
+                )
+
+            holder = _current_holder()
             tokenizer = holder.tokenizer
             sampler = holder.sampler
 
-            prompt_tokens: list[int] = list(tokenizer.encode(req.prompt, add_special_tokens=True))
-            completion_tokens: list[int] = tokenizer.encode(
-                req.completion, add_special_tokens=False,
-            )
-            full_tokens = prompt_tokens + completion_tokens
+            if req.messages is not None:
+                if not req.messages:
+                    raise HTTPException(status_code=422, detail="messages must be non-empty")
+                prompt_messages = [
+                    {
+                        "role": str(m.get("role", "user")),
+                        "content": coerce_content(m.get("content", "")),
+                    }
+                    for m in req.messages
+                ]
+                prompt_tokens = _apply_chat_template_ids(
+                    tokenizer,
+                    prompt_messages,
+                    add_generation_prompt=True,
+                )
+                full_tokens = _apply_chat_template_ids(
+                    tokenizer,
+                    prompt_messages + [{"role": "assistant", "content": req.completion}],
+                    add_generation_prompt=False,
+                )
+                completion_tokens = full_tokens[len(prompt_tokens):]
+            else:
+                assert req.prompt is not None
+                prompt_tokens = list(tokenizer.encode(req.prompt, add_special_tokens=True))
+                completion_tokens = tokenizer.encode(
+                    req.completion, add_special_tokens=False,
+                )
+                full_tokens = prompt_tokens + completion_tokens
+
             prompt_len = len(prompt_tokens)
             completion_len = len(completion_tokens)
 
-            import tinker.types as T  # noqa: N812
-            model_input = T.ModelInput.from_ints(full_tokens)
-            logprobs_full = await asyncio.to_thread(
-                lambda: sampler.compute_logprobs(model_input).result(),
-            )
-
-            raw = logprobs_full[prompt_len : prompt_len + completion_len]
-            logprobs = [lp if lp is not None else 0.0 for lp in raw]
+            if completion_len == 0:
+                logprobs = []
+            else:
+                import tinker.types as T  # noqa: N812
+                model_input = T.ModelInput.from_ints(full_tokens)
+                logprobs_full = await asyncio.to_thread(
+                    lambda: sampler.compute_logprobs(model_input).result(),
+                )
+                raw = logprobs_full[prompt_len : prompt_len + completion_len]
+                logprobs = [lp if lp is not None else 0.0 for lp in raw]
 
             token_strings = [tokenizer.decode([t]) for t in completion_tokens]
             logprob_sum = sum(logprobs)
