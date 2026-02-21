@@ -65,8 +65,12 @@ from .core.config import (
     register_config_schemas,
 )
 from .core.types import (
+    ChatCompletionChoice,
+    ChatCompletionChoiceMessage,
     ChatCompletionRequest,
+    ChatCompletionResponse,
     CompletionRequest,
+    CompletionUsage,
     DistillBatchItem,
     DistillBatchRequestPayload,
     DistillRequest,
@@ -82,7 +86,10 @@ from .core.types import (
     LoraInitRequest,
     LoraInitResponse,
     LoraListResponse,
+    RawCompletionResponse,
     ServiceHealth,
+    TextCompletionChoice,
+    TextCompletionResponse,
 )
 from .inference import get_inference_backend
 from .inference.base import InferenceBackend
@@ -577,7 +584,7 @@ def _get_inference_backend(request: Request) -> InferenceBackend:
 async def chat_completions(
     req: ChatCompletionRequest,
     request: Request,
-) -> dict[str, object] | StreamingResponse:
+) -> ChatCompletionResponse | StreamingResponse:
     """Chat completion endpoint (forwards to configured inference backend)."""
     backend = _get_inference_backend(request)
 
@@ -618,31 +625,28 @@ async def chat_completions(
     if req.stream:
         return stream_chat_response(completion_id, created, req.model or "default", visible)
 
-    return {
-        "id": completion_id,
-        "object": "chat.completion",
-        "created": created,
-        "model": req.model or "default",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": visible},
-                "finish_reason": "stop",
-            }
+    return ChatCompletionResponse(
+        id=completion_id,
+        created=created,
+        model=req.model or "default",
+        choices=[
+            ChatCompletionChoice(
+                message=ChatCompletionChoiceMessage(content=visible),
+            )
         ],
-        "usage": {
-            "prompt_tokens": result.prompt_tokens,
-            "completion_tokens": result.completion_tokens,
-            "total_tokens": result.prompt_tokens + result.completion_tokens,
-        },
-    }
+        usage=CompletionUsage(
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            total_tokens=result.prompt_tokens + result.completion_tokens,
+        ),
+    )
 
 
 @web_app.post("/v1/completions", response_model=None)
 async def completions(
     req: CompletionRequest,
     request: Request,
-) -> dict[str, object] | StreamingResponse:
+) -> TextCompletionResponse | StreamingResponse:
     """Text completion endpoint (forwards to configured inference backend)."""
     backend = _get_inference_backend(request)
 
@@ -661,28 +665,23 @@ async def completions(
     if req.stream:
         return stream_completion_response(completion_id, created, req.model or "default", result.text)
 
-    return {
-        "id": completion_id,
-        "object": "text_completion",
-        "created": created,
-        "model": req.model or "default",
-        "choices": [
-            {
-                "index": 0,
-                "text": result.text,
-                "finish_reason": "stop",
-            }
+    return TextCompletionResponse(
+        id=completion_id,
+        created=created,
+        model=req.model or "default",
+        choices=[
+            TextCompletionChoice(text=result.text),
         ],
-        "usage": {
-            "prompt_tokens": result.prompt_tokens,
-            "completion_tokens": result.completion_tokens,
-            "total_tokens": result.prompt_tokens + result.completion_tokens,
-        },
-    }
+        usage=CompletionUsage(
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            total_tokens=result.prompt_tokens + result.completion_tokens,
+        ),
+    )
 
 
 @web_app.get("/v1/completions/raw", response_model=None)
-async def get_raw_completion(content_hash: str) -> dict[str, object] | JSONResponse:
+async def get_raw_completion(content_hash: str) -> RawCompletionResponse | JSONResponse:
     """Retrieve cached raw completion by SHA-256 hash of parsed content text."""
     entry = completion_cache.get(content_hash)
     if entry is None:
@@ -690,12 +689,12 @@ async def get_raw_completion(content_hash: str) -> dict[str, object] | JSONRespo
             status_code=404,
             content={"error": "No cached completion found for this content hash"},
         )
-    return {
-        "prompt": entry.prompt,
-        "response": entry.response,
-        "token_ids": entry.token_ids,
-        "logprobs": entry.logprobs,
-    }
+    return RawCompletionResponse(
+        prompt=entry.prompt,
+        response=entry.response,
+        token_ids=entry.token_ids,
+        logprobs=entry.logprobs,
+    )
 
 
 @web_app.get("/v1/models", response_model=None)

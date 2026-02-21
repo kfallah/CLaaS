@@ -370,3 +370,68 @@ class CompletionRequest(BaseModel):
     top_p: float | None = None
     stream: bool = False
     stop: list[str] | None = None
+
+
+# --- Inference Response Models ---
+
+
+class ChatCompletionChoiceMessage(BaseModel):
+    """Message within a chat completion choice."""
+
+    role: str = "assistant"
+    content: str
+
+
+class ChatCompletionChoice(BaseModel):
+    """A single choice in a chat completion response."""
+
+    index: int = 0
+    message: ChatCompletionChoiceMessage
+    finish_reason: str = "stop"
+
+
+class CompletionUsage(BaseModel):
+    """Token usage statistics."""
+
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class ChatCompletionResponse(BaseModel):
+    """OpenAI-compatible chat completion response."""
+
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str
+    choices: list[ChatCompletionChoice]
+    usage: CompletionUsage
+
+
+class TextCompletionChoice(BaseModel):
+    """A single choice in a text completion response."""
+
+    index: int = 0
+    text: str
+    finish_reason: str = "stop"
+
+
+class TextCompletionResponse(BaseModel):
+    """OpenAI-compatible text completion response."""
+
+    id: str
+    object: str = "text_completion"
+    created: int
+    model: str
+    choices: list[TextCompletionChoice]
+    usage: CompletionUsage
+
+
+class RawCompletionResponse(BaseModel):
+    """Cached raw completion for the training pipeline."""
+
+    prompt: str
+    response: str
+    token_ids: list[int] | None = None
+    logprobs: list[float] | None = None
