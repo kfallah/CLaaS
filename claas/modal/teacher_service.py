@@ -26,8 +26,7 @@ class TokenTopKResult(BaseModel):
 
 app = modal.App("claas-distill")
 model_volume = modal.Volume.from_name("claas-models", create_if_missing=True)
-hf_secret_name = os.environ.get("CLAAS_HF_SECRET_NAME")
-teacher_secrets = [modal.Secret.from_name(hf_secret_name)] if hf_secret_name else []
+teacher_secrets = [modal.Secret.from_name(os.environ["CLAAS_HF_SECRET_NAME"])]
 vllm_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
@@ -71,8 +70,8 @@ class TeacherService:
         if os.environ.get("CUDA_VISIBLE_DEVICES", "").lower() == "none":
             os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-        hf_token = os.environ.get("HF_TOKEN")
-        if hf_token and not os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        hf_token = os.environ["HF_TOKEN"]
+        if not os.environ.get("HUGGING_FACE_HUB_TOKEN"):
             os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_token
 
         vllm_module = importlib.import_module("vllm")
