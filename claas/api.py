@@ -1,16 +1,26 @@
-"""CLaaS API: FastAPI web endpoint for SDPO continual distillation.
+"""CLaaS API: FastAPI web endpoint for SDPO continual distillation and inference.
 
-This module provides the REST API for the distillation service.
-Runtime backend config is selected via Hydra config name
+This module provides the REST API for the distillation service and
+inference proxy. Runtime backend config is selected via Hydra config name
 (``local``, ``modal``, or ``tinker``) at process startup.
 
+Inference is proxied through the API rather than served directly so that
+chain-of-thought (thinking) tags can be stripped from user-facing responses
+while the raw completion is cached for the training pipeline. This cache
+also lets the ``/feedback`` endpoint retrieve the on-policy rollout (including
+thinking) needed for self-distillation.
+
 Endpoints:
+- POST /v1/chat/completions: Chat completion (forwarded to inference backend)
+- POST /v1/completions: Text completion (forwarded to inference backend)
+- GET  /v1/completions/raw: Retrieve cached raw completion by content hash
+- GET  /v1/models: List available models
 - POST /v1/feedback: Run one online update transaction (primary endpoint)
 - POST /v1/distill: Run a single SDPO distillation step (low-level)
 - POST /v1/lora/init: Initialize a new LoRA adapter
-- GET /v1/lora: List all LoRA adapters
-- GET /v1/lora/export: Download a LoRA as a zip archive
-- GET /v1/health: Health check
+- GET  /v1/lora: List all LoRA adapters
+- GET  /v1/lora/export: Download a LoRA as a zip archive
+- GET  /v1/health: Health check
 
 Example usage (feedback)::
 
@@ -27,6 +37,7 @@ Example usage (feedback)::
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import logging
@@ -41,8 +52,8 @@ import httpx
 import hydra
 import modal
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from omegaconf import OmegaConf
 
 from .core.config import (
@@ -54,6 +65,12 @@ from .core.config import (
     register_config_schemas,
 )
 from .core.types import (
+    ChatCompletionChoice,
+    ChatCompletionChoiceMessage,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    CompletionRequest,
+    CompletionUsage,
     DistillBatchItem,
     DistillBatchRequestPayload,
     DistillRequest,
@@ -69,7 +86,20 @@ from .core.types import (
     LoraInitRequest,
     LoraInitResponse,
     LoraListResponse,
+    RawCompletionResponse,
     ServiceHealth,
+    TextCompletionChoice,
+    TextCompletionResponse,
+)
+from .inference import get_inference_backend
+from .inference.base import InferenceBackend
+from .inference.cache import CompletionCacheEntry, completion_cache
+from .inference.helpers import (
+    coerce_content,
+    extract_final_channel,
+    stream_chat_response,
+    stream_completion_response,
+    strip_thinking,
 )
 from .training.engine import get_training_engine
 from .training.engine.base import EngineKind, TrainingEngine
@@ -86,6 +116,7 @@ register_config_schemas()
 
 # Modal app for API surface; worker/teacher are resolved by name at runtime.
 app = modal.App("claas-distill")
+
 
 # FastAPI app
 web_app = FastAPI(
@@ -105,11 +136,15 @@ def configure_web_app(cfg: CoreConfig) -> None:
     backend = cfg.storage_backend
     if backend == "local_fs":
         configure_storage_backend("local_fs")
-        return
-    if backend == "modal_volume":
+    elif backend == "modal_volume":
         configure_storage_backend("modal_volume")
-        return
-    raise ValueError(f"Unsupported storage backend: {backend!r}")
+    else:
+        raise ValueError(f"Unsupported storage backend: {backend!r}")
+    # Inference backend
+    inference = get_inference_backend(_get_engine_kind_from_cfg(cfg), cfg=cfg)
+    completion_cache._max_size = cfg.completion_cache_size
+    inference.register_routes(web_app)
+    web_app.state.inference_backend = inference
 
 
 def _runtime_config() -> CoreConfig:
@@ -119,9 +154,9 @@ def _runtime_config() -> CoreConfig:
     raise TypeError("Hydra did not produce a supported CLaaS runtime config")
 
 
-def _get_engine_kind() -> EngineKind:
-    """Validate and return the configured engine kind."""
-    mode = _runtime_config().mode
+def _get_engine_kind_from_cfg(cfg: CoreConfig) -> EngineKind:
+    """Return the engine kind from a config object (used during init)."""
+    mode = cfg.mode
     if mode == "local":
         return "local"
     if mode == "modal":
@@ -129,6 +164,16 @@ def _get_engine_kind() -> EngineKind:
     if mode == "tinker":
         return "tinker"
     raise ValueError(f"Unsupported runtime config mode: {mode}")
+
+
+# ---------------------------------------------------------------------------
+# Engine / backend helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_engine_kind() -> EngineKind:
+    """Validate and return the configured engine kind."""
+    return _get_engine_kind_from_cfg(_runtime_config())
 
 def _uses_modal_teacher() -> bool:
     """Return whether API should fetch teacher scores from Modal TeacherService."""
@@ -210,14 +255,16 @@ async def _vllm_post(
     resp.raise_for_status()
 
 
-async def _tinker_proxy_refresh(model_path: str) -> None:
-    """Tell the Tinker inference proxy to reload with the latest checkpoint."""
-    base_url, api_key = _vllm_connection()
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    async with httpx.AsyncClient(base_url=base_url, timeout=30) as client:
-        resp = await client.post("/v1/sampler/refresh", json={"model_path": model_path}, headers=headers)
-    resp.raise_for_status()
-    logger.info("Tinker proxy refreshed to checkpoint: %s", model_path)
+async def _tinker_sampler_refresh(model_path: str) -> None:
+    """Refresh the in-process Tinker sampler to the latest checkpoint."""
+    backend: InferenceBackend = web_app.state.inference_backend
+    from .inference.tinker import TinkerBackend
+
+    if isinstance(backend, TinkerBackend):
+        backend.holder.refresh(model_path=model_path)
+        logger.info("Tinker sampler refreshed to checkpoint: %s", model_path)
+    else:
+        logger.warning("_tinker_sampler_refresh called but backend is not TinkerBackend")
 
 
 async def _wait_for_vllm_idle(
@@ -523,7 +570,143 @@ async def _run_distill(payload: DistillBatchRequestPayload) -> DistillResponse:
     return result
 
 
-# API Endpoints
+def _get_inference_backend(request: Request) -> InferenceBackend:
+    """Retrieve the inference backend from FastAPI app state."""
+    return request.app.state.inference_backend
+
+
+# ---------------------------------------------------------------------------
+# Inference endpoints
+# ---------------------------------------------------------------------------
+
+
+@web_app.post("/v1/chat/completions", response_model=None)
+async def chat_completions(
+    req: ChatCompletionRequest,
+    request: Request,
+) -> ChatCompletionResponse | StreamingResponse:
+    """Chat completion endpoint (forwards to configured inference backend)."""
+    backend = _get_inference_backend(request)
+
+    messages = [
+        {"role": m.role, "content": coerce_content(m.content)}
+        for m in req.messages
+    ]
+    result = await backend.chat_completion(
+        messages=messages,
+        model=req.model or "default",
+        max_tokens=req.max_tokens,
+        temperature=req.temperature,
+        top_p=req.top_p,
+        stop=req.stop,
+    )
+
+    # Strip thinking and channel tags from visible content
+    visible = extract_final_channel(result.content)
+    visible = strip_thinking(visible)
+
+    # Cache raw completion for training pipeline retrieval
+    content_hash = hashlib.sha256(
+        strip_thinking(visible).encode("utf-8"),
+    ).hexdigest()
+    completion_cache.put(
+        content_hash,
+        CompletionCacheEntry(
+            prompt=result.raw_prompt,
+            response=result.raw_response,
+            token_ids=result.token_ids,
+            logprobs=result.logprobs,
+        ),
+    )
+
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    created = int(time.time())
+
+    if req.stream:
+        return stream_chat_response(completion_id, created, req.model or "default", visible)
+
+    return ChatCompletionResponse(
+        id=completion_id,
+        created=created,
+        model=req.model or "default",
+        choices=[
+            ChatCompletionChoice(
+                message=ChatCompletionChoiceMessage(content=visible),
+            )
+        ],
+        usage=CompletionUsage(
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            total_tokens=result.prompt_tokens + result.completion_tokens,
+        ),
+    )
+
+
+@web_app.post("/v1/completions", response_model=None)
+async def completions(
+    req: CompletionRequest,
+    request: Request,
+) -> TextCompletionResponse | StreamingResponse:
+    """Text completion endpoint (forwards to configured inference backend)."""
+    backend = _get_inference_backend(request)
+
+    result = await backend.text_completion(
+        prompt=req.prompt,
+        model=req.model or "default",
+        max_tokens=req.max_tokens,
+        temperature=req.temperature,
+        top_p=req.top_p,
+        stop=req.stop,
+    )
+
+    completion_id = f"cmpl-{uuid.uuid4().hex[:12]}"
+    created = int(time.time())
+
+    if req.stream:
+        return stream_completion_response(completion_id, created, req.model or "default", result.text)
+
+    return TextCompletionResponse(
+        id=completion_id,
+        created=created,
+        model=req.model or "default",
+        choices=[
+            TextCompletionChoice(text=result.text),
+        ],
+        usage=CompletionUsage(
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            total_tokens=result.prompt_tokens + result.completion_tokens,
+        ),
+    )
+
+
+@web_app.get("/v1/completions/raw", response_model=None)
+async def get_raw_completion(content_hash: str) -> RawCompletionResponse | JSONResponse:
+    """Retrieve cached raw completion by SHA-256 hash of parsed content text."""
+    entry = completion_cache.get(content_hash)
+    if entry is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "No cached completion found for this content hash"},
+        )
+    return RawCompletionResponse(
+        prompt=entry.prompt,
+        response=entry.response,
+        token_ids=entry.token_ids,
+        logprobs=entry.logprobs,
+    )
+
+
+@web_app.get("/v1/models", response_model=None)
+async def list_models(request: Request) -> dict[str, object] | Response:
+    """List available models from the inference backend."""
+    backend = _get_inference_backend(request)
+    return await backend.list_models()
+
+
+# ---------------------------------------------------------------------------
+# Training API endpoints
+# ---------------------------------------------------------------------------
 
 
 @web_app.post("/v1/distill", response_model=DistillResponse)
@@ -701,7 +884,7 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                 if sampler_path:
                     phase = "wake"
                     wake_start = time.perf_counter()
-                    await _tinker_proxy_refresh(str(sampler_path))
+                    await _tinker_sampler_refresh(str(sampler_path))
                     timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
                     woke = True
         finally:
@@ -944,6 +1127,12 @@ async def eval_dashboard(
         eval_dashboard_html, str(requested_dir), page=page, per_page=per_page
     )
     return HTMLResponse(content=content)
+
+
+@web_app.get("/health")
+async def health_check_root() -> HealthResponse:
+    """Health check at root path (alias for /v1/health)."""
+    return await health_check()
 
 
 @web_app.get("/")

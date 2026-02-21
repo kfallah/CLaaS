@@ -86,7 +86,6 @@ class EvalConfig:
     lora_id_prefix: str = "eval"
     seed: int = 42
     openclaw_url: Optional[str] = None
-    proxy_url: Optional[str] = None
     base_model: str = "Qwen/Qwen3-8B"
     batch_size: int = 4
     steps_per_batch: int = 1
@@ -216,7 +215,7 @@ class MetricContext:
     generate: Callable[[str], Awaitable[str]] | None = None
     openclaw_url: str | None = None
     openclaw_api_key: str = "openclaw-local-dev-token"
-    proxy_url: str | None = None
+    mode: str = "local"
 
 
 def step_result_from_dict(data: dict[str, object]) -> StepResult:

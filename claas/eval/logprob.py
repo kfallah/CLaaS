@@ -102,19 +102,19 @@ async def fetch_response_logprob_sum(
     return logprob_sum
 
 
-async def fetch_response_logprob_sum_via_proxy(
-    proxy_url: str,
+async def fetch_response_logprob_sum_via_score(
+    base_url: str,
     messages: list[ChatMessage],
     response_text: str,
     timeout_s: float = 60.0,
 ) -> float:
-    """Fetch the total log-probability via the Tinker proxy /v1/score endpoint.
+    """Fetch the total log-probability via the CLaaS API /v1/score endpoint.
 
-    Sends structured chat messages so the proxy can apply the model's chat
+    Sends structured chat messages so the API can apply the model's chat
     template, matching how the model sees inputs during generation and training.
     """
     msg_dicts = [{"role": m["role"], "content": m.get("content", "")} for m in messages]
-    async with httpx.AsyncClient(base_url=proxy_url, timeout=timeout_s) as client:
+    async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
         resp = await client.post(
             "/v1/score",
             json={"messages": msg_dicts, "completion": response_text},
@@ -129,13 +129,13 @@ async def measure_logprob_margin(
     model: str,
     pair: LogprobPair,
     baseline_margin: float | None = None,
-    proxy_url: str | None = None,
+    mode: str = "local",
     use_default_system_prompt: bool = True,
 ) -> LogprobMargin:
     """Measure the logprob margin between positive and negative examples.
 
-    In direct-vLLM mode, prepend the default system prompt so scoring
-    matches non-OpenClaw generation inputs.
+    In tinker mode, uses the CLaaS API ``/v1/score`` endpoint (vllm_url
+    points at the unified API).  In local mode, uses vLLM prompt_logprobs.
     """
     messages = list(pair.prompt_messages)
     if use_default_system_prompt and not any(
@@ -144,12 +144,12 @@ async def measure_logprob_margin(
     ):
         messages.insert(0, ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
 
-    if proxy_url:
-        positive_lp = await fetch_response_logprob_sum_via_proxy(
-            proxy_url, messages, pair.positive_response,
+    if mode == "tinker":
+        positive_lp = await fetch_response_logprob_sum_via_score(
+            vllm_url, messages, pair.positive_response,
         )
-        negative_lp = await fetch_response_logprob_sum_via_proxy(
-            proxy_url, messages, pair.negative_response,
+        negative_lp = await fetch_response_logprob_sum_via_score(
+            vllm_url, messages, pair.negative_response,
         )
     else:
         positive_lp = await fetch_response_logprob_sum(

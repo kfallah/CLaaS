@@ -24,19 +24,6 @@ RUN uv sync --frozen --extra tinker --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-# ---- Proxy target ----
-FROM base AS proxy
-
-RUN groupadd --gid 10002 tinker && \
-    useradd --uid 10002 --gid 10002 --create-home --shell /usr/sbin/nologin tinker && \
-    chown -R tinker:tinker /app
-
-USER tinker
-
-EXPOSE 8000
-
-ENTRYPOINT ["uvicorn", "claas.proxy.tinker_inference_proxy:app", "--host", "0.0.0.0", "--port", "8000"]
-
 # ---- API target ----
 FROM base AS api
 

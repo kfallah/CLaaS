@@ -7,10 +7,8 @@ import pytest
 from claas.core.config import (
     LocalConfig,
     ModalConfig,
-    ProxyConfig,
     TinkerConfig,
     load_core_config,
-    load_proxy_config,
 )
 
 
@@ -63,13 +61,6 @@ def test_load_core_config_returns_new_instances() -> None:
     assert first is not second
 
 
-def test_load_proxy_config_defaults() -> None:
-    cfg = load_proxy_config()
-    assert isinstance(cfg, ProxyConfig)
-    assert cfg.tinker_base_model == "Qwen/Qwen3-30B-A3B"
+def test_core_config_includes_completion_cache_size() -> None:
+    cfg = load_core_config("local")
     assert cfg.completion_cache_size == 100
-
-
-def test_load_proxy_config_overrides() -> None:
-    cfg = load_proxy_config(overrides=["completion_cache_size=50"])
-    assert cfg.completion_cache_size == 50

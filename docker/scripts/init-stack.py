@@ -51,7 +51,7 @@ def _default_base_model(config_name: str) -> str:
 
 def _default_vllm_base_url(config_name: str) -> str:
     if config_name == "tinker":
-        return "http://tinker-proxy:8000/v1"
+        return "http://claas-api:8080/v1"
     return "http://vllm:8000/v1"
 
 
@@ -208,7 +208,7 @@ def write_openclaw_config() -> None:
             "mode": "merge",
             "providers": {
                 "local": {
-                    "baseUrl": VLLM_BASE_URL,
+                    "baseUrl": f"{CLAAS_API_URL.rstrip('/')}/v1",
                     "apiKey": API_KEY,
                     "api": "openai-completions",
                     "models": [_model_entry(mid) for mid in model_ids],
@@ -280,6 +280,7 @@ def write_openclaw_config() -> None:
                     "enabled": True,
                     "config": {
                         "claasApiUrl": CLAAS_API_URL,
+                        "proxyUrl": CLAAS_API_URL.rstrip("/"),
                         "loraId": f"{LORA_NAME}-latest",
                         "feedbackBatchSize": FEEDBACK_BATCH_SIZE,
                     },
@@ -303,7 +304,7 @@ def write_openclaw_config() -> None:
     agent_models = {
         "providers": {
             "local": {
-                "baseUrl": VLLM_BASE_URL,
+                "baseUrl": f"{CLAAS_API_URL.rstrip('/')}/v1",
                 "apiKey": API_KEY,
                 "api": "openai-completions",
                 "models": [_model_entry(mid) for mid in model_ids],
@@ -373,6 +374,31 @@ def fix_permissions() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 4: Pre-download base model weights into HF cache
+# ---------------------------------------------------------------------------
+def pre_download_model() -> None:
+    """Download base model weights into the HF cache so the distill worker
+    doesn't have to download them on the first feedback request."""
+    if DISTILL_MODE == "tinker":
+        print("Tinker mode — skipping model pre-download.")
+        return
+
+    from huggingface_hub import snapshot_download
+
+    hf_cache = os.environ.get("HF_HOME", os.environ.get("TRANSFORMERS_CACHE"))
+    if not hf_cache:
+        raise RuntimeError("HF_HOME must be set for model pre-download")
+
+    print(f"Pre-downloading {BASE_MODEL} into {hf_cache} ...")
+    snapshot_download(
+        BASE_MODEL,
+        cache_dir=hf_cache,
+        ignore_patterns=["*.bin", "*.gguf"],
+    )
+    print(f"Model {BASE_MODEL} cached successfully.")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -406,6 +432,7 @@ def main() -> None:
     write_openclaw_config()
     install_feedback_plugin()
     fix_permissions()
+    pre_download_model()
 
     print("\n=== Init complete ===")
 

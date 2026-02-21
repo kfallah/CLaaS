@@ -16,3 +16,4 @@ feedback_sleep_verify_timeout_s: 30.0
 feedback_drain_timeout_s: 30.0
 base_model_id: Qwen/Qwen3-8B
 attn_implementation: flash_attention_2
+completion_cache_size: 100

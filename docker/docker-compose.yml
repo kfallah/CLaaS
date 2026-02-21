@@ -26,7 +26,7 @@ services:
       - hf-cache:/root/.cache/huggingface
       - lora-storage:/loras
     ports:
-      - "8000:8000"
+      - "${VLLM_PORT:-8000}:8000"
     deploy:
       resources:
         reservations:
@@ -58,6 +58,7 @@ services:
     environment:
       - VLLM_API_KEY=sk-local
       - HF_TOKEN=${HF_TOKEN:-}
+      - HF_HOME=/root/.cache/huggingface
     volumes:
       - lora-storage:/loras
       - hf-cache:/root/.cache/huggingface
@@ -93,9 +94,12 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - OPENCLAW_HOME=/openclaw-config
       - CLAAS_API_URL=http://claas-api:8080
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN:-}
     volumes:
       - lora-storage:/loras
       - openclaw-config:/openclaw-config
+      - hf-cache:/root/.cache/huggingface
       - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro
 
   openclaw-local:
@@ -104,38 +108,19 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.openclaw
     environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - VLLM_BASE_URL=http://vllm:8000
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - VLLM_BASE_URL=http://claas-api:8080
     volumes:
       - openclaw-config:/home/node/.openclaw
     ports:
       - "${OPENCLAW_PORT:-18789}:18789"
     depends_on:
-      vllm:
-        condition: service_healthy
+      claas-api:
+        condition: service_started
       init-local:
         condition: service_completed_successfully
 
   # ==================== TINKER PROFILE ====================
-
-  tinker-proxy:
-    profiles: [tinker]
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.tinker
-      target: proxy
-    environment:
-      - CLAAS_TINKER_API_KEY=${TINKER_API_KEY}
-      - CLAAS_TINKER_BASE_MODEL=${MODEL}
-      - HF_TOKEN=${HF_TOKEN:-}
-    ports:
-      - "${TINKER_PROXY_PORT:-8000}:8000"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=5)"]
-      interval: 15s
-      timeout: 10s
-      start_period: 20s
-      retries: 20
 
   claas-api-tinker:
     profiles: [tinker]
@@ -148,7 +133,6 @@ services:
         "tinker",
         "tinker_base_model=${MODEL}",
         "tinker_state_path=/data/tinker_state.json",
-        "vllm_base_url=http://tinker-proxy:8000",
       ]
     networks:
       default:
@@ -179,7 +163,7 @@ services:
         "--config-name",
         "tinker",
         "--base-model=${MODEL}",
-        "--vllm-base-url=http://tinker-proxy:8000/v1",
+        "--vllm-base-url=http://claas-api:8080/v1",
         "--lora-root=/loras",
       ]
     environment:
@@ -192,8 +176,6 @@ services:
       - openclaw-config:/openclaw-config
       - ../plugins/claas-feedback:/app/plugins/claas-feedback:ro
     depends_on:
-      tinker-proxy:
-        condition: service_healthy
       claas-api-tinker:
         condition: service_healthy
 
@@ -203,15 +185,15 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.openclaw
     environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - VLLM_BASE_URL=http://tinker-proxy:8000
-      - BACKEND_HEALTH_URL=http://tinker-proxy:8000/v1/models
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - VLLM_BASE_URL=http://claas-api:8080
+      - BACKEND_HEALTH_URL=http://claas-api:8080/v1/models
     volumes:
       - openclaw-config:/home/node/.openclaw
     ports:
       - "${OPENCLAW_PORT:-18789}:18789"
     depends_on:
-      tinker-proxy:
+      claas-api-tinker:
         condition: service_healthy
       init-tinker:
         condition: service_completed_successfully

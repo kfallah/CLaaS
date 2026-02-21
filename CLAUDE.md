@@ -29,15 +29,23 @@ uv run pytest tests/ -v -m "not integration"
 ```text
 claas/
 ├── __init__.py
-├── api.py                               # FastAPI endpoints (entrypoint)
+├── api.py                               # FastAPI endpoints + inference proxy (entrypoint)
 ├── cli.py                               # Command-line interface (entrypoint)
 ├── deploy.py                            # Modal deployment entrypoint
 ├── index.html                           # Dashboard template
 │
 ├── core/                                # Shared types & config
 │   ├── __init__.py
-│   ├── config.py                        # Centralized env var config (get_config / get_proxy_config)
+│   ├── config.py                        # Centralized env var config (get_config)
 │   └── types.py                         # Pydantic models, TypedDicts (ChatMessage, etc.)
+│
+├── inference/                           # Inference backend abstraction
+│   ├── __init__.py                      # Factory: get_inference_backend(kind)
+│   ├── base.py                          # Abstract InferenceBackend + result dataclasses
+│   ├── tinker.py                        # Tinker SDK implementation
+│   ├── vllm.py                          # vLLM forwarding implementation
+│   ├── cache.py                         # CompletionCache + CompletionCacheEntry
+│   └── helpers.py                       # strip_thinking, extract_final_channel, SSE helpers
 │
 ├── training/                            # Training pipeline
 │   ├── __init__.py
@@ -66,13 +74,9 @@ claas/
 │   ├── verifiers.py                     # Programmatic compliance verifiers
 │   ├── capability.py                    # General capability probes
 │   ├── collapse.py                      # Collapse detection
-│   ├── gemini.py                        # Gemini-based evaluation
 │   ├── plotting.py                      # Matplotlib plot generation
-│   └── dashboard.py                     # Web dashboard for results
-│
-└── proxy/                               # Inference proxy
-    ├── __init__.py
-    └── tinker_inference_proxy.py         # Tinker SDK -> OpenAI-compatible proxy
+│   ├── dashboard.py                     # Web dashboard for results
+│   └── README.md                        # Eval harness documentation
 ```
 
 ## Modal Deployment

@@ -1,6 +1,0 @@
-defaults:
-  - _core_proxy_schema
-  - _self_
-
-tinker_base_model: Qwen/Qwen3-30B-A3B
-completion_cache_size: 100

@@ -38,9 +38,6 @@ echo "==> Starting tinker stack (model=$MODEL) ..."
 compose up -d --build
 
 # ── 2. Wait for health ─────────────────────────────────────────────
-echo "==> Waiting for tinker-proxy ..."
-timeout 180 bash -c 'until curl -sf http://127.0.0.1:8000/v1/models >/dev/null 2>&1; do sleep 5; done'
-
 echo "==> Waiting for CLaaS API ..."
 timeout 120 bash -c 'until curl -sf http://127.0.0.1:8080/ >/dev/null 2>&1; do sleep 5; done'
 

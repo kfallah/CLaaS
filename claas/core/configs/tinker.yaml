@@ -11,3 +11,4 @@ allowed_init_base_models:
 vllm_base_url: http://127.0.0.1:8000
 tinker_base_model: Qwen/Qwen3-30B-A3B
 tinker_state_path: /data/tinker_state.json
+completion_cache_size: 100

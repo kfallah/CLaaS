@@ -31,4 +31,3 @@ lora_id_prefix: eval
 output_dir: ./data/evals
 
 openclaw_url: null
-proxy_url: null
