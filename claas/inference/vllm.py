@@ -209,9 +209,24 @@ class VllmBackend(InferenceBackend):
                 headers=headers,
                 content=body if body else None,
             )
+            # Filter hop-by-hop / encoding headers that can corrupt the
+            # response when forwarded verbatim from the upstream server.
+            _HOP_BY_HOP = frozenset({
+                "transfer-encoding",
+                "content-encoding",
+                "content-length",
+                "connection",
+                "keep-alive",
+                "upgrade",
+            })
+            fwd_headers = {
+                k: v
+                for k, v in resp.headers.items()
+                if k.lower() not in _HOP_BY_HOP
+            }
             return Response(
                 content=resp.content,
                 status_code=resp.status_code,
-                headers=dict(resp.headers),
+                headers=fwd_headers,
                 media_type=resp.headers.get("content-type"),
             )
