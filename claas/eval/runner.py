@@ -17,7 +17,6 @@ from claas.core.types import (
     FeedbackBatchRequest,
     FeedbackItem,
     FeedbackOrchestration,
-    TrainingConfig,
 )
 
 from .logprob import derive_vllm_model_name
@@ -84,32 +83,14 @@ async def _load_lora_into_vllm(
         resp.raise_for_status()
 
 
-@dataclasses.dataclass
-class _EvalSample:
-    """Lightweight sample for eval feedback: just the fields the API needs."""
-
-    prompt: str
-    response: str
-    feedback: str
-
-
 async def _submit_feedback(
     config: HarnessConfig,
     lora_id: str,
-    samples: list[_EvalSample],
+    samples: list[FeedbackItem],
 ) -> LocalDistillMetrics | TinkerDistillMetrics | None:
     """Submit batched feedback via CLaaS API and return SDPO metrics."""
     payload = FeedbackBatchRequest(
-        requests=[
-            FeedbackItem(
-                lora_id=lora_id,
-                prompt=s.prompt,
-                response=s.response,
-                feedback=s.feedback,
-                training=TrainingConfig(),
-            )
-            for s in samples
-        ],
+        requests=samples,
         orchestration=FeedbackOrchestration(sleep_before=False, wake_after=False),
     )
     async with httpx.AsyncClient(base_url=config.claas_url, timeout=180.0) as client:
@@ -433,7 +414,7 @@ async def run_preference_experiment(
         feedback_str = " ".join([pref.feedback_string] * config.feedback_repetitions)
 
         # Collect samples for this step (batch_size >= 1)
-        samples: list[_EvalSample] = []
+        samples: list[FeedbackItem] = []
         response_text: str | None = None
 
         for i in range(config.batch_size):
@@ -449,7 +430,8 @@ async def run_preference_experiment(
                 )
                 if response_text is None:
                     response_text = content
-                samples.append(_EvalSample(
+                samples.append(FeedbackItem(
+                    lora_id=lora_id,
                     prompt=prompt,
                     response=content,
                     feedback=feedback_str,
