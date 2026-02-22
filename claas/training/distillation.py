@@ -78,7 +78,7 @@ class DistillationTrainer:
         """Move base model to CPU and release CUDA memory."""
         import torch
 
-        self.base_model.to("cpu")
+        self.base_model.to(torch.device("cpu"))
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
