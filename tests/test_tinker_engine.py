@@ -383,7 +383,7 @@ def test_engine_delete_lora_continues_on_checkpoint_error(tinker_engine):
 def test_engine_distill_full_flow(tinker_engine, mock_training_client):
     """End-to-end distill: restore → tokenize → logprobs → train → save.
 
-    Exercises the complete distill method with valid rollout_logprobs
+    Exercises the complete distill method with valid response_logprobs
     provided for each sample (mandatory field).
     """
     engine, mock_service = tinker_engine
@@ -413,7 +413,10 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
                 prompt="Hello",
                 response="World",
                 feedback="Good job",
-                rollout_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+                response_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+                prompt_token_ids=[0, 1, 2, 3, 4],
+                response_token_ids=[0, 1, 2, 3, 4],
+                user_prompt="Hello",
             )
         ],
     )
@@ -427,7 +430,7 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
     assert result.metadata["tinker_path"] == "tinker://checkpoints/step-1"
     assert result.metadata["sampler_weights_path"] == "tinker://weights/step-1-sampler"
     assert result.metadata["batch_size"] == 1
-    assert result.metadata["completion_len"] == len("World")
+    assert result.metadata["completion_len"] == 5
     assert "effective_kl_coef" in result.metadata
     assert "kl_mean" in result.metadata
     assert "adv_mean" in result.metadata
@@ -439,7 +442,7 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
         "tinker://init-ckpt"
     )
 
-    # Student sampling client was NOT used (rollout_logprobs provided)
+    # Student sampling client was NOT used (response_logprobs provided)
     mock_training_client.save_weights_and_get_sampling_client_async.assert_not_called()
 
     # Verify teacher was queried with base model
@@ -464,8 +467,8 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
     assert "tinker://init-ckpt" in (entry.old_paths or [])
 
 
-def test_engine_distill_uses_provided_rollout_logprobs(tinker_engine, mock_training_client):
-    """When rollout_logprobs are provided, the engine skips student sampling."""
+def test_engine_distill_uses_provided_response_logprobs(tinker_engine, mock_training_client):
+    """When response_logprobs are provided, the engine skips student sampling."""
     engine, mock_service = tinker_engine
 
     set_tinker_path("test/lora", "tinker://ckpt", "gpt-oss/GPT-OSS-120B", 32, step=0)
@@ -477,7 +480,7 @@ def test_engine_distill_uses_provided_rollout_logprobs(tinker_engine, mock_train
     teacher_sampler.compute_logprobs_async = AsyncMock(return_value=[-0.3] * 100)
     mock_service.create_sampling_client_async = AsyncMock(return_value=teacher_sampler)
 
-    # Provide rollout_logprobs matching the response length (5 chars = 5 tokens)
+    # Provide response_logprobs matching the response length (5 tokens)
     payload = DistillBatchRequestPayload(
         lora_id="test/lora",
         training=TrainingConfig(),
@@ -486,7 +489,10 @@ def test_engine_distill_uses_provided_rollout_logprobs(tinker_engine, mock_train
                 prompt="Hello",
                 response="World",
                 feedback="Nice",
-                rollout_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+                response_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+                prompt_token_ids=[0, 1, 2, 3, 4],
+                response_token_ids=[0, 1, 2, 3, 4],
+                user_prompt="Hello",
             )
         ],
     )
@@ -503,7 +509,7 @@ def test_engine_distill_uses_provided_rollout_logprobs(tinker_engine, mock_train
 def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_client):
     """Batched distill: 3 samples processed concurrently, single train step.
 
-    All samples provide valid rollout_logprobs (mandatory field), so
+    All samples provide valid response_logprobs (mandatory field), so
     the student sampling client is never created.
     """
     engine, mock_service = tinker_engine
@@ -523,26 +529,35 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
     )
 
     samples = [
-        # Sample 1: 5 tokens ("World")
+        # Sample 1: 5 tokens
         DistillBatchItem(
             prompt="Hello",
             response="World",
             feedback="Good",
-            rollout_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+            response_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+            prompt_token_ids=[0, 1, 2, 3, 4],
+            response_token_ids=[0, 1, 2, 3, 4],
+            user_prompt="Hello",
         ),
-        # Sample 2: 5 tokens ("There")
+        # Sample 2: 5 tokens
         DistillBatchItem(
             prompt="Hi",
             response="There",
             feedback="Nice",
-            rollout_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+            response_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+            prompt_token_ids=[0, 1],
+            response_token_ids=[0, 1, 2, 3, 4],
+            user_prompt="Hi",
         ),
-        # Sample 3: 3 tokens ("You")
+        # Sample 3: 3 tokens
         DistillBatchItem(
             prompt="Hey",
             response="You",
             feedback="Great",
-            rollout_logprobs=[-0.1, -0.2, -0.3],
+            response_logprobs=[-0.1, -0.2, -0.3],
+            prompt_token_ids=[0, 1, 2],
+            response_token_ids=[0, 1, 2],
+            user_prompt="Hey",
         ),
     ]
 
@@ -560,9 +575,9 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
     assert result.metadata["batch_size"] == 3
     assert result.metadata["step"] == 1
 
-    # completion_len is summed across all samples
-    expected_total_len = len("World") + len("There") + len("You")
-    assert result.metadata["completion_len"] == expected_total_len
+    # completion_len is summed across all samples' response_token_ids
+    # 5 + 5 + 3 = 13
+    assert result.metadata["completion_len"] == 13
 
     # Averaged metrics are present
     assert "adv_mean" in result.metadata
@@ -583,7 +598,7 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
     # save_state called once
     mock_training_client.save_state_async.assert_called_once_with("step-1")
 
-    # Student sampling client was NOT used (all samples have valid rollout_logprobs)
+    # Student sampling client was NOT used (all samples have valid response_logprobs)
     mock_training_client.save_weights_and_get_sampling_client_async.assert_not_called()
 
     # Teacher sampling client created once
@@ -694,9 +709,10 @@ def test_engine_distill_uses_response_token_ids(tinker_engine, mock_training_cli
                 prompt="(ignored prompt text)",
                 response="(ignored response text)",
                 feedback="Nice",
-                rollout_logprobs=[-0.1, -0.2, -0.3],
+                response_logprobs=[-0.1, -0.2, -0.3],
                 prompt_token_ids=prompt_ids,
                 response_token_ids=response_ids,
+                user_prompt="What is 2+2?",
             )
         ],
     )
@@ -737,7 +753,9 @@ def test_engine_distill_uses_user_prompt_for_teacher(tinker_engine, mock_trainin
                 ),
                 response="Four",
                 feedback="Good",
-                rollout_logprobs=[-0.1, -0.2, -0.3, -0.4],
+                response_logprobs=[-0.1, -0.2, -0.3, -0.4],
+                prompt_token_ids=[10, 20, 30],
+                response_token_ids=[40, 50, 60, 70],
                 user_prompt="What is 2+2?",
             )
         ],

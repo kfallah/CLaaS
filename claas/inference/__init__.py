@@ -20,7 +20,10 @@ def get_inference_backend(kind: BackendKind, cfg: CoreConfig | None = None) -> I
 
         return VllmBackend(cfg=cfg)
     if kind == "tinker":
+        from claas.core.config import TinkerConfig
+
         from .tinker import TinkerBackend
 
+        assert isinstance(cfg, TinkerConfig), f"tinker backend requires TinkerConfig, got {type(cfg)}"
         return TinkerBackend(cfg=cfg)
     raise ValueError(f"Unsupported inference backend: {kind!r}")

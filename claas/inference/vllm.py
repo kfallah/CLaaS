@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request, Response
 from claas.core.config import CoreConfig
 
 from .base import CompletionResult, InferenceBackend, TextCompletionResult
-from .helpers import build_chatml_prompt, coerce_content
+from .helpers import apply_chat_template_ids, coerce_content
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,17 @@ class VllmBackend(InferenceBackend):
 
     def __init__(self, cfg: CoreConfig | None = None) -> None:
         self._cfg = cfg
+        self._tokenizer: Any = None
+        model_id = getattr(cfg, "base_model_id", None) if cfg else None
+        if model_id:
+            try:
+                from transformers import AutoTokenizer
+
+                self._tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+            except ImportError:
+                logger.warning(
+                    "transformers not installed; VllmBackend will not produce token IDs"
+                )
 
     def _backend_url(self) -> str:
         """Return the upstream vLLM base URL (no trailing slash)."""
@@ -109,20 +120,36 @@ class VllmBackend(InferenceBackend):
         choice = data["choices"][0]
         content = choice["message"]["content"]
 
-        logprobs: list[float] | None = None
+        response_logprobs: list[float] | None = None
         lp_data = choice.get("logprobs")
         if lp_data and lp_data.get("content"):
-            logprobs = [entry["logprob"] for entry in lp_data["content"]]
+            response_logprobs = [entry["logprob"] for entry in lp_data["content"]]
 
-        raw_prompt = build_chatml_prompt(messages_dicts)
+        tokenizer = self._tokenizer
+        if tokenizer is not None:
+            raw_prompt = tokenizer.apply_chat_template(
+                messages_dicts, tokenize=False, add_generation_prompt=True,
+            )
+            prompt_token_ids = apply_chat_template_ids(
+                tokenizer, messages_dicts, add_generation_prompt=True,
+            )
+            response_token_ids: list[int] = tokenizer.encode(
+                content, add_special_tokens=False,
+            )
+        else:
+            raw_prompt = content
+            prompt_token_ids = []
+            response_token_ids = []
+
         usage = data.get("usage", {})
 
         return CompletionResult(
             content=content,
             raw_prompt=raw_prompt,
             raw_response=content,
-            token_ids=[],
-            logprobs=logprobs,
+            response_token_ids=response_token_ids,
+            prompt_token_ids=prompt_token_ids,
+            response_logprobs=response_logprobs,
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
         )

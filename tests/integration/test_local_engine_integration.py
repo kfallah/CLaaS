@@ -103,7 +103,10 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
                         prompt="prompt",
                         response="response",
                         feedback="feedback",
-                        rollout_logprobs=[-0.1],
+                        response_logprobs=[-0.1],
+                        prompt_token_ids=[1, 2],
+                        response_token_ids=[3],
+                        user_prompt="prompt",
                     )
                 ],
             )
@@ -151,7 +154,10 @@ def test_local_engine_cleanup_failure_propagates(monkeypatch):
                             prompt="prompt",
                             response="response",
                             feedback="feedback",
-                            rollout_logprobs=[-0.1],
+                            response_logprobs=[-0.1],
+                            prompt_token_ids=[1, 2],
+                            response_token_ids=[3],
+                            user_prompt="prompt",
                         )
                     ],
                 )

@@ -231,6 +231,7 @@ class TestStopTokenStripping:
 
         # After stripping stop token 3: tokens=[1,2], logprobs=[-0.1,-0.2]
         assert len(entry.response_token_ids) == 2
+        assert entry.response_logprobs is not None
         assert len(entry.response_logprobs) == 2
         assert entry.response_logprobs == pytest.approx([-0.1, -0.2])
 

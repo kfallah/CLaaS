@@ -20,9 +20,9 @@ class CompletionResult:
     content: str
     raw_prompt: str
     raw_response: str
-    token_ids: list[int] = field(default_factory=list)
-    prompt_token_ids: list[int] | None = None
-    logprobs: list[float] | None = None
+    response_token_ids: list[int] = field(default_factory=list)
+    prompt_token_ids: list[int] = field(default_factory=list)
+    response_logprobs: list[float] | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
 

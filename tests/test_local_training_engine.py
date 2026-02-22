@@ -50,7 +50,10 @@ def test_local_engine_distill_propagates_cleanup_error(monkeypatch):
                             prompt="p",
                             response="r",
                             feedback="f",
-                            rollout_logprobs=[-0.1],
+                            response_logprobs=[-0.1],
+                            prompt_token_ids=[1, 2],
+                            response_token_ids=[3],
+                            user_prompt="p",
                         )
                     ],
                 )

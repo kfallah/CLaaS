@@ -58,6 +58,7 @@ class ModalConfig(CLaaSConfig):
     feedback_min_free_vram_gb: float = 20.0
     feedback_sleep_verify_timeout_s: float = 30.0
     feedback_drain_timeout_s: float = 30.0
+    base_model_id: str = "Qwen/Qwen3-8B"
     hf_secret_name: str = ""
 
 
