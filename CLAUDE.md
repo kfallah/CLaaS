@@ -38,7 +38,6 @@ uv run pytest tests/ -v -m "not integration"
 claas/
 ├── __init__.py
 ├── api.py                               # FastAPI endpoints + inference proxy (entrypoint)
-├── cli.py                               # Command-line interface (entrypoint)
 ├── index.html                           # Dashboard template
 │
 ├── core/                                # Shared types & config
@@ -70,8 +69,7 @@ claas/
 ├── modal/                               # Modal deployment modules
 │   ├── __init__.py
 │   ├── deploy.py                        # Unified Modal app deployment
-│   ├── worker.py                        # Modal DistillWorker class
-│   └── teacher_service.py               # Modal TeacherService class
+│   └── worker.py                        # Modal DistillWorker class
 │
 ├── eval/                                # Eval harness (Hydra config)
 │   ├── __init__.py

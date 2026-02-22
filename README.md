@@ -14,12 +14,13 @@ Continual learning as-a-service (CLaaS) via self-distillation for OpenClaw. Pers
 
 **Prerequisites:** Python 3.11+, `uv`, and [Docker](https://docs.docker.com/get-docker/).
 
-```mermaid
-flowchart TD
-    A[Do you have a GPU?] -->|Yes| B[Local]
-    A -->|No| D["Tinker (Recommended)"]
-    A -->|No| E[Modal]
-```
+CLaaS supports three execution engines. Pick the one that matches your setup:
+
+| Engine | GPU required | Status |
+|--------|-------------|--------|
+| **Local** | Yes (>= 24 GB VRAM) | Available |
+| **Tinker** (recommended) | No | Available |
+| **Modal** | No (remote GPU) | Coming soon |
 
 ### Local (GPU)
 
@@ -68,7 +69,7 @@ uv pip install --python .venv/bin/python --index-url https://download.pytorch.or
 
 If you use [Claude Code](https://claude.ai/claude-code), `/setup-tinker` deploys the Tinker Docker stack. Use `/clear-tinker-storage` to delete all Tinker checkpoints and free storage.
 
-### Modal (remote GPU)
+### Modal (remote GPU) — Coming Soon
 
 Runs distillation remotely on Modal (L40S). Requires a Modal account.
 
@@ -111,10 +112,12 @@ curl -X POST http://localhost:8080/v1/lora/init \
 curl -X POST http://localhost:8080/v1/feedback \
   -H "Content-Type: application/json" \
   -d '{
-    "lora_id": "user/my-lora-init",
-    "prompt": "Write a function to calculate factorial",
-    "response": "def factorial(n): ...",
-    "feedback": "Good recursive solution"
+    "requests": [{
+      "lora_id": "user/my-lora",
+      "prompt": "Write a function to calculate factorial",
+      "response": "def factorial(n): ...",
+      "feedback": "Good recursive solution"
+    }]
   }'
 ```
 
