@@ -6,12 +6,10 @@ const TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface FeedbackItemPayload {
   lora_id: string;
-  content_hash: string;
+  prompt: string;
+  response: string;
   feedback: string;
-  user_prompt: string;
-  training: {
-    teacher_mode: string;
-  };
+  training: Record<string, unknown>;
 }
 
 export interface FeedbackBatchPayload {

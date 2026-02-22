@@ -6,10 +6,8 @@ which brings up and tears down the Docker stack automatically.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import re
 import uuid
 from typing import TYPE_CHECKING
 
@@ -18,28 +16,12 @@ import pytest
 
 from claas.training.teacher_helpers import build_teacher_messages
 
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
-
 if TYPE_CHECKING:
     from conftest import TinkerStack
 
 pytestmark = pytest.mark.integration
 
 logger = logging.getLogger(__name__)
-
-
-def _content_hash(response_content: str) -> str:
-    """Compute the SHA-256 content hash matching the API's cache key.
-
-    Mirrors the OpenClaw feedback plugin: strip ``<think>`` blocks,
-    strip orphaned ``</think>`` prefixes, then SHA-256 the visible text.
-    """
-    visible = _THINK_RE.sub("", response_content)
-    idx = visible.find("</think>")
-    if idx >= 0:
-        visible = visible[idx + len("</think>"):]
-    visible = visible.strip()
-    return hashlib.sha256(visible.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -151,27 +133,9 @@ class TestTinkerStackRoundTrip:
                 assert len(response_content) > 0
                 logger.info("Model response: %s", response_content)
 
-                # 3b. Compute content hash (the API resolves cache internally)
-                ch = _content_hash(response_content)
-                logger.info("Content hash: %s", ch)
-
-                # Verify the cache entry exists (debugging aid)
-                raw_resp = client.get(
-                    f"{claas_url}/v1/completions/raw",
-                    params={"content_hash": ch},
-                    timeout=15.0,
-                )
-                assert raw_resp.status_code == 200, (
-                    f"Cache miss for content_hash={ch[:16]}…: {raw_resp.text}"
-                )
-                logger.info(
-                    "Cache hit: %d rollout logprobs available",
-                    len(raw_resp.json()["logprobs"]),
-                )
-
                 # 4. Distill via feedback endpoint (teacher_mode=self)
                 #    The API resolves prompt, response, and logprobs from
-                #    the completion cache using content_hash.
+                #    the completion cache by hashing the response text.
                 teacher_messages = build_teacher_messages(user_prompt, feedback_text)
                 logger.info(
                     "Teacher messages (built by engine for self-distillation):\n%s",
@@ -182,10 +146,10 @@ class TestTinkerStackRoundTrip:
                     "requests": [
                         {
                             "lora_id": lora_id,
-                            "content_hash": ch,
+                            "prompt": user_prompt,
+                            "response": response_content,
                             "feedback": feedback_text,
-                            "user_prompt": user_prompt,
-                            "training": {"teacher_mode": "self"},
+                            "training": {},
                         },
                     ],
                     "orchestration": {

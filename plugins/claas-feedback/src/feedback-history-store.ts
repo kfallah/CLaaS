@@ -3,9 +3,9 @@
  */
 
 export interface FeedbackHistoryEntry {
-  content_hash: string;
+  prompt: string;
+  response: string;
   feedback: string;
-  user_prompt: string;
   timestamp: number;
 }
 
@@ -19,14 +19,14 @@ const MAX_PENDING_PER_SESSION = 200;
  */
 export function appendFeedback(
   sessionKey: string,
-  contentHash: string,
+  prompt: string,
+  response: string,
   feedback: string,
-  userPrompt: string,
 ): { pendingSize: number } {
   const entry: FeedbackHistoryEntry = {
-    content_hash: contentHash,
+    prompt,
+    response,
     feedback,
-    user_prompt: userPrompt,
     timestamp: Date.now(),
   };
 

@@ -13,10 +13,8 @@ thinking) needed for self-distillation.
 Endpoints:
 - POST /v1/chat/completions: Chat completion (forwarded to inference backend)
 - POST /v1/completions: Text completion (forwarded to inference backend)
-- GET  /v1/completions/raw: Retrieve cached raw completion by content hash
 - GET  /v1/models: List available models
 - POST /v1/feedback: Run one online update transaction (primary endpoint)
-- POST /v1/distill: Run a single SDPO distillation step (low-level)
 - POST /v1/lora/init: Initialize a new LoRA adapter
 - GET  /v1/lora: List all LoRA adapters
 - GET  /v1/lora/export: Download a LoRA as a zip archive
@@ -53,7 +51,7 @@ import hydra
 import modal
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from omegaconf import OmegaConf
 
 from .core.config import (
@@ -73,8 +71,6 @@ from .core.types import (
     CompletionUsage,
     DistillBatchItem,
     DistillBatchRequestPayload,
-    DistillRequest,
-    DistillRequestPayload,
     DistillResponse,
     FeedbackBatchRequest,
     FeedbackLogRecord,
@@ -86,7 +82,6 @@ from .core.types import (
     LoraInitRequest,
     LoraInitResponse,
     LoraListResponse,
-    RawCompletionResponse,
     ServiceHealth,
     TextCompletionChoice,
     TextCompletionResponse,
@@ -97,6 +92,7 @@ from .inference.cache import CompletionCacheEntry, completion_cache
 from .inference.helpers import (
     coerce_content,
     extract_final_channel,
+    normalize_for_hash,
     stream_chat_response,
     stream_completion_response,
     strip_thinking,
@@ -109,7 +105,6 @@ from .training.storage import (
     configure_storage_root,
     lora_volume,
 )
-from .training.teacher_helpers import format_teacher_prompt
 
 logger = logging.getLogger(__name__)
 register_config_schemas()
@@ -174,11 +169,6 @@ def _get_engine_kind_from_cfg(cfg: CoreConfig) -> EngineKind:
 def _get_engine_kind() -> EngineKind:
     """Validate and return the configured engine kind."""
     return _get_engine_kind_from_cfg(_runtime_config())
-
-def _uses_modal_teacher() -> bool:
-    """Return whether API should fetch teacher scores from Modal TeacherService."""
-    return _get_engine_kind() == "modal"
-
 
 def _get_training_engine() -> TrainingEngine:
     """Build the configured training engine instance."""
@@ -607,16 +597,16 @@ async def chat_completions(
 
     # Cache raw completion for training pipeline retrieval
     content_hash = hashlib.sha256(
-        strip_thinking(visible).encode("utf-8"),
+        normalize_for_hash(visible).encode("utf-8"),
     ).hexdigest()
     completion_cache.put(
         content_hash,
         CompletionCacheEntry(
             prompt=result.raw_prompt,
             response=result.raw_response,
-            token_ids=result.token_ids,
+            response_token_ids=result.response_token_ids,
             prompt_token_ids=result.prompt_token_ids,
-            logprobs=result.logprobs,
+            response_logprobs=result.response_logprobs,
         ),
     )
 
@@ -681,23 +671,6 @@ async def completions(
     )
 
 
-@web_app.get("/v1/completions/raw", response_model=None)
-async def get_raw_completion(content_hash: str) -> RawCompletionResponse | JSONResponse:
-    """Retrieve cached raw completion by SHA-256 hash of parsed content text."""
-    entry = completion_cache.get(content_hash)
-    if entry is None:
-        return JSONResponse(
-            status_code=404,
-            content={"error": "No cached completion found for this content hash"},
-        )
-    return RawCompletionResponse(
-        prompt=entry.prompt,
-        response=entry.response,
-        token_ids=entry.token_ids,
-        prompt_token_ids=entry.prompt_token_ids,
-        logprobs=entry.logprobs,
-    )
-
 
 @web_app.get("/v1/models", response_model=None)
 async def list_models(request: Request) -> dict[str, object] | Response:
@@ -709,78 +682,6 @@ async def list_models(request: Request) -> dict[str, object] | Response:
 # ---------------------------------------------------------------------------
 # Training API endpoints
 # ---------------------------------------------------------------------------
-
-
-@web_app.post("/v1/distill", response_model=DistillResponse)
-async def distill(request: DistillRequest) -> DistillResponse:
-    """Run a single SDPO distillation step.
-
-    This endpoint:
-    1. Loads the user's LoRA from local storage (or Modal Volume in modal mode)
-    2. Runs the student model forward pass
-    3. Gets teacher logprobs from configured source
-       - self (default): base model conditioned on feedback
-       - remote: vLLM TeacherService
-    4. Computes SDPO loss (JSD-based policy gradient)
-    5. Updates LoRA parameters
-    6. Saves the updated LoRA back to local storage (or Modal Volume in modal mode)
-
-    Returns the new LoRA ID and training metrics.
-    """
-    try:
-        exists_payload = await _get_training_engine().lora_exists(request.lora_id)
-        if not exists_payload.exists:
-            raise HTTPException(
-                status_code=404,
-                detail=f"LoRA not found: {request.lora_id}",
-            )
-
-        single_payload = DistillRequestPayload.model_validate(request.model_dump())
-        payload = DistillBatchRequestPayload(
-            lora_id=single_payload.lora_id,
-            training=single_payload.training,
-            save_in_place=single_payload.save_in_place,
-            samples=[
-                DistillBatchItem(
-                    prompt=single_payload.prompt,
-                    response=single_payload.response,
-                    feedback=single_payload.feedback,
-                    rollout_logprobs=single_payload.rollout_logprobs,
-                    teacher_result=single_payload.teacher_result,
-                    prompt_token_ids=single_payload.prompt_token_ids,
-                    response_token_ids=single_payload.response_token_ids,
-                    user_prompt=single_payload.user_prompt,
-                )
-            ],
-        )
-
-        # Remote teacher is optional; self-distillation is the default path.
-        if request.training.teacher_mode == "remote" and _uses_modal_teacher():
-            teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-            teacher_prompt = format_teacher_prompt(request.user_prompt or request.prompt, request.feedback)
-            teacher_scored = await teacher_score_fn.remote.aio(
-                prompts=[teacher_prompt],
-                completions=[request.response],
-                top_k=request.training.teacher_top_k,
-            )
-            if not teacher_scored or not teacher_scored[0]:
-                raise HTTPException(
-                    status_code=502,
-                    detail="Remote teacher returned empty scores",
-                )
-            payload.samples[0] = payload.samples[0].model_copy(update={"teacher_result": teacher_scored[0]})
-
-        result = await _run_distill(payload)
-
-        return result
-
-    except HTTPException:
-        raise
-    except (ValueError, RuntimeError, OSError) as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Distillation failed: {str(e)}",
-        ) from e
 
 
 @web_app.post("/v1/feedback", response_model=FeedbackResponse)
@@ -813,26 +714,29 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
     # Resolve cache entries before acquiring lock or doing orchestration.
     batch_samples: list[DistillBatchItem] = []
     for req in batch_requests:
-        entry = completion_cache.get(req.content_hash)
+        content_hash = hashlib.sha256(
+            normalize_for_hash(req.response).encode("utf-8"),
+        ).hexdigest()
+        entry = completion_cache.get(content_hash)
         if entry is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"No cached completion for content_hash={req.content_hash[:16]}…",
+                detail=f"No cached completion for content_hash={content_hash[:16]}…",
             )
-        if entry.logprobs is None:
+        if entry.response_logprobs is None:
             raise HTTPException(
                 status_code=422,
-                detail=f"Cached completion has no logprobs (content_hash={req.content_hash[:16]}…)",
+                detail=f"Cached completion has no logprobs (content_hash={content_hash[:16]}…)",
             )
         batch_samples.append(
             DistillBatchItem(
                 prompt=entry.prompt,
                 response=entry.response,
                 feedback=req.feedback,
-                rollout_logprobs=entry.logprobs,
+                response_logprobs=entry.response_logprobs,
                 prompt_token_ids=entry.prompt_token_ids,
-                response_token_ids=entry.token_ids,
-                user_prompt=req.user_prompt,
+                response_token_ids=entry.response_token_ids,
+                user_prompt=req.prompt,
             )
         )
 
@@ -873,20 +777,6 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                 samples=batch_samples,
                 save_in_place=True,
             )
-
-            if first_request.training.teacher_mode == "remote" and _uses_modal_teacher():
-                teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-                teacher_scored = await teacher_score_fn.remote.aio(
-                    prompts=[format_teacher_prompt(req.user_prompt, s.feedback) for req, s in zip(batch_requests, batch_samples, strict=True)],
-                    completions=[s.response for s in batch_samples],
-                    top_k=first_request.training.teacher_top_k,
-                )
-                if not teacher_scored or len(teacher_scored) != len(batch_samples):
-                    raise HTTPException(status_code=502, detail="Remote teacher returned invalid scores")
-                payload.samples = [
-                    sample_item.model_copy(update={"teacher_result": teacher_scored[idx]})
-                    for idx, sample_item in enumerate(payload.samples)
-                ]
 
             distill_result = await _run_distill(payload)
             timing_ms.distill = int((time.perf_counter() - distill_start) * 1000)
@@ -951,7 +841,6 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             status="ok" if error_message is None else "error",
             phase=phase,
             lora_id=lora_id,
-            teacher_mode=first_request.training.teacher_mode,
             requests=batch_requests,
             vllm=FeedbackLogVllmState(slept=slept, woke=woke),
             timing_ms=timing_ms,
@@ -1068,18 +957,7 @@ async def health_check() -> HealthResponse:
         worker = ServiceHealth(status="unhealthy", error=str(e))
         status = "degraded"
 
-    if _uses_modal_teacher():
-        try:
-            teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
-            data = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
-            teacher = ServiceHealth.model_validate(data)
-        except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
-            teacher = ServiceHealth(status="unhealthy", error=str(e))
-            status = "degraded"
-    else:
-        teacher = ServiceHealth(status="healthy", error=None)
-
-    return HealthResponse(status=status, worker=worker, teacher=teacher)
+    return HealthResponse(status=status, worker=worker)
 
 
 @web_app.get("/v1/dashboard", response_class=HTMLResponse)

@@ -6,7 +6,6 @@ Runs feedback steps, measures metrics, writes results to disk.
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 import logging
 import os
@@ -37,7 +36,6 @@ from .types import (
     direct_vllm_chat_params,
     openclaw_chat_params,
 )
-from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +88,9 @@ async def _load_lora_into_vllm(
 class _EvalSample:
     """Lightweight sample for eval feedback: just the fields the API needs."""
 
-    content_hash: str
+    prompt: str
+    response: str
     feedback: str
-    user_prompt: str
 
 
 async def _submit_feedback(
@@ -105,10 +103,10 @@ async def _submit_feedback(
         requests=[
             FeedbackItem(
                 lora_id=lora_id,
-                content_hash=s.content_hash,
+                prompt=s.prompt,
+                response=s.response,
                 feedback=s.feedback,
-                user_prompt=s.user_prompt,
-                training=TrainingConfig(teacher_mode="self"),
+                training=TrainingConfig(),
             )
             for s in samples
         ],
@@ -175,11 +173,6 @@ async def _generate_response(
         return resp.json()["choices"][0]["message"]["content"]
 
 
-def _content_hash(visible_content: str) -> str:
-    """Compute the SHA-256 cache key from visible content."""
-    return hashlib.sha256(
-        strip_thinking(visible_content).encode("utf-8"),
-    ).hexdigest()
 
 
 async def _measure_eval_metrics(
@@ -457,9 +450,9 @@ async def run_preference_experiment(
                 if response_text is None:
                     response_text = content
                 samples.append(_EvalSample(
-                    content_hash=_content_hash(content),
+                    prompt=prompt,
+                    response=content,
                     feedback=feedback_str,
-                    user_prompt=prompt,
                 ))
             except (httpx.HTTPError, KeyError, ValueError) as e:
                 logger.warning(

@@ -57,11 +57,6 @@ class TrainingConfig(BaseModel):
         le=100,
         description="Number of top logprobs to request from teacher",
     )
-    teacher_mode: Literal["self", "remote"] = Field(
-        default="self",
-        description="Teacher source: 'self' uses base model conditioned on feedback; "
-        "'remote' scores with TeacherService.",
-    )
 
 
 class SDPOLossInput(BaseModel):
@@ -98,86 +93,16 @@ class SDPOLossResult(TypedDict):
 # --- API Request/Response Models ---
 
 
-class DistillRequest(BaseModel):
-    """Request for a distillation step."""
-
-    lora_id: str = Field(
-        ...,
-        description="LoRA identifier (e.g., 'user123/coder-v1')",
-    )
-    prompt: str = Field(
-        ...,
-        min_length=1,
-        description="User prompt that generated the response",
-    )
-    response: str = Field(
-        ...,
-        min_length=1,
-        description="Student's response to learn from",
-    )
-    feedback: str = Field(
-        ...,
-        min_length=1,
-        description="Feedback about response quality",
-    )
-    rollout_logprobs: list[float] = Field(
-        ...,
-        min_length=1,
-        description="Log-probabilities from the inference server that generated the rollout.",
-    )
-    training: TrainingConfig = Field(
-        default_factory=TrainingConfig,
-        description="Training configuration",
-    )
-    prompt_token_ids: list[int] | None = Field(
-        default=None,
-        description="Pre-tokenized prompt token IDs (avoids decode/re-encode mismatch).",
-    )
-    response_token_ids: list[int] | None = Field(
-        default=None,
-        description="Pre-tokenized response token IDs (avoids decode/re-encode mismatch).",
-    )
-    user_prompt: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Clean user prompt for teacher construction (without chat template decoration).",
-    )
-
-
-class TeacherTokenLogprobs(BaseModel):
-    """Top-k teacher token log-probabilities at one response position."""
-
-    indices: list[int]
-    logprobs: list[float]
-
-
-class DistillRequestPayload(BaseModel):
-    """Typed payload forwarded to the configured training engine."""
-
-    lora_id: str
-    prompt: str
-    response: str
-    feedback: str
-    rollout_logprobs: list[float]
-    training: TrainingConfig
-    teacher_result: list[TeacherTokenLogprobs] | None = None
-    prompt_token_ids: list[int] | None = None
-    response_token_ids: list[int] | None = None
-    user_prompt: str | None = None
-    save_in_place: bool = False
-
-
 class DistillBatchItem(BaseModel):
     """One prompt/response/feedback sample used in batched distillation."""
 
     prompt: str
     response: str
     feedback: str
-    rollout_logprobs: list[float]
-    teacher_result: list[TeacherTokenLogprobs] | None = None
-    prompt_token_ids: list[int] | None = None
-    response_token_ids: list[int] | None = None
-    user_prompt: str | None = None
+    response_logprobs: list[float]
+    prompt_token_ids: list[int]
+    response_token_ids: list[int]
+    user_prompt: str
 
 
 class DistillBatchRequestPayload(BaseModel):
@@ -226,26 +151,26 @@ class LoraRuntimeRef(BaseModel):
 
 
 class FeedbackItem(BaseModel):
-    """Simplified feedback request — the API resolves cached completion data internally."""
+    """One feedback sample — the API resolves cached completion data internally."""
 
-    content_hash: str = Field(
+    lora_id: str = Field(
+        ...,
+        description="LoRA identifier (e.g., 'user123/coder-v1')",
+    )
+    prompt: str = Field(
         ...,
         min_length=1,
-        description="SHA-256 of visible content (completion cache key)",
+        description="User prompt text",
+    )
+    response: str = Field(
+        ...,
+        min_length=1,
+        description="Visible assistant response text",
     )
     feedback: str = Field(
         ...,
         min_length=1,
         description="User's feedback text",
-    )
-    user_prompt: str = Field(
-        ...,
-        min_length=1,
-        description="Clean user prompt for teacher construction (required)",
-    )
-    lora_id: str = Field(
-        ...,
-        description="LoRA identifier (e.g., 'user123/coder-v1')",
     )
     training: TrainingConfig = Field(
         default_factory=TrainingConfig,
@@ -308,7 +233,6 @@ class FeedbackLogRecord(BaseModel):
     status: str
     phase: str
     lora_id: str
-    teacher_mode: str
     requests: list[FeedbackItem]
     vllm: FeedbackLogVllmState
     timing_ms: FeedbackTimingMs
@@ -382,7 +306,6 @@ class HealthResponse(BaseModel):
 
     status: str
     worker: ServiceHealth | None = None
-    teacher: ServiceHealth | None = None
 
 
 # --- Inference Request Models ---
@@ -475,11 +398,3 @@ class TextCompletionResponse(BaseModel):
     usage: CompletionUsage
 
 
-class RawCompletionResponse(BaseModel):
-    """Cached raw completion for the training pipeline."""
-
-    prompt: str
-    response: str
-    token_ids: list[int] | None = None
-    prompt_token_ids: list[int] | None = None
-    logprobs: list[float] | None = None

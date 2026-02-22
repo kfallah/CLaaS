@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +21,7 @@ from claas.core.types import (
     ServiceHealth,
 )
 from claas.inference.cache import CompletionCacheEntry, completion_cache
+from claas.inference.helpers import normalize_for_hash
 
 
 def _mock_config(monkeypatch, mode: str, **overrides):
@@ -104,16 +106,17 @@ class _FunctionFailureStub:
         self.remote = _RemoteCallFailure()
 
 
-def _seed_cache(content_hash: str, *, logprobs: list[float] | None = None) -> None:
-    """Pre-populate the completion cache with a test entry."""
+def _seed_cache(visible_response: str, *, logprobs: list[float] | None = None) -> None:
+    """Pre-populate the completion cache keyed by normalized SHA-256 of visible_response."""
+    content_hash = hashlib.sha256(normalize_for_hash(visible_response).encode("utf-8")).hexdigest()
     completion_cache.put(
         content_hash,
         CompletionCacheEntry(
             prompt="cached-prompt",
             response="cached-response",
-            token_ids=[10, 20],
+            response_token_ids=[10, 20],
             prompt_token_ids=[1, 2, 3],
-            logprobs=logprobs if logprobs is not None else [-0.1, -0.2],
+            response_logprobs=logprobs if logprobs is not None else [-0.1, -0.2],
         ),
     )
 
@@ -141,60 +144,6 @@ class _EngineStub:
         return DistillResponse.model_validate(result)
 
 
-def test_distill_404_when_lora_missing(monkeypatch):
-    from claas import api
-
-    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=False))
-    client = TestClient(web_app)
-
-    response = client.post(
-        "/v1/distill",
-        json={
-            "lora_id": "user/model",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "rollout_logprobs": [-0.1],
-            "training": {},
-        },
-    )
-
-    assert response.status_code == 404
-    assert "LoRA not found" in response.json()["detail"]
-
-
-def test_distill_success(monkeypatch):
-    from claas import api
-
-    _mock_config(monkeypatch, "modal")
-    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
-    monkeypatch.setattr(
-        api.modal.Function,
-        "from_name",
-        lambda *_args, **_kwargs: _FunctionStub(
-            {"lora_id": "user/model-v2", "metadata": {"tokens_processed": 3}}
-        ),
-    )
-    client = TestClient(web_app)
-
-    response = client.post(
-        "/v1/distill",
-        json={
-            "lora_id": "user/model",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "rollout_logprobs": [-0.1],
-            "training": {},
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["lora_id"] == "user/model-v2"
-    assert body["metadata"]["tokens_processed"] == 3
-
-
 def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     from claas import api
 
@@ -203,7 +152,7 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     captured = {}
     log_records = []
     log_path = str(tmp_path / "feedback-log.json")
-    _seed_cache("abc123")
+    _seed_cache("test response")
 
     def fake_from_name(_app, fn_name):
         if fn_name == "DistillWorker.distill":
@@ -236,10 +185,10 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
             "requests": [
                 {
                     "lora_id": "user/model",
-                    "content_hash": "abc123",
+                    "prompt": "clean prompt",
+                    "response": "test response",
                     "feedback": "f",
-                    "user_prompt": "clean prompt",
-                    "training": {"teacher_mode": "self"},
+                    "training": {},
                 }
             ],
             "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
@@ -267,7 +216,7 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
     _mock_config(monkeypatch, "modal")
     log_records = []
     log_path = str(tmp_path / "feedback-log.json")
-    _seed_cache("abc500")
+    _seed_cache("error response")
 
     def fake_from_name(_app, fn_name):
         if fn_name == "DistillWorker.distill":
@@ -297,10 +246,10 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
             "requests": [
                 {
                     "lora_id": "user/model",
-                    "content_hash": "abc500",
+                    "prompt": "clean prompt",
+                    "response": "error response",
                     "feedback": "f",
-                    "user_prompt": "clean prompt",
-                    "training": {"teacher_mode": "self"},
+                    "training": {},
                 }
             ],
             "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
@@ -322,40 +271,13 @@ def test_export_404_when_missing(monkeypatch):
     assert response.status_code == 404
 
 
-def test_distill_returns_500_on_worker_failure(monkeypatch):
-    from claas import api
-
-    _mock_config(monkeypatch, "modal")
-    monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
-    monkeypatch.setattr(
-        api.modal.Function,
-        "from_name",
-        lambda *_args, **_kwargs: _FunctionFailureStub(),
-    )
-    client = TestClient(web_app)
-
-    response = client.post(
-        "/v1/distill",
-        json={
-            "lora_id": "user/model",
-            "prompt": "p",
-            "response": "r",
-            "feedback": "f",
-            "rollout_logprobs": [-0.1],
-            "training": {},
-        },
-    )
-    assert response.status_code == 500
-    assert "Distillation failed" in response.json()["detail"]
-
-
 def test_feedback_calls_drain_before_pause(monkeypatch, tmp_path):
     """_wait_for_vllm_idle is called before /pause."""
     from claas import api
 
     _mock_config(monkeypatch, "modal")
     order = []
-    _seed_cache("drain-test")
+    _seed_cache("drain response")
 
     def fake_from_name(_app, fn_name):
         if fn_name == "DistillWorker.distill":
@@ -383,10 +305,10 @@ def test_feedback_calls_drain_before_pause(monkeypatch, tmp_path):
             "requests": [
                 {
                     "lora_id": "user/model",
-                    "content_hash": "drain-test",
+                    "prompt": "clean prompt",
+                    "response": "drain response",
                     "feedback": "f",
-                    "user_prompt": "clean prompt",
-                    "training": {"teacher_mode": "self"},
+                    "training": {},
                 }
             ],
             "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
@@ -405,7 +327,7 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
     from claas import api
 
     _mock_config(monkeypatch, "modal")
-    _seed_cache("drain-timeout")
+    _seed_cache("timeout response")
 
     async def fake_wait_idle():
         raise TimeoutError("still busy")
@@ -425,10 +347,10 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
             "requests": [
                 {
                     "lora_id": "user/model",
-                    "content_hash": "drain-timeout",
+                    "prompt": "clean prompt",
+                    "response": "timeout response",
                     "feedback": "f",
-                    "user_prompt": "clean prompt",
-                    "training": {"teacher_mode": "self"},
+                    "training": {},
                 }
             ],
             "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
@@ -446,7 +368,7 @@ def test_feedback_resolves_logprobs_from_cache(monkeypatch, tmp_path):
     from claas import api
 
     _mock_config(monkeypatch, "modal")
-    _seed_cache("logprob-test", logprobs=[-0.1, -0.2])
+    _seed_cache("logprob response", logprobs=[-0.1, -0.2])
     captured = {}
 
     def fake_from_name(_app, fn_name):
@@ -471,10 +393,10 @@ def test_feedback_resolves_logprobs_from_cache(monkeypatch, tmp_path):
             "requests": [
                 {
                     "lora_id": "user/model",
-                    "content_hash": "logprob-test",
+                    "prompt": "clean prompt",
+                    "response": "logprob response",
                     "feedback": "f",
-                    "user_prompt": "clean prompt",
-                    "training": {"teacher_mode": "self"},
+                    "training": {},
                 }
             ],
             "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
@@ -482,7 +404,7 @@ def test_feedback_resolves_logprobs_from_cache(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 200
-    assert captured["request"]["samples"][0]["rollout_logprobs"] == [-0.1, -0.2]
+    assert captured["request"]["samples"][0]["response_logprobs"] == [-0.1, -0.2]
 
 
 def test_feedback_resolves_token_ids_from_cache(monkeypatch, tmp_path):
@@ -490,7 +412,7 @@ def test_feedback_resolves_token_ids_from_cache(monkeypatch, tmp_path):
     from claas import api
 
     _mock_config(monkeypatch, "tinker")
-    _seed_cache("token-id-test")
+    _seed_cache("token id response")
     captured_payload = {}
 
     class _Engine:
@@ -512,10 +434,10 @@ def test_feedback_resolves_token_ids_from_cache(monkeypatch, tmp_path):
             "requests": [
                 {
                     "lora_id": "user/model",
-                    "content_hash": "token-id-test",
+                    "prompt": "clean prompt",
+                    "response": "token id response",
                     "feedback": "good",
-                    "user_prompt": "clean prompt",
-                    "training": {"teacher_mode": "self"},
+                    "training": {},
                 }
             ],
             "orchestration": {"sleep_before": False, "wake_after": False},
@@ -551,10 +473,10 @@ def test_feedback_cache_miss_returns_404(monkeypatch, tmp_path):
             "requests": [
                 {
                     "lora_id": "user/model",
-                    "content_hash": "nonexistent-hash",
+                    "prompt": "clean prompt",
+                    "response": "nonexistent response",
                     "feedback": "f",
-                    "user_prompt": "clean prompt",
-                    "training": {"teacher_mode": "self"},
+                    "training": {},
                 }
             ],
             "orchestration": {"sleep_before": False, "wake_after": False},
@@ -570,15 +492,17 @@ def test_feedback_missing_logprobs_returns_422(monkeypatch, tmp_path):
     from claas import api
 
     _mock_config(monkeypatch, "tinker")
-    # Seed cache with logprobs=None
+    # Seed cache with logprobs=None, keyed by hash of the response text
+    no_logprobs_response = "no logprobs response"
+    content_hash = hashlib.sha256(normalize_for_hash(no_logprobs_response).encode("utf-8")).hexdigest()
     completion_cache.put(
-        "no-logprobs",
+        content_hash,
         CompletionCacheEntry(
             prompt="p",
             response="r",
-            token_ids=[10],
+            response_token_ids=[10],
             prompt_token_ids=[1],
-            logprobs=None,
+            response_logprobs=None,
         ),
     )
 
@@ -596,10 +520,10 @@ def test_feedback_missing_logprobs_returns_422(monkeypatch, tmp_path):
             "requests": [
                 {
                     "lora_id": "user/model",
-                    "content_hash": "no-logprobs",
+                    "prompt": "clean prompt",
+                    "response": no_logprobs_response,
                     "feedback": "f",
-                    "user_prompt": "clean prompt",
-                    "training": {"teacher_mode": "self"},
+                    "training": {},
                 }
             ],
             "orchestration": {"sleep_before": False, "wake_after": False},
@@ -619,7 +543,7 @@ def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
     from claas import api
 
     _mock_config(monkeypatch, "modal")
-    _seed_cache("lock-key-test")
+    _seed_cache("lock key response")
 
     class _Engine:
         async def lora_exists(self, _lora_id):
@@ -650,10 +574,10 @@ def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
             "requests": [
                 {
                     "lora_id": "user/model-latest",
-                    "content_hash": "lock-key-test",
+                    "prompt": "clean prompt",
+                    "response": "lock key response",
                     "feedback": "f",
-                    "user_prompt": "clean prompt",
-                    "training": {"teacher_mode": "self"},
+                    "training": {},
                 }
             ],
             "orchestration": {"sleep_before": False, "wake_after": False, "wake_on_failure": True, "sleep_level": 1},
@@ -668,7 +592,7 @@ def test_feedback_tinker_accepts_explicit_orchestration(monkeypatch, tmp_path):
     from claas import api
 
     _mock_config(monkeypatch, "tinker")
-    _seed_cache("tinker-orch-test")
+    _seed_cache("tinker orch response")
 
     class _Engine:
         async def lora_exists(self, _lora_id):
@@ -688,10 +612,10 @@ def test_feedback_tinker_accepts_explicit_orchestration(monkeypatch, tmp_path):
             "requests": [
                 {
                     "lora_id": "user/model",
-                    "content_hash": "tinker-orch-test",
+                    "prompt": "clean prompt",
+                    "response": "tinker orch response",
                     "feedback": "f",
-                    "user_prompt": "clean prompt",
-                    "training": {"teacher_mode": "self"},
+                    "training": {},
                 }
             ],
             "orchestration": {"sleep_before": True, "wake_after": True, "wake_on_failure": True, "sleep_level": 1},
@@ -850,7 +774,6 @@ def test_health_check_healthy(monkeypatch):
     body = resp.json()
     assert body["status"] == "healthy"
     assert body["worker"]["status"] == "healthy"
-    assert body["teacher"]["status"] == "healthy"
 
 
 def test_health_check_degraded(monkeypatch):
@@ -886,13 +809,12 @@ def test_dashboard_renders_latest_records(monkeypatch, tmp_path):
   "status": "ok",
   "phase": "done",
   "lora_id": "user/model",
-  "teacher_mode": "self",
   "requests": [
     {
       "lora_id": "user/model",
-      "content_hash": "hash-a",
-      "feedback": "feedback-a",
-      "user_prompt": "prompt-a"
+      "prompt": "prompt-a",
+      "response": "response-a",
+      "feedback": "feedback-a"
     }
   ],
   "batch_samples": [
@@ -900,8 +822,10 @@ def test_dashboard_renders_latest_records(monkeypatch, tmp_path):
       "prompt": "prompt-a",
       "response": "response-a",
       "feedback": "feedback-a",
-      "rollout_logprobs": [-0.1],
-      "teacher_result": null
+      "response_logprobs": [-0.1],
+      "prompt_token_ids": [1],
+      "response_token_ids": [2],
+      "user_prompt": "prompt-a"
     }
   ],
   "vllm": {
@@ -968,13 +892,12 @@ def test_dashboard_truncates_prompt_preview(monkeypatch, tmp_path):
   "status": "ok",
   "phase": "done",
   "lora_id": "user/model",
-  "teacher_mode": "self",
   "requests": [
     {{
       "lora_id": "user/model",
-      "content_hash": "hash-c",
-      "feedback": "feedback-c",
-      "user_prompt": "{long_prompt}"
+      "prompt": "{long_prompt}",
+      "response": "response-c",
+      "feedback": "feedback-c"
     }}
   ],
   "batch_samples": [
@@ -982,8 +905,10 @@ def test_dashboard_truncates_prompt_preview(monkeypatch, tmp_path):
       "prompt": "{long_prompt}",
       "response": "response-c",
       "feedback": "feedback-c",
-      "rollout_logprobs": [-0.1],
-      "teacher_result": null
+      "response_logprobs": [-0.1],
+      "prompt_token_ids": [1],
+      "response_token_ids": [2],
+      "user_prompt": "{long_prompt}"
     }}
   ],
   "vllm": {{
@@ -1029,19 +954,18 @@ def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
   "status": "ok",
   "phase": "done",
   "lora_id": "user/model",
-  "teacher_mode": "self",
   "requests": [
     {
       "lora_id": "user/model",
-      "content_hash": "hash-d1",
-      "feedback": "feedback-d1",
-      "user_prompt": "prompt-d1"
+      "prompt": "prompt-d1",
+      "response": "response-d1",
+      "feedback": "feedback-d1"
     },
     {
       "lora_id": "user/model",
-      "content_hash": "hash-d2",
-      "feedback": "feedback-d2",
-      "user_prompt": "prompt-d2"
+      "prompt": "prompt-d2",
+      "response": "response-d2",
+      "feedback": "feedback-d2"
     }
   ],
   "batch_samples": [
@@ -1049,15 +973,19 @@ def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
       "prompt": "prompt-d1",
       "response": "response-d1",
       "feedback": "feedback-d1",
-      "rollout_logprobs": [-0.1],
-      "teacher_result": null
+      "response_logprobs": [-0.1],
+      "prompt_token_ids": [1],
+      "response_token_ids": [2],
+      "user_prompt": "prompt-d1"
     },
     {
       "prompt": "prompt-d2",
       "response": "response-d2",
       "feedback": "feedback-d2",
-      "rollout_logprobs": [-0.2],
-      "teacher_result": null
+      "response_logprobs": [-0.2],
+      "prompt_token_ids": [1],
+      "response_token_ids": [2],
+      "user_prompt": "prompt-d2"
     }
   ],
   "vllm": {

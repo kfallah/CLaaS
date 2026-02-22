@@ -19,8 +19,6 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk";
 
-import { createHash } from "node:crypto";
-
 import * as contextStore from "./src/context-store.ts";
 import { extractContent } from "./src/chatml.ts";
 import { submitFeedback } from "./src/feedback-client.ts";
@@ -176,7 +174,7 @@ export default function register(api: OpenClawPluginApi) {
       if (!userPrompt) {
         return { text: "Could not determine the user prompt for this conversation." };
       }
-      // Strip proper <think>...</think> blocks, then strip orphaned </think>
+      // Strip <think>...</think> blocks and orphaned </think> prefix
       // (when <think> was consumed as a special token by the tokenizer).
       let visibleContent = parsedContent.replace(/<think>[\s\S]*?<\/think>/g, "");
       const closeIdx = visibleContent.indexOf("</think>");
@@ -184,7 +182,6 @@ export default function register(api: OpenClawPluginApi) {
         visibleContent = visibleContent.slice(closeIdx + "</think>".length);
       }
       visibleContent = visibleContent.trim();
-      const contentHash = createHash("sha256").update(visibleContent).digest("hex");
 
       // Send a "processing" indicator before the long-running CLaaS call
       const replyTo = ctx.to ?? ctx.senderId;
@@ -201,12 +198,12 @@ export default function register(api: OpenClawPluginApi) {
         }
       }
 
-      // Submit to CLaaS — the API resolves cached completion data from content_hash
+      // Submit to CLaaS — the API resolves cached completion data internally
       const { pendingSize } = appendFeedback(
         senderKey,
-        contentHash,
-        feedbackText,
         userPrompt,
+        visibleContent,
+        feedbackText,
       );
       if (pendingSize < feedbackBatchSize) {
         return {
@@ -224,10 +221,10 @@ export default function register(api: OpenClawPluginApi) {
         const result = await submitFeedback(claasApiUrl, {
           requests: batch.map((item) => ({
             lora_id: loraId,
-            content_hash: item.content_hash,
+            prompt: item.prompt,
+            response: item.response,
             feedback: item.feedback,
-            user_prompt: item.user_prompt,
-            training: { teacher_mode: "self" },
+            training: {},
           })),
           orchestration: {
             sleep_before: true,

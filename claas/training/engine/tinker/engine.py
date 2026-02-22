@@ -1,8 +1,8 @@
 """Tinker SDK training engine implementation.
 
-Uses the native Tinker Python SDK (``tinker``, ``tinker_cookbook``) for all
-LoRA lifecycle operations and SDPO-style distillation.  No fake HTTP
-endpoints — every call goes through the Tinker gRPC/REST client.
+Uses the native Tinker Python SDK (``tinker``) for all LoRA lifecycle
+operations and SDPO-style distillation.  No fake HTTP endpoints — every
+call goes through the Tinker gRPC/REST client.
 
 Reference implementation:
   https://github.com/sdan/continualcode/blob/master/continualcode/train.py
@@ -19,7 +19,6 @@ from urllib.parse import quote
 
 import httpx
 import tinker
-import torch
 from tinker import types as T
 from tinker.types.tensor_data import TensorData
 
@@ -273,33 +272,21 @@ async def _build_sample_datum(
     multiple samples can be processed concurrently via ``asyncio.gather``.
     """
     # ── Tokenize prompt + response directly (matching local worker) ──
-    if sample.prompt_token_ids is not None:
-        prompt_tokens = list(sample.prompt_token_ids)
-    else:
-        prompt_tokens = tokenizer.encode(sample.prompt, add_special_tokens=True)
-
-    if sample.response_token_ids is not None:
-        response_tokens = list(sample.response_token_ids)
-    else:
-        response_tokens = tokenizer.encode(sample.response, add_special_tokens=False)
+    prompt_tokens = list(sample.prompt_token_ids)
+    response_tokens = list(sample.response_token_ids)
     full_tokens = prompt_tokens + response_tokens
     prompt_len = len(prompt_tokens)
     completion_len = len(response_tokens)
 
-    # ── Validate and use provided rollout logprobs ──
-    if len(sample.rollout_logprobs) != completion_len:
+    # ── Validate and use provided response logprobs ──
+    if len(sample.response_logprobs) != completion_len:
         raise ValueError(
-            f"rollout_logprobs length ({len(sample.rollout_logprobs)}) != "
+            f"response_logprobs length ({len(sample.response_logprobs)}) != "
             f"completion_len ({completion_len})"
         )
-    student_logprobs = list(sample.rollout_logprobs)
+    student_logprobs = list(sample.response_logprobs)
 
     # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
-    if sample.user_prompt is None:
-        raise ValueError(
-            "user_prompt is required for teacher prompt construction; "
-            "the fallback to sample.prompt produces incorrect teacher conditioning"
-        )
     teacher_prompt_source = sample.user_prompt
     teacher_messages = build_teacher_messages(teacher_prompt_source, sample.feedback)
     template_messages = teacher_messages_to_chat_template(teacher_messages)
@@ -349,15 +336,9 @@ async def _build_sample_datum(
     datum = T.Datum(
         model_input=input_model_input,
         loss_fn_inputs={
-            "target_tokens": TensorData.from_torch(
-                torch.tensor(target_tokens, dtype=torch.int64)
-            ),
-            "logprobs": TensorData.from_torch(
-                torch.tensor(shifted_logprobs, dtype=torch.float32)
-            ),
-            "advantages": TensorData.from_torch(
-                torch.tensor(shifted_advantages, dtype=torch.float32)
-            ),
+            "target_tokens": TensorData(data=target_tokens, dtype="int64"),
+            "logprobs": TensorData(data=shifted_logprobs, dtype="float32"),
+            "advantages": TensorData(data=shifted_advantages, dtype="float32"),
         },
     )
 

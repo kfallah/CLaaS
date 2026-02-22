@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 # ---------------------------------------------------------------------------
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
 
 
 def strip_thinking(text: str) -> str:
@@ -30,6 +31,16 @@ def strip_thinking(text: str) -> str:
     if idx >= 0:
         text = text[idx + len("</think>"):]
     return text.strip()
+
+
+def normalize_for_hash(text: str) -> str:
+    """Normalize text for content hashing.
+
+    Strips thinking tags and collapses all whitespace runs to a single space.
+    This makes the hash resilient to downstream whitespace mutations
+    (e.g. OpenClaw flattening newlines).
+    """
+    return _WHITESPACE_RUN_RE.sub(" ", strip_thinking(text)).strip()
 
 
 _FINAL_CHANNEL_RE = re.compile(
@@ -111,17 +122,38 @@ def bounded_float(
 
 
 # ---------------------------------------------------------------------------
-# ChatML prompt reconstruction
+# Chat template utilities
 # ---------------------------------------------------------------------------
 
 
-def build_chatml_prompt(messages: list[dict[str, str]]) -> str:
-    """Reconstruct ChatML prompt from messages for cache storage."""
-    parts: list[str] = []
-    for m in messages:
-        parts.append(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>")
-    parts.append("<|im_start|>assistant\n")
-    return "\n".join(parts)
+def coerce_template_ids(result: Any) -> list[int]:
+    """Normalize ``tokenizer.apply_chat_template`` output to a plain list[int]."""
+    if isinstance(result, list):
+        return [int(tok) for tok in result]
+    if isinstance(result, dict):
+        maybe_ids = result.get("input_ids")
+        if isinstance(maybe_ids, list):
+            return [int(tok) for tok in maybe_ids]
+    if hasattr(result, "tolist"):
+        maybe_ids = result.tolist()
+        if isinstance(maybe_ids, list):
+            return [int(tok) for tok in maybe_ids]
+    raise TypeError("Unsupported apply_chat_template result shape")
+
+
+def apply_chat_template_ids(
+    tokenizer: Any,
+    messages: list[dict[str, str]],
+    *,
+    add_generation_prompt: bool,
+) -> list[int]:
+    """Tokenize messages via apply_chat_template, returning token IDs."""
+    result = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=add_generation_prompt,
+        tokenize=True,
+    )
+    return coerce_template_ids(result)
 
 
 # ---------------------------------------------------------------------------
