@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
     from fastapi.responses import Response
 
+    from claas.core.types import ChoiceLogprobs
+
 BackendKind = Literal["tinker", "local", "modal"]
 
 
@@ -23,6 +25,7 @@ class CompletionResult:
     response_token_ids: list[int] = field(default_factory=list)
     prompt_token_ids: list[int] = field(default_factory=list)
     response_logprobs: list[float] | None = None
+    logprobs_content: ChoiceLogprobs | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
@@ -60,6 +63,8 @@ class InferenceBackend(ABC):
         temperature: float | None = None,
         top_p: float | None = None,
         stop: list[str] | None = None,
+        logprobs: bool = False,
+        top_logprobs: int = 1,
     ) -> CompletionResult:
         """Run a chat completion and return structured results."""
 

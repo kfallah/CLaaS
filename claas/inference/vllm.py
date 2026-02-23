@@ -14,6 +14,7 @@ import httpx
 from fastapi import FastAPI, Request, Response
 
 from claas.core.config import CoreConfig
+from claas.core.types import ChoiceLogprobs, TokenLogprob, TopLogprob
 
 from .base import CompletionResult, InferenceBackend, ScoreResult, TextCompletionResult
 from .helpers import apply_chat_template_ids, coerce_content
@@ -82,6 +83,8 @@ class VllmBackend(InferenceBackend):
         temperature: float | None = None,
         top_p: float | None = None,
         stop: list[str] | None = None,
+        logprobs: bool = False,
+        top_logprobs: int = 1,
     ) -> CompletionResult:
         client = _get_vllm_client()
 
@@ -90,12 +93,13 @@ class VllmBackend(InferenceBackend):
             for m in messages
         ]
 
+        upstream_top_logprobs = max(top_logprobs, 1)
         body: dict[str, Any] = {
             "model": model,
             "messages": messages_dicts,
             "stream": False,
             "logprobs": True,
-            "top_logprobs": 1,
+            "top_logprobs": upstream_top_logprobs,
         }
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
@@ -121,9 +125,29 @@ class VllmBackend(InferenceBackend):
         content = choice["message"]["content"]
 
         response_logprobs: list[float] | None = None
+        logprobs_content: ChoiceLogprobs | None = None
         lp_data = choice.get("logprobs")
         if lp_data and lp_data.get("content"):
             response_logprobs = [entry["logprob"] for entry in lp_data["content"]]
+            if logprobs:
+                logprobs_content = ChoiceLogprobs(
+                    content=[
+                        TokenLogprob(
+                            token=entry["token"],
+                            logprob=entry["logprob"],
+                            bytes=entry.get("bytes"),
+                            top_logprobs=[
+                                TopLogprob(
+                                    token=tp["token"],
+                                    logprob=tp["logprob"],
+                                    bytes=tp.get("bytes"),
+                                )
+                                for tp in entry.get("top_logprobs", [])
+                            ],
+                        )
+                        for entry in lp_data["content"]
+                    ]
+                )
 
         tokenizer = self._tokenizer
         if tokenizer is not None:
@@ -152,6 +176,7 @@ class VllmBackend(InferenceBackend):
             response_token_ids=response_token_ids,
             prompt_token_ids=prompt_token_ids,
             response_logprobs=response_logprobs,
+            logprobs_content=logprobs_content,
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
         )

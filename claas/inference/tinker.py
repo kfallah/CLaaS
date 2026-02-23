@@ -165,6 +165,8 @@ class TinkerBackend(InferenceBackend):
         temperature: float | None = None,
         top_p: float | None = None,
         stop: list[str] | None = None,
+        logprobs: bool = False,
+        top_logprobs: int = 1,
     ) -> CompletionResult:
         import tinker.types as T  # noqa: N812
 

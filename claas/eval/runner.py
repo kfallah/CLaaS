@@ -19,7 +19,7 @@ from claas.core.types import (
     FeedbackOrchestration,
 )
 
-from .logprob import derive_vllm_model_name
+from .logprob import derive_model_name
 from .metrics import Metric, build_metrics
 from .plotting import generate_plots
 from .preferences import PreferenceConfig, get_preference_configs
@@ -32,7 +32,7 @@ from .types import (
     MetricContext,
     StepResult,
     TinkerDistillMetrics,
-    direct_vllm_chat_params,
+    claas_proxy_chat_params,
     openclaw_chat_params,
 )
 
@@ -48,39 +48,6 @@ async def _init_lora(config: HarnessConfig, lora_id: str) -> str:
         )
         resp.raise_for_status()
         return resp.json()["lora_id"]
-
-
-async def _load_lora_into_vllm(
-    config: HarnessConfig,
-    lora_id: str,
-    lora_path: str,
-    *,
-    vllm_api_key: str = "",
-) -> None:
-    """Load a LoRA adapter into vLLM (unload first if present)."""
-    vllm_name = derive_vllm_model_name(lora_id)
-    headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
-
-    async with httpx.AsyncClient(base_url=config.vllm_url, timeout=30.0) as client:
-        # Unload (ignore 404)
-        try:
-            resp = await client.post(
-                "/v1/unload_lora_adapter",
-                json={"lora_name": vllm_name},
-                headers=headers,
-            )
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code != 404:
-                raise
-
-        # Load
-        resp = await client.post(
-            "/v1/load_lora_adapter",
-            json={"lora_name": vllm_name, "lora_path": lora_path},
-            headers=headers,
-        )
-        resp.raise_for_status()
 
 
 async def _submit_feedback(
@@ -131,13 +98,16 @@ async def _generate_response(
     temperature: float = 0,
     max_tokens: int = 2048,
 ) -> str:
-    """Generate a response via OpenClaw or direct vLLM."""
+    """Generate a response via OpenClaw or CLaaS proxy.
+
+    All completions route through the CLaaS API proxy so that token IDs
+    and logprobs are cached for the subsequent feedback call.
+    """
     if config.openclaw_url:
         api_key = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
         params = openclaw_chat_params(config.openclaw_url, api_key, prompt)
     else:
-        api_key = os.environ.get("VLLM_API_KEY", "")
-        params = direct_vllm_chat_params(config.vllm_url, api_key, model, prompt)
+        params = claas_proxy_chat_params(config.claas_url, model, prompt)
 
     async with httpx.AsyncClient(base_url=params.base_url, timeout=120.0) as client:
         resp = await client.post(
@@ -159,12 +129,11 @@ async def _generate_response(
 async def _measure_eval_metrics(
     config: HarnessConfig,
     pref: PreferenceConfig,
-    vllm_model: str,
+    model_name: str,
     step: int,
     baseline: EvalMetrics,
     enabled_metrics: list[Metric],
     *,
-    vllm_api_key: str = "",
     openclaw_api_key: str = "",
     response_text: str | None = None,
 ) -> EvalMetrics:
@@ -172,12 +141,11 @@ async def _measure_eval_metrics(
     metrics = EvalMetrics()
 
     async def generate(prompt: str) -> str:
-        return await _generate_response(config, vllm_model, prompt)
+        return await _generate_response(config, model_name, prompt)
 
     ctx = MetricContext(
-        vllm_url=config.vllm_url,
-        vllm_api_key=vllm_api_key,
-        vllm_model=vllm_model,
+        claas_url=config.claas_url,
+        model=model_name,
         step=step,
         pref=pref,
         baseline=baseline,
@@ -185,19 +153,12 @@ async def _measure_eval_metrics(
         generate=generate,
         openclaw_url=config.openclaw_url,
         openclaw_api_key=openclaw_api_key,
-        mode=config.mode,
     )
 
     for metric in enabled_metrics:
         await metric.measure(ctx, metrics)
 
     return metrics
-
-
-def _lora_path_on_disk(lora_id: str) -> str:
-    """Derive the on-disk LoRA path from the LoRA ID."""
-    lora_root = os.environ.get("CLAAS_LORA_ROOT", "/loras")
-    return os.path.join(lora_root, lora_id.strip("/"))
 
 
 def _load_completed_steps(output_dir: str, preference: str) -> list[StepResult]:
@@ -318,8 +279,6 @@ async def run_preference_experiment(
     needs_generation: bool = False,
 ) -> ExperimentResult:
     """Run the full experiment loop for a single preference."""
-    # Resolve secrets from env vars (never stored on config)
-    vllm_api_key = os.environ.get("VLLM_API_KEY", "")
     openclaw_api_key = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 
     lora_id = f"{config.lora_id_prefix}/{pref.name}"
@@ -348,15 +307,7 @@ async def run_preference_experiment(
         actual_lora_id = await _init_lora(config, lora_id)
         logger.info("[%s] LoRA created: %s", pref.name, actual_lora_id)
 
-    vllm_model = derive_vllm_model_name(actual_lora_id)
-    lora_path = _lora_path_on_disk(actual_lora_id)
-
-    # Load LoRA into vLLM (skip for Tinker — proxy auto-refreshes)
-    if config.mode == "local":
-        logger.info("[%s] Loading LoRA into vLLM as '%s'", pref.name, vllm_model)
-        await _load_lora_into_vllm(
-            config, actual_lora_id, lora_path, vllm_api_key=vllm_api_key,
-        )
+    model_name = derive_model_name(actual_lora_id)
 
     # Write metadata
     _write_metadata(config.output_dir, pref.name, config, actual_lora_id)
@@ -367,10 +318,9 @@ async def run_preference_experiment(
     if resume_from == 0:
         logger.info("[%s] Measuring baseline...", pref.name)
         baseline = await _measure_eval_metrics(
-            config, pref, vllm_model, step=0,
+            config, pref, model_name, step=0,
             baseline=EvalMetrics(),  # No baseline for the baseline itself
             enabled_metrics=enabled_metrics,
-            vllm_api_key=vllm_api_key,
             openclaw_api_key=openclaw_api_key,
         )
         _write_baseline(config.output_dir, pref.name, baseline)
@@ -426,7 +376,7 @@ async def run_preference_experiment(
             try:
                 temperature = 0.7 if config.mode == "tinker" else 0
                 content = await _generate_response(
-                    config, vllm_model, prompt, temperature=temperature,
+                    config, model_name, prompt, temperature=temperature,
                 )
                 if response_text is None:
                     response_text = content
@@ -462,37 +412,17 @@ async def run_preference_experiment(
                     )
                     break
 
-                # Reload LoRA between sub-steps (local mode only, not after last sub-step)
-                if config.mode == "local" and sub_step < config.steps_per_batch - 1:
-                    try:
-                        await _load_lora_into_vllm(
-                            config, actual_lora_id, lora_path,
-                            vllm_api_key=vllm_api_key,
-                        )
-                    except (httpx.HTTPError, KeyError) as e:
-                        logger.warning("[%s] LoRA reload failed: %s", pref.name, e)
-
             if config.steps_per_batch > 1:
                 logger.info(
                     "[%s] Step %d: %d sub-steps completed",
                     pref.name, step, sub_steps_completed,
                 )
 
-        # Reload LoRA into vLLM (skip for Tinker — proxy auto-refreshes)
-        if config.mode == "local":
-            try:
-                await _load_lora_into_vllm(
-                    config, actual_lora_id, lora_path, vllm_api_key=vllm_api_key,
-                )
-            except (httpx.HTTPError, KeyError) as e:
-                logger.warning("[%s] LoRA reload failed: %s", pref.name, e)
-
         # Measure eval
         try:
             eval_metrics = await _measure_eval_metrics(
-                config, pref, vllm_model, step, baseline,
+                config, pref, model_name, step, baseline,
                 enabled_metrics=enabled_metrics,
-                vllm_api_key=vllm_api_key,
                 openclaw_api_key=openclaw_api_key,
                 response_text=response_text if needs_generation else None,
             )

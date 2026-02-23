@@ -11,8 +11,6 @@ The eval harness uses [Hydra](https://hydra.cc/) for configuration. The default 
 ```yaml
 mode: tinker                         # execution backend: local | tinker | modal
 claas_url: http://localhost:8080     # CLaaS API endpoint
-vllm_url: http://localhost:8000      # vLLM endpoint (auto-set to claas_url in tinker mode)
-vllm_model_name: qwen3-8b           # model identifier for vLLM API calls
 base_model: Qwen/Qwen3-30B-A3B      # base model for LoRA init (Tinker name)
 
 preferences:                         # preferences to train
@@ -36,7 +34,7 @@ seed: 42
 lora_id_prefix: eval
 output_dir: ./data/evals
 
-openclaw_url: null                   # OpenClaw gateway (null = use vllm_url directly)
+openclaw_url: null                   # OpenClaw gateway (null = use CLaaS API directly)
 ```
 
 ### Overriding config via CLI
@@ -78,7 +76,6 @@ Secrets are resolved from env vars at runtime, NOT stored in config:
 | Variable | Required for | Purpose |
 |---|---|---|
 | `CLAAS_TINKER_API_KEY` | Tinker mode | Tinker SDK authentication |
-| `VLLM_API_KEY` | Local mode | vLLM server auth token |
 | `GEMINI_API_KEY` | `general` metric | Gemini-based capability evaluation |
 
 ## Running (Tinker mode, no GPU)

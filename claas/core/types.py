@@ -374,6 +374,8 @@ class ChatCompletionRequest(BaseModel):
     top_p: float | None = None
     stream: bool = False
     stop: list[str] | None = None
+    logprobs: bool = False
+    top_logprobs: int = 1
 
 
 class CompletionRequest(BaseModel):
@@ -391,6 +393,29 @@ class CompletionRequest(BaseModel):
 # --- Inference Response Models ---
 
 
+class TopLogprob(BaseModel):
+    """A single top logprob entry."""
+
+    token: str
+    logprob: float
+    bytes: list[int] | None = None
+
+
+class TokenLogprob(BaseModel):
+    """Logprob info for a single generated token."""
+
+    token: str
+    logprob: float
+    bytes: list[int] | None = None
+    top_logprobs: list[TopLogprob] = []
+
+
+class ChoiceLogprobs(BaseModel):
+    """Logprobs attached to a chat completion choice."""
+
+    content: list[TokenLogprob] = []
+
+
 class ChatCompletionChoiceMessage(BaseModel):
     """Message within a chat completion choice."""
 
@@ -404,6 +429,7 @@ class ChatCompletionChoice(BaseModel):
     index: int = 0
     message: ChatCompletionChoiceMessage
     finish_reason: str = "stop"
+    logprobs: ChoiceLogprobs | None = None
 
 
 class CompletionUsage(BaseModel):

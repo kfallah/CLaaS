@@ -200,12 +200,12 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
     assert body["status"] == "ok"
     assert body["lora_id"] == "user/model"
     assert body["feedback_log_path"] == log_path
-    # drain → pause → wake → unload old LoRA → load updated LoRA
+    # drain → pause → unload+load (reload after distill) → wake
     assert calls[0] == ("_wait_for_vllm_idle",)
     assert calls[1] == ("/pause", {"level": 1})
-    assert calls[2] == ("/resume", None)
-    assert calls[3] == ("/v1/unload_lora_adapter", None)
-    assert calls[4] == ("/v1/load_lora_adapter", None)
+    assert calls[2] == ("/v1/unload_lora_adapter", None)
+    assert calls[3] == ("/v1/load_lora_adapter", None)
+    assert calls[4] == ("/resume", None)
     assert captured["request"]["save_in_place"] is True
     assert log_records and log_records[0]["status"] == "ok"
 
@@ -549,6 +549,9 @@ def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
         async def lora_exists(self, _lora_id):
             return LoraExistsPayload(exists=True)
 
+        async def lora_runtime_ref(self, lora_id):
+            return LoraRuntimeRef(vllm_name=lora_id, lora_path=f"/loras/{lora_id}")
+
     captured = {}
 
     async def fake_lock_key(_lora_id):
@@ -561,11 +564,15 @@ def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
     async def fake_run_distill(_payload):
         return DistillResponse(lora_id="user/model", metadata={})
 
+    async def fake_vllm_post(_path, **_kw):
+        pass
+
     monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
     monkeypatch.setattr(api, "_get_feedback_lock_key", fake_lock_key)
     monkeypatch.setattr(api, "_get_feedback_lock", fake_get_lock)
     monkeypatch.setattr(api, "_run_distill", fake_run_distill)
     monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
 
     client = TestClient(web_app)
     response = client.post(

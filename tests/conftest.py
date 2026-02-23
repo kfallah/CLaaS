@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -16,13 +17,26 @@ def _configure():
 
     Patches AutoTokenizer.from_pretrained so VllmBackend.__init__
     does not hit the HuggingFace API during unit tests.
+
+    When ``transformers`` is not installed (GPU-only dependency), we
+    inject a lightweight stub module so that ``unittest.mock.patch``
+    can resolve the dotted target path.
     """
-    with patch(
-        "transformers.AutoTokenizer.from_pretrained",
-        side_effect=ImportError("mocked for tests"),
-    ):
-        configure_storage_backend("local_fs")
-        configure_web_app(load_core_config("local"))
+    _need_stub = "transformers" not in sys.modules
+    if _need_stub:
+        stub = MagicMock()
+        sys.modules["transformers"] = stub
+
+    try:
+        with patch(
+            "transformers.AutoTokenizer.from_pretrained",
+            side_effect=ImportError("mocked for tests"),
+        ):
+            configure_storage_backend("local_fs")
+            configure_web_app(load_core_config("local"))
+    finally:
+        if _need_stub:
+            sys.modules.pop("transformers", None)
 
 
 @pytest.fixture(autouse=True)

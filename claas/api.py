@@ -592,6 +592,8 @@ async def chat_completions(
         temperature=req.temperature,
         top_p=req.top_p,
         stop=req.stop,
+        logprobs=req.logprobs,
+        top_logprobs=req.top_logprobs,
     )
 
     # Strip thinking and channel tags from visible content
@@ -619,15 +621,17 @@ async def chat_completions(
     if req.stream:
         return stream_chat_response(completion_id, created, req.model or "default", visible)
 
+    choice = ChatCompletionChoice(
+        message=ChatCompletionChoiceMessage(content=visible),
+    )
+    if req.logprobs and result.logprobs_content is not None:
+        choice.logprobs = result.logprobs_content
+
     return ChatCompletionResponse(
         id=completion_id,
         created=created,
         model=req.model or "default",
-        choices=[
-            ChatCompletionChoice(
-                message=ChatCompletionChoiceMessage(content=visible),
-            )
-        ],
+        choices=[choice],
         usage=CompletionUsage(
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -802,11 +806,15 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             distill_result = await _run_distill(payload)
             timing_ms.distill = int((time.perf_counter() - distill_start) * 1000)
 
+            # Always reload LoRA so vLLM picks up new weights
+            if _get_engine_kind() not in {"tinker"}:
+                await _vllm_reload_lora(lora_id)
+
+            # Resume vLLM from sleep (separate concern — GPU memory management)
             if request.orchestration.wake_after and _get_engine_kind() != "tinker":
                 phase = "wake"
                 wake_start = time.perf_counter()
                 await _vllm_post("/resume")
-                await _vllm_reload_lora(lora_id)
                 timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
                 woke = True
 
@@ -899,7 +907,13 @@ async def init_lora(request: LoraInitRequest) -> LoraInitResponse:
         _validate_init_base_model(request.base_model)
 
     try:
-        return await _get_training_engine().init_lora(request)
+        result = await _get_training_engine().init_lora(request)
+        if _get_engine_kind() in {"local", "modal"}:
+            try:
+                await _vllm_reload_lora(result.lora_id)
+            except Exception:
+                logger.warning("Failed to load LoRA into vLLM after init", exc_info=True)
+        return result
     except (ValueError, RuntimeError, OSError, httpx.HTTPError) as e:
         raise HTTPException(
             status_code=500,

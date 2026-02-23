@@ -139,8 +139,7 @@ def verify_coding(response: str, timeout_s: float = 5.0) -> CodingResult:
 
 
 async def evaluate_general_capability(
-    vllm_url: str,
-    vllm_api_key: str,
+    claas_url: str,
     model: str,
     timeout_s: float = 60.0,
     rollout_log: list[EvalRollout] | None = None,
@@ -153,8 +152,8 @@ async def evaluate_general_capability(
         base_url = openclaw_url
         headers = {"Authorization": f"Bearer {openclaw_api_key}"}
     else:
-        base_url = vllm_url
-        headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
+        base_url = claas_url
+        headers = {}
 
     async def _chat_completion_with_budget(
         client: httpx.AsyncClient,

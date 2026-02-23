@@ -64,11 +64,6 @@ def test_unknown_key_rejected() -> None:
         _compose_eval_config(config_dir=tmpdir)
 
 
-def test_tinker_vllm_url_equals_claas_url() -> None:
-    config = build_harness_config(_compose_eval_config(["mode=tinker"]))
-    assert config.vllm_url == config.claas_url
-
-
 def test_timestamped_output_dir() -> None:
     config = build_harness_config(_compose_eval_config(["output_dir=/tmp/test-evals"]))
     assert config.output_dir.startswith("/tmp/test-evals/")
@@ -83,16 +78,6 @@ def test_collapse_steps_list() -> None:
 def test_steps_per_batch_from_config() -> None:
     config = build_harness_config(_compose_eval_config(["steps_per_batch=3"]))
     assert config.steps_per_batch == 3
-
-
-def test_build_harness_config_tinker_vllm_url() -> None:
-    config = build_harness_config(EvalConfig(mode="tinker"))
-    assert config.vllm_url == config.claas_url
-
-
-def test_build_harness_config_local_vllm_url_unchanged() -> None:
-    config = build_harness_config(EvalConfig(mode="local"))
-    assert config.vllm_url == "http://localhost:8000"
 
 
 def test_hydra_config_custom_dir() -> None:
