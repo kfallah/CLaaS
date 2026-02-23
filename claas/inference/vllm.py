@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, Request, Response
 
-from claas.core.config import CoreConfig
+from claas.core.config import LocalConfig, ModalConfig
 from claas.core.types import ChoiceLogprobs, TokenLogprob, TopLogprob
 
 from .base import CompletionResult, InferenceBackend, ScoreResult, TextCompletionResult
@@ -43,25 +43,23 @@ def _get_vllm_client() -> httpx.AsyncClient:
 class VllmBackend(InferenceBackend):
     """Inference backend that forwards to an upstream vLLM instance."""
 
-    def __init__(self, cfg: CoreConfig | None = None) -> None:
+    def __init__(self, cfg: LocalConfig | ModalConfig) -> None:
         self._cfg = cfg
         self._tokenizer: Any = None
-        model_id = getattr(cfg, "base_model_id", None) if cfg else None
-        if model_id:
-            try:
-                from transformers import AutoTokenizer
+        try:
+            from transformers import AutoTokenizer
 
-                self._tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-            except ImportError:
-                logger.warning(
-                    "transformers not installed; VllmBackend will not produce token IDs"
-                )
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                cfg.base_model_id, trust_remote_code=True,
+            )
+        except ImportError:
+            logger.warning(
+                "transformers not installed; VllmBackend will not produce token IDs"
+            )
 
     def _backend_url(self) -> str:
         """Return the upstream vLLM base URL (no trailing slash)."""
-        cfg = self._cfg
-        url: str = getattr(cfg, "vllm_base_url", "http://127.0.0.1:8000") if cfg else "http://127.0.0.1:8000"
-        return url.rstrip("/")
+        return self._cfg.vllm_base_url.rstrip("/")
 
     def _api_key(self) -> str:
         raw = os.environ.get("VLLM_API_KEY")

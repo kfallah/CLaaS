@@ -16,8 +16,12 @@ if TYPE_CHECKING:
 def get_inference_backend(kind: BackendKind, cfg: CoreConfig | None = None) -> InferenceBackend:
     """Return the appropriate inference backend for the given execution mode."""
     if kind in ("local", "modal"):
+        from claas.core.config import LocalConfig, ModalConfig
+
         from .vllm import VllmBackend
 
+        if not isinstance(cfg, (LocalConfig, ModalConfig)):
+            raise TypeError(f"vllm backend requires LocalConfig or ModalConfig, got {type(cfg)}")
         return VllmBackend(cfg=cfg)
     if kind == "tinker":
         from claas.core.config import TinkerConfig
