@@ -90,7 +90,7 @@ class DistillWorker:
             Distillation response payload.
         """
         try:
-            return self.trainer.distill(request)
+            return self.trainer.distill(request).response
         finally:
             self.trainer.offload_base_model()
 

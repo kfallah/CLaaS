@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+import threading
 
 from claas.core.config import LocalConfig
 from claas.core.types import (
@@ -20,6 +22,7 @@ from claas.core.types import (
 )
 from claas.training.distillation import DistillationTrainer
 from claas.training.engine.base import TrainingEngine
+from claas.training.engine.local.cache import LoraCacheEntry
 from claas.training.storage import (
     configure_storage_backend,
     create_initial_lora,
@@ -31,14 +34,34 @@ from claas.training.storage import (
     resolve_lora_id,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class LocalTrainingEngine(TrainingEngine):
     """Executes training and LoRA operations on local infrastructure."""
+
+    _trainer: DistillationTrainer
+    _lora_cache: dict[str, LoraCacheEntry]
+    _cache_lock: threading.Lock
+    _model_loaded: bool
 
     def __init__(self, cfg: LocalConfig) -> None:
         configure_storage_backend("local_fs")
         self._base_model_id = cfg.base_model_id
         self._attn_implementation = cfg.attn_implementation
+        self._trainer = DistillationTrainer(
+            base_model_id=cfg.base_model_id,
+            attn_implementation=cfg.attn_implementation,
+        )
+        self._lora_cache = {}
+        self._cache_lock = threading.Lock()
+        self._model_loaded = False
+
+    async def _ensure_model_loaded(self) -> None:
+        """One-time base model load on first distill() call."""
+        if not self._model_loaded:
+            await asyncio.to_thread(self._trainer.load_base_model)
+            self._model_loaded = True
 
     async def distill(
         self,
@@ -52,15 +75,24 @@ class LocalTrainingEngine(TrainingEngine):
         Returns:
             Distillation response.
         """
-        trainer = DistillationTrainer(
-            base_model_id=self._base_model_id,
-            attn_implementation=self._attn_implementation,
-        )
-        await asyncio.to_thread(trainer.load_base_model)
+        await self._ensure_model_loaded()
+        await asyncio.to_thread(self._trainer.reload_base_model)
+
+        resolved_id = await asyncio.to_thread(resolve_lora_id, payload.lora_id)
+        with self._cache_lock:
+            cached = self._lora_cache.get(resolved_id)
+
         try:
-            return await asyncio.to_thread(trainer.distill, payload)
+            result = await asyncio.to_thread(
+                self._trainer.distill, payload, cached=cached
+            )
         finally:
-            await asyncio.to_thread(trainer.offload_base_model)
+            await asyncio.to_thread(self._trainer.offload_base_model)
+
+        with self._cache_lock:
+            self._lora_cache[resolved_id] = result.cache_entry
+
+        return result.response
 
     async def init_lora(self, request: LoraInitRequest) -> LoraInitResponse:
         """Initialize a LoRA adapter locally.
@@ -82,7 +114,11 @@ class LocalTrainingEngine(TrainingEngine):
         return LoraInitResponse(lora_id=lora_id)
 
     async def delete_lora(self, lora_id: str) -> LoraDeleteResponse:
+        resolved_id = await asyncio.to_thread(resolve_lora_id, lora_id)
         deleted = await asyncio.to_thread(delete_lora, lora_id)
+        if deleted:
+            with self._cache_lock:
+                self._lora_cache.pop(resolved_id, None)
         return LoraDeleteResponse(deleted=deleted)
 
     async def list_loras(self, prefix: str) -> LoraListResponse:
