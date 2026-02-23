@@ -17,6 +17,8 @@ import os
 import shutil
 import tempfile
 import zipfile
+
+import torch
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -30,6 +32,11 @@ lora_volume = modal.Volume.from_name("claas-loras", create_if_missing=True)
 LORA_MOUNT_PATH = "/loras"
 ALIASES_FILE_NAME = ".aliases.json"
 StorageBackend = Literal["local_fs", "modal_volume"]
+
+
+OPTIMIZER_STATE_FILE_NAME = "optimizer_state.pt"
+
+
 _ACTIVE_STORAGE_BACKEND: StorageBackend | None = None
 
 
@@ -165,6 +172,70 @@ def get_lora_path(lora_id: str) -> str:
         raise ValueError("Invalid lora_id: resolves outside storage root")
 
     return full_path
+
+
+
+
+def optimizer_state_file_path(lora_dir: str) -> str:
+    """Build the optimizer-state file path for a local LoRA directory.
+
+    Args:
+        lora_dir: Local LoRA directory path.
+
+    Returns:
+        Full path to ``optimizer_state.pt``.
+    """
+    return os.path.join(lora_dir, OPTIMIZER_STATE_FILE_NAME)
+
+
+def has_optimizer_state(lora_dir: str) -> bool:
+    """Check whether a local LoRA directory has optimizer state.
+
+    Args:
+        lora_dir: Local LoRA directory path.
+
+    Returns:
+        ``True`` when ``optimizer_state.pt`` exists.
+    """
+    return os.path.exists(optimizer_state_file_path(lora_dir))
+
+
+def load_optimizer_state(lora_dir: str) -> dict[str, object]:
+    """Load optimizer state dict from a local LoRA directory.
+
+    Args:
+        lora_dir: Local LoRA directory path.
+
+    Returns:
+        Optimizer state dictionary from ``torch.load``.
+
+    Raises:
+        FileNotFoundError: If the optimizer-state file does not exist.
+        ValueError: If the loaded payload is not a valid optimizer state dictionary.
+    """
+    state_path = optimizer_state_file_path(lora_dir)
+    if not os.path.exists(state_path):
+        raise FileNotFoundError(f"Optimizer state not found: {state_path}")
+
+    state = torch.load(state_path, map_location="cpu")
+    if not isinstance(state, dict):
+        raise ValueError("optimizer state must be a dictionary")
+    if "state" not in state:
+        raise ValueError("optimizer state dictionary must include 'state'")
+    if "param_groups" not in state:
+        raise ValueError("optimizer state dictionary must include 'param_groups'")
+    return state
+
+
+def save_optimizer_state(lora_dir: str, optimizer_state: dict[str, object]) -> None:
+    """Persist optimizer state dict into a local LoRA directory.
+
+    Args:
+        lora_dir: Local LoRA directory path.
+        optimizer_state: Optimizer state dictionary from ``optimizer.state_dict()``.
+    """
+    state_path = optimizer_state_file_path(lora_dir)
+    torch.save(optimizer_state, state_path)
 
 
 def lora_exists(lora_id: str) -> bool:
@@ -350,7 +421,6 @@ def create_initial_lora(
         The lora_id of the created adapter
     """
     try:
-        import torch
         from safetensors.torch import save_file
         from transformers import AutoConfig
     except ModuleNotFoundError as exc:

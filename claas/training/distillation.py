@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from typing import TYPE_CHECKING, cast
 
+import torch
+
 from claas.core.types import DistillBatchRequestPayload, DistillResponse, SDPOLossInput
 from claas.training.sdpo_loss import compute_sdpo_loss
-from claas.training.storage import cleanup_local_lora, load_lora, save_lora, save_lora_inplace
+from claas.training.storage import (
+    cleanup_local_lora,
+    has_optimizer_state,
+    load_lora,
+    load_optimizer_state,
+    save_lora,
+    save_lora_inplace,
+    save_optimizer_state,
+)
 from claas.training.teacher_helpers import (
     build_teacher_messages,
     parse_teacher_result,
@@ -17,9 +28,11 @@ from claas.training.teacher_helpers import (
 )
 
 if TYPE_CHECKING:
-    import torch
     from peft import PeftMixedModel, PeftModel
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
+
+
+logger = logging.getLogger(__name__)
 
 
 class DistillationTrainer:
@@ -41,7 +54,6 @@ class DistillationTrainer:
 
     def load_base_model(self) -> None:
         """Load and freeze the base model on CUDA."""
-        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.device = torch.device("cuda")
@@ -77,7 +89,6 @@ class DistillationTrainer:
 
     def offload_base_model(self) -> None:
         """Move base model to CPU and release CUDA memory."""
-        import torch
 
         self.base_model.to("cpu")  # type: ignore[arg-type]
         torch.cuda.empty_cache()
@@ -119,6 +130,37 @@ class DistillationTrainer:
         )
         return get_peft_model(self.base_model, lora_config)
 
+    def _load_optimizer_state(
+        self,
+        lora_path: str,
+        optimizer: "torch.optim.Optimizer",
+    ) -> None:
+        """Load optimizer state from local storage into an optimizer.
+
+        Args:
+            lora_path: Local LoRA directory path.
+            optimizer: Optimizer instance to hydrate.
+        """
+        if not has_optimizer_state(lora_path):
+            logger.warning("Optimizer state file missing for lora_path=%s", lora_path)
+            return
+
+        state_obj = load_optimizer_state(lora_path)
+        optimizer.load_state_dict(state_obj)
+
+    def _save_optimizer_state(
+        self,
+        optimizer: "torch.optim.Optimizer",
+        save_dir: str,
+    ) -> None:
+        """Persist optimizer state into the local LoRA directory.
+
+        Args:
+            optimizer: Optimizer with current state.
+            save_dir: Local LoRA directory path.
+        """
+        save_optimizer_state(save_dir, optimizer.state_dict())
+
     def _build_self_teacher_topk(
         self,
         prompt: str,
@@ -141,7 +183,6 @@ class DistillationTrainer:
             Huebotter et al. (2026), "Reinforcement Learning via Self-Distillation"
             (arXiv:2601.20802), Section 3.
         """
-        import torch
 
         messages = build_teacher_messages(prompt, feedback)
         template_messages = teacher_messages_to_chat_template(messages)
@@ -181,7 +222,6 @@ class DistillationTrainer:
         Returns:
             Distillation response with metrics.
         """
-        import torch
 
         torch.cuda.empty_cache()
         if next(self.base_model.parameters()).device.type != "cuda":
@@ -209,6 +249,7 @@ class DistillationTrainer:
                 betas=(0.9, 0.999),
                 weight_decay=0.01,
             )
+            self._load_optimizer_state(lora_local_path, optimizer)
 
             batch_loss_tensors: list[torch.Tensor] = []
             batch_distill_loss: list[float] = []
@@ -314,6 +355,7 @@ class DistillationTrainer:
             save_dir = tempfile.mkdtemp(prefix="lora_updated_")
             try:
                 model.save_pretrained(save_dir)
+                self._save_optimizer_state(optimizer, save_dir)
                 if payload.save_in_place:
                     new_lora_id = save_lora_inplace(save_dir, payload.lora_id)
                 else:

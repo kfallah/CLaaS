@@ -381,3 +381,33 @@ class TestLoraAliases:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestOptimizerStateArtifacts:
+    """Tests for optimizer state helpers."""
+
+    def test_save_and_load_optimizer_state(self, tmp_path):
+        """Persists and reads optimizer state dictionaries."""
+        pytest.importorskip("torch")
+        from claas.training import storage
+
+        lora_dir = tmp_path / "lora"
+        lora_dir.mkdir()
+
+        state = {"state": {}, "param_groups": []}
+        storage.save_optimizer_state(str(lora_dir), state)
+
+        assert storage.has_optimizer_state(str(lora_dir))
+        loaded = storage.load_optimizer_state(str(lora_dir))
+        assert loaded == state
+
+    def test_load_optimizer_state_missing_file(self, tmp_path):
+        """Raises when optimizer state file is absent."""
+        pytest.importorskip("torch")
+        from claas.training import storage
+
+        lora_dir = tmp_path / "lora"
+        lora_dir.mkdir()
+
+        with pytest.raises(FileNotFoundError, match="Optimizer state not found"):
+            storage.load_optimizer_state(str(lora_dir))
