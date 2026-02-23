@@ -207,7 +207,7 @@ class TinkerBackend(InferenceBackend):
         response_logprobs = list(seq.logprobs)
 
         # Strip the stop token (and its logprob) if the sampler included it
-        if response_token_ids[-1] in stop_token_ids:
+        if response_token_ids and response_token_ids[-1] in stop_token_ids:
             response_token_ids = response_token_ids[:-1]
             response_logprobs = response_logprobs[:-1]
 
