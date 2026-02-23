@@ -13,7 +13,7 @@ from claas.core.types import (  # noqa: E402
     DistillResponse,
     TrainingConfig,
 )
-from claas.training.cache import (  # noqa: E402
+from claas.training.engine.local.cache import (  # noqa: E402
     DistillStepResult,
     LoraAdapterConfig,
     LoraCacheEntry,
