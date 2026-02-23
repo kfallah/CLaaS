@@ -75,13 +75,18 @@ claas/
 │   ├── __init__.py
 │   ├── __main__.py                      # `python -m claas.eval` entry point
 │   ├── config.py                        # Hydra config loading (load_config / build_harness_config)
-│   ├── configs/base.yaml                # Default Hydra YAML config
+│   ├── configs/
+│   │   ├── base.yaml                    # Default Hydra YAML config
+│   │   └── preference/                  # Per-preference YAML configs
+│   │       ├── no_emoji.yaml
+│   │       ├── concise.yaml
+│   │       └── identity.yaml
 │   ├── types.py                         # EvalConfig dataclass, metric types
 │   ├── runner.py                        # Main eval loop (run_harness)
 │   ├── logprob.py                       # Logprob margin scoring
 │   ├── metrics.py                       # Metric registry
-│   ├── preferences.py                   # Preference configs (feedback strings, verifiers)
-│   ├── verifiers.py                     # Programmatic compliance verifiers
+│   ├── preferences.py                   # YAML-based preference loader (hydra.utils.instantiate)
+│   ├── verifiers.py                     # Verifier protocol + callable verifier classes
 │   ├── capability.py                    # General capability probes
 │   ├── collapse.py                      # Collapse detection
 │   ├── plotting.py                      # Matplotlib plot generation
@@ -172,7 +177,14 @@ Never add code to kill, restart, or spawn vLLM from within the API process. vLLM
 
 Docker env files live in `docker/`. For the Tinker stack, API keys and config are in `docker/.env.tinker` — use `--env-file docker/.env.tinker` when running compose commands. Never hardcode secrets; they come from env files.
 
-After making code changes, always rebuild Docker containers with `docker compose --profile <profile> up --build -d` — do not just restart them, or the running containers will still have the old code.
+The compose file is `docker/docker-compose.yml`. Always specify it explicitly with `-f`:
+
+```bash
+# Rebuild and restart the Tinker stack
+docker compose -f docker/docker-compose.yml --profile tinker --env-file docker/.env.tinker up --build -d
+```
+
+After making code changes, always rebuild Docker containers with `up --build -d` — do not just restart them, or the running containers will still have the old code.
 
 ## Long-Running Commands
 

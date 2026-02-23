@@ -163,7 +163,7 @@ async def measure_entropy_and_mean_logprob(
     choice = resp.json()["choices"][0]
     message_body = choice.get("message", {})
     response_text = message_body.get("content", "")
-    logprobs_content = choice.get("logprobs", {}).get("content", [])
+    logprobs_content = (choice.get("logprobs") or {}).get("content", [])
 
     if not logprobs_content:
         return (0.0, 0.0)
