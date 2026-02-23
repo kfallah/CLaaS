@@ -24,7 +24,7 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
-EVAL_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent.parent / "eval_dashboard.html"
+EVAL_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent.parent / "dashboard" / "eval_dashboard.html"
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +393,7 @@ def _render_run(run_dir: str, run_id: str) -> str:
     plots_html = _embed_plots(run_dir)
 
     return """
-    <details class="run-section" open>
+    <details class="run-section">
       <summary><strong>{run_id}</strong></summary>
       <table>
         <thead>
@@ -429,7 +429,7 @@ def eval_dashboard_html(
     results_dir: str, *, page: int = 1, per_page: int = 20
 ) -> str:
     """Discover all runs under *results_dir* and render the dashboard HTML."""
-    from ..pagination import paginate, render_pagination_nav
+    from ..dashboard.pagination import paginate, render_pagination_nav
 
     runs = _discover_runs(results_dir)
     total = len(runs)
