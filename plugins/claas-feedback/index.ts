@@ -19,10 +19,8 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk";
 
-import { createHash } from "node:crypto";
-
 import * as contextStore from "./src/context-store.ts";
-import { extractContent, fetchRawCompletion } from "./src/chatml.ts";
+import { extractContent } from "./src/chatml.ts";
 import { submitFeedback } from "./src/feedback-client.ts";
 import { appendFeedback, getPendingSize, takePendingBatch, requeuePendingBatch } from "./src/feedback-history-store.ts";
 
@@ -165,7 +163,18 @@ export default function register(api: OpenClawPluginApi) {
       if (!parsedContent) {
         return { text: "No bot response found in the last conversation." };
       }
-      // Strip proper <think>...</think> blocks, then strip orphaned </think>
+      const assistantIdx = cached.messages.lastIndexOf(lastAssistant);
+      const lastUserBeforeAssistant = cached.messages
+        .slice(0, Math.max(assistantIdx, 0))
+        .reverse()
+        .find((m: Record<string, unknown>) => m.role === "user");
+      const userPrompt = lastUserBeforeAssistant
+        ? extractContent((lastUserBeforeAssistant as Record<string, unknown>).content)
+        : null;
+      if (!userPrompt) {
+        return { text: "Could not determine the user prompt for this conversation." };
+      }
+      // Strip <think>...</think> blocks and orphaned </think> prefix
       // (when <think> was consumed as a special token by the tokenizer).
       let visibleContent = parsedContent.replace(/<think>[\s\S]*?<\/think>/g, "");
       const closeIdx = visibleContent.indexOf("</think>");
@@ -173,23 +182,6 @@ export default function register(api: OpenClawPluginApi) {
         visibleContent = visibleContent.slice(closeIdx + "</think>".length);
       }
       visibleContent = visibleContent.trim();
-      const contentHash = createHash("sha256").update(visibleContent).digest("hex");
-
-      let rawPrompt: string;
-      let rawResponse: string;
-      let rolloutLogprobs: number[] | null = null;
-      try {
-        const raw = await fetchRawCompletion(proxyUrl, contentHash);
-        rawPrompt = raw.prompt;
-        rawResponse = raw.response;
-        rolloutLogprobs = raw.logprobs;
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[claas-feedback] raw completion fetch failed: ${msg}`);
-        return {
-          text: `\u274C Raw completion not available. The proxy may have restarted or the completion expired.`,
-        };
-      }
 
       // Send a "processing" indicator before the long-running CLaaS call
       const replyTo = ctx.to ?? ctx.senderId;
@@ -206,8 +198,13 @@ export default function register(api: OpenClawPluginApi) {
         }
       }
 
-      // Submit to CLaaS
-      const { pendingSize } = appendFeedback(senderKey, rawPrompt, rawResponse, feedbackText, rolloutLogprobs);
+      // Submit to CLaaS — the API resolves cached completion data internally
+      const { pendingSize } = appendFeedback(
+        senderKey,
+        userPrompt,
+        visibleContent,
+        feedbackText,
+      );
       if (pendingSize < feedbackBatchSize) {
         return {
           text: `✅ Feedback queued (buffer: ${pendingSize}/${feedbackBatchSize})`,
@@ -227,8 +224,7 @@ export default function register(api: OpenClawPluginApi) {
             prompt: item.prompt,
             response: item.response,
             feedback: item.feedback,
-            rollout_logprobs: item.rollout_logprobs,
-            training: { teacher_mode: "self" },
+            training: {},
           })),
           orchestration: {
             sleep_before: true,

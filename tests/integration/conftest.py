@@ -28,5 +28,5 @@ def tinker_stack():
         claas_url="http://127.0.0.1:8080",
         openclaw_url="http://127.0.0.1:18789",
         openclaw_token="openclaw-local-dev-token",
-        model="meta-llama/Llama-3.2-1B",
+        model="Qwen/Qwen3-4B-Instruct-2507",
     )

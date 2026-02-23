@@ -6,7 +6,6 @@ Runs feedback steps, measures metrics, writes results to disk.
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 import logging
 import os
@@ -15,14 +14,12 @@ import time
 import httpx
 
 from claas.core.types import (
-    DistillBatchItem,
-    DistillRequest,
     FeedbackBatchRequest,
+    FeedbackItem,
     FeedbackOrchestration,
-    TrainingConfig,
 )
 
-from .logprob import derive_vllm_model_name
+from .logprob import derive_model_name
 from .metrics import Metric, build_metrics
 from .plotting import generate_plots
 from .preferences import PreferenceConfig, get_preference_configs
@@ -35,10 +32,9 @@ from .types import (
     MetricContext,
     StepResult,
     TinkerDistillMetrics,
-    direct_vllm_chat_params,
+    claas_proxy_chat_params,
     openclaw_chat_params,
 )
-from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
 
@@ -54,57 +50,14 @@ async def _init_lora(config: HarnessConfig, lora_id: str) -> str:
         return resp.json()["lora_id"]
 
 
-async def _load_lora_into_vllm(
-    config: HarnessConfig,
-    lora_id: str,
-    lora_path: str,
-    *,
-    vllm_api_key: str = "",
-) -> None:
-    """Load a LoRA adapter into vLLM (unload first if present)."""
-    vllm_name = derive_vllm_model_name(lora_id)
-    headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
-
-    async with httpx.AsyncClient(base_url=config.vllm_url, timeout=30.0) as client:
-        # Unload (ignore 404)
-        try:
-            resp = await client.post(
-                "/v1/unload_lora_adapter",
-                json={"lora_name": vllm_name},
-                headers=headers,
-            )
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code != 404:
-                raise
-
-        # Load
-        resp = await client.post(
-            "/v1/load_lora_adapter",
-            json={"lora_name": vllm_name, "lora_path": lora_path},
-            headers=headers,
-        )
-        resp.raise_for_status()
-
-
 async def _submit_feedback(
     config: HarnessConfig,
     lora_id: str,
-    samples: list[DistillBatchItem],
+    samples: list[FeedbackItem],
 ) -> LocalDistillMetrics | TinkerDistillMetrics | None:
     """Submit batched feedback via CLaaS API and return SDPO metrics."""
     payload = FeedbackBatchRequest(
-        requests=[
-            DistillRequest(
-                lora_id=lora_id,
-                prompt=s.prompt,
-                response=s.response,
-                feedback=s.feedback,
-                rollout_logprobs=s.rollout_logprobs,
-                training=TrainingConfig(teacher_mode="self"),
-            )
-            for s in samples
-        ],
+        requests=samples,
         orchestration=FeedbackOrchestration(sleep_before=False, wake_after=False),
     )
     async with httpx.AsyncClient(base_url=config.claas_url, timeout=180.0) as client:
@@ -116,7 +69,7 @@ async def _submit_feedback(
     if not distill_result:
         return None
 
-    metadata = distill_result.get("metadata") or {}
+    metadata = distill_result["metadata"]
 
     if config.mode == "tinker" and "adv_mean" in metadata:
         return TinkerDistillMetrics(
@@ -126,8 +79,8 @@ async def _submit_feedback(
             kl_gain=metadata["kl_gain"],
             adv_abs_mean=metadata["adv_abs_mean"],
             adv_abs_mean_raw=metadata["adv_abs_mean_raw"],
-            completion_len=metadata.get("completion_len", 0),
-            batch_size=metadata.get("batch_size", 0),
+            completion_len=metadata["completion_len"],
+            batch_size=metadata["batch_size"],
         )
 
     return LocalDistillMetrics(
@@ -145,13 +98,16 @@ async def _generate_response(
     temperature: float = 0,
     max_tokens: int = 2048,
 ) -> str:
-    """Generate a response via OpenClaw or direct vLLM."""
+    """Generate a response via OpenClaw or CLaaS proxy.
+
+    All completions route through the CLaaS API proxy so that token IDs
+    and logprobs are cached for the subsequent feedback call.
+    """
     if config.openclaw_url:
         api_key = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
         params = openclaw_chat_params(config.openclaw_url, api_key, prompt)
     else:
-        api_key = os.environ.get("VLLM_API_KEY", "")
-        params = direct_vllm_chat_params(config.vllm_url, api_key, model, prompt)
+        params = claas_proxy_chat_params(config.claas_url, model, prompt)
 
     async with httpx.AsyncClient(base_url=params.base_url, timeout=120.0) as client:
         resp = await client.post(
@@ -168,135 +124,16 @@ async def _generate_response(
         return resp.json()["choices"][0]["message"]["content"]
 
 
-async def _fetch_cached_completion(
-    claas_url: str,
-    visible_content: str,
-) -> tuple[str, str, list[float]]:
-    """Fetch the cached raw completion from the API by content hash.
-
-    The API caches ``{prompt, response, logprobs}`` keyed by
-    ``SHA-256(stripped_content)``.  Since the API strips thinking
-    before returning content, ``visible_content`` already matches the
-    cache key.  We apply ``strip_thinking`` defensively in case the caller
-    passes un-stripped text.
-
-    Returns ``(real_prompt, raw_response, rollout_logprobs)``.
-    """
-    content_hash = hashlib.sha256(
-        strip_thinking(visible_content).encode("utf-8"),
-    ).hexdigest()
-    async with httpx.AsyncClient(base_url=claas_url, timeout=60.0) as client:
-        resp = await client.get(
-            "/v1/completions/raw",
-            params={"content_hash": content_hash},
-        )
-        resp.raise_for_status()
-
-    data = resp.json()
-    return data["prompt"], data["response"], data["logprobs"] or []
-
-
-async def _generate_and_collect(
-    config: HarnessConfig,
-    model: str,
-    prompt: str,
-) -> tuple[str, str, str, list[float]]:
-    """Generate via OpenClaw, then fetch cached raw completion from the API.
-
-    When ``config.openclaw_url`` is set, generation routes through the OpenClaw
-    gateway which prepends the full agent system prompt and context.  The API
-    strips thinking from the returned content and caches the raw completion
-    (with the full OpenClaw-templated prompt and generation-time logprobs)
-    keyed by ``SHA-256(visible_content)``.
-
-    Returns ``(visible_content, real_prompt, raw_response, rollout_logprobs)``.
-    """
-    assert config.claas_url is not None
-    content = await _generate_response(config, model, prompt, temperature=0.7)
-
-    real_prompt, raw_response, rollout_lps = await _fetch_cached_completion(
-        config.claas_url, content,
-    )
-    return content, real_prompt, raw_response, rollout_lps
-
-
-async def _fetch_rollout_logprobs_vllm(
-    config: HarnessConfig,
-    model: str,
-    prompt: str,
-    response_text: str,
-    *,
-    vllm_api_key: str = "",
-) -> list[float]:
-    """Score a prompt+response via vLLM and return per-token logprobs.
-
-    Uses vLLM's message-based /tokenize endpoint so the real tokenizer
-    chat template is applied server-side (no manual ChatML construction).
-    """
-    headers = {"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {}
-    params = direct_vllm_chat_params(config.vllm_url, vllm_api_key, model, prompt)
-    messages = params.messages
-
-    async with httpx.AsyncClient(base_url=config.vllm_url, timeout=60.0) as client:
-        # Tokenize prompt messages to learn token count
-        tok_resp = await client.post(
-            "/tokenize",
-            json={"model": model, "messages": messages},
-            headers=headers,
-        )
-        tok_resp.raise_for_status()
-        prompt_token_count: int = tok_resp.json()["count"]
-
-        # Tokenize full conversation (prompt + response) to get token IDs
-        full_messages = list(messages) + [
-            {"role": "assistant", "content": response_text},
-        ]
-        full_tok_resp = await client.post(
-            "/tokenize",
-            json={
-                "model": model,
-                "messages": full_messages,
-                "add_generation_prompt": False,
-            },
-            headers=headers,
-        )
-        full_tok_resp.raise_for_status()
-        full_token_ids = full_tok_resp.json()["tokens"]
-
-        # Get logprobs for the full sequence
-        comp_resp = await client.post(
-            "/v1/completions",
-            json={
-                "model": model,
-                "prompt": full_token_ids,
-                "max_tokens": 1,
-                "prompt_logprobs": 1,
-            },
-            headers=headers,
-        )
-        comp_resp.raise_for_status()
-
-    raw_logprobs = comp_resp.json()["choices"][0]["prompt_logprobs"]
-    logprobs: list[float] = []
-    for entry in raw_logprobs[prompt_token_count:]:
-        if entry is None:
-            logprobs.append(0.0)
-            continue
-        top = next(iter(entry.values()))
-        logprobs.append(top["logprob"])
-
-    return logprobs
 
 
 async def _measure_eval_metrics(
     config: HarnessConfig,
     pref: PreferenceConfig,
-    vllm_model: str,
+    model_name: str,
     step: int,
     baseline: EvalMetrics,
     enabled_metrics: list[Metric],
     *,
-    vllm_api_key: str = "",
     openclaw_api_key: str = "",
     response_text: str | None = None,
 ) -> EvalMetrics:
@@ -304,12 +141,11 @@ async def _measure_eval_metrics(
     metrics = EvalMetrics()
 
     async def generate(prompt: str) -> str:
-        return await _generate_response(config, vllm_model, prompt)
+        return await _generate_response(config, model_name, prompt)
 
     ctx = MetricContext(
-        vllm_url=config.vllm_url,
-        vllm_api_key=vllm_api_key,
-        vllm_model=vllm_model,
+        claas_url=config.claas_url,
+        model=model_name,
         step=step,
         pref=pref,
         baseline=baseline,
@@ -317,19 +153,12 @@ async def _measure_eval_metrics(
         generate=generate,
         openclaw_url=config.openclaw_url,
         openclaw_api_key=openclaw_api_key,
-        mode=config.mode,
     )
 
     for metric in enabled_metrics:
         await metric.measure(ctx, metrics)
 
     return metrics
-
-
-def _lora_path_on_disk(lora_id: str) -> str:
-    """Derive the on-disk LoRA path from the LoRA ID."""
-    lora_root = os.environ.get("CLAAS_LORA_ROOT", "/loras")
-    return os.path.join(lora_root, lora_id.strip("/"))
 
 
 def _load_completed_steps(output_dir: str, preference: str) -> list[StepResult]:
@@ -450,8 +279,6 @@ async def run_preference_experiment(
     needs_generation: bool = False,
 ) -> ExperimentResult:
     """Run the full experiment loop for a single preference."""
-    # Resolve secrets from env vars (never stored on config)
-    vllm_api_key = os.environ.get("VLLM_API_KEY", "")
     openclaw_api_key = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 
     lora_id = f"{config.lora_id_prefix}/{pref.name}"
@@ -480,15 +307,7 @@ async def run_preference_experiment(
         actual_lora_id = await _init_lora(config, lora_id)
         logger.info("[%s] LoRA created: %s", pref.name, actual_lora_id)
 
-    vllm_model = derive_vllm_model_name(actual_lora_id)
-    lora_path = _lora_path_on_disk(actual_lora_id)
-
-    # Load LoRA into vLLM (skip for Tinker — proxy auto-refreshes)
-    if config.mode == "local":
-        logger.info("[%s] Loading LoRA into vLLM as '%s'", pref.name, vllm_model)
-        await _load_lora_into_vllm(
-            config, actual_lora_id, lora_path, vllm_api_key=vllm_api_key,
-        )
+    model_name = derive_model_name(actual_lora_id)
 
     # Write metadata
     _write_metadata(config.output_dir, pref.name, config, actual_lora_id)
@@ -499,10 +318,9 @@ async def run_preference_experiment(
     if resume_from == 0:
         logger.info("[%s] Measuring baseline...", pref.name)
         baseline = await _measure_eval_metrics(
-            config, pref, vllm_model, step=0,
+            config, pref, model_name, step=0,
             baseline=EvalMetrics(),  # No baseline for the baseline itself
             enabled_metrics=enabled_metrics,
-            vllm_api_key=vllm_api_key,
             openclaw_api_key=openclaw_api_key,
         )
         _write_baseline(config.output_dir, pref.name, baseline)
@@ -546,7 +364,7 @@ async def run_preference_experiment(
         feedback_str = " ".join([pref.feedback_string] * config.feedback_repetitions)
 
         # Collect samples for this step (batch_size >= 1)
-        samples: list[DistillBatchItem] = []
+        samples: list[FeedbackItem] = []
         response_text: str | None = None
 
         for i in range(config.batch_size):
@@ -554,48 +372,25 @@ async def run_preference_experiment(
                 (step * config.batch_size + i) % len(pref.probe_prompts)
             ]
 
-            if config.mode == "tinker":
-                # Tinker mode: generate via OpenClaw, fetch cached completion
-                try:
-                    content, real_prompt, raw_response, rollout_lps = (
-                        await _generate_and_collect(config, vllm_model, prompt)
-                    )
-                    if response_text is None:
-                        response_text = content
-                    samples.append(DistillBatchItem(
-                        prompt=real_prompt,
-                        response=raw_response,
-                        feedback=feedback_str,
-                        rollout_logprobs=rollout_lps,
-                    ))
-                except (httpx.HTTPError, KeyError, ValueError) as e:
-                    logger.warning(
-                        "[%s] Step %d sample %d proxy generation failed: %s",
-                        pref.name, step, i, e,
-                    )
-            else:
-                # vLLM mode: generate, score logprobs via vLLM
-                try:
-                    gen_text = await _generate_response(
-                        config, vllm_model, prompt, temperature=0,
-                    )
-                    if response_text is None:
-                        response_text = gen_text
-                    rollout_lps = await _fetch_rollout_logprobs_vllm(
-                        config, vllm_model, prompt, gen_text,
-                        vllm_api_key=vllm_api_key,
-                    )
-                    samples.append(DistillBatchItem(
-                        prompt=prompt,
-                        response=gen_text,
-                        feedback=feedback_str,
-                        rollout_logprobs=rollout_lps,
-                    ))
-                except (httpx.HTTPError, KeyError, ValueError) as e:
-                    logger.warning(
-                        "[%s] Step %d sample %d vLLM generation failed: %s",
-                        pref.name, step, i, e,
-                    )
+            # Generate via CLaaS proxy (caches completion for feedback lookup)
+            try:
+                temperature = 0.7 if config.mode == "tinker" else 0
+                content = await _generate_response(
+                    config, model_name, prompt, temperature=temperature,
+                )
+                if response_text is None:
+                    response_text = content
+                samples.append(FeedbackItem(
+                    lora_id=actual_lora_id,
+                    prompt=prompt,
+                    response=content,
+                    feedback=feedback_str,
+                ))
+            except (httpx.HTTPError, KeyError, ValueError) as e:
+                logger.warning(
+                    "[%s] Step %d sample %d generation failed: %s",
+                    pref.name, step, i, e,
+                )
 
         if response_text is None:
             response_text = "I'd be happy to help you with that."
@@ -617,37 +412,17 @@ async def run_preference_experiment(
                     )
                     break
 
-                # Reload LoRA between sub-steps (local mode only, not after last sub-step)
-                if config.mode == "local" and sub_step < config.steps_per_batch - 1:
-                    try:
-                        await _load_lora_into_vllm(
-                            config, actual_lora_id, lora_path,
-                            vllm_api_key=vllm_api_key,
-                        )
-                    except (httpx.HTTPError, KeyError) as e:
-                        logger.warning("[%s] LoRA reload failed: %s", pref.name, e)
-
             if config.steps_per_batch > 1:
                 logger.info(
                     "[%s] Step %d: %d sub-steps completed",
                     pref.name, step, sub_steps_completed,
                 )
 
-        # Reload LoRA into vLLM (skip for Tinker — proxy auto-refreshes)
-        if config.mode == "local":
-            try:
-                await _load_lora_into_vllm(
-                    config, actual_lora_id, lora_path, vllm_api_key=vllm_api_key,
-                )
-            except (httpx.HTTPError, KeyError) as e:
-                logger.warning("[%s] LoRA reload failed: %s", pref.name, e)
-
         # Measure eval
         try:
             eval_metrics = await _measure_eval_metrics(
-                config, pref, vllm_model, step, baseline,
+                config, pref, model_name, step, baseline,
                 enabled_metrics=enabled_metrics,
-                vllm_api_key=vllm_api_key,
                 openclaw_api_key=openclaw_api_key,
                 response_text=response_text if needs_generation else None,
             )

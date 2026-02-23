@@ -38,20 +38,19 @@ def openclaw_chat_params(
     )
 
 
-def direct_vllm_chat_params(
-    vllm_url: str,
-    vllm_api_key: str,
+def claas_proxy_chat_params(
+    claas_url: str,
     model: str,
     prompt: str,
 ) -> ChatRequestParams:
-    """Build chat completion params for direct vLLM communication.
+    """Build chat completion params routed through the CLaaS API proxy.
 
-    Manually prepends the default system prompt since there is no
-    gateway to inject it.
+    In local mode, completions must go through the CLaaS proxy so that
+    token IDs and logprobs are cached for the subsequent feedback call.
     """
     return ChatRequestParams(
-        base_url=vllm_url,
-        headers={"Authorization": f"Bearer {vllm_api_key}"} if vllm_api_key else {},
+        base_url=claas_url,
+        headers={},
         model=model,
         messages=[
             {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
@@ -75,8 +74,6 @@ class EvalConfig:
 
     mode: str = "local"
     claas_url: str = "http://localhost:8080"
-    vllm_url: str = "http://localhost:8000"
-    vllm_model_name: str = "qwen3-8b"
     preferences: list[str] = field(default_factory=lambda: ["no_emoji", "concise", "identity"])
     num_steps: int = 20
     output_dir: str = "./data/evals"
@@ -205,9 +202,8 @@ class ExperimentSummary:
 class MetricContext:
     """Bundled arguments passed to each metric's measure() method."""
 
-    vllm_url: str
-    vllm_api_key: str
-    vllm_model: str
+    claas_url: str
+    model: str
     step: int
     pref: Any  # PreferenceConfig (forward ref to avoid circular import)
     baseline: EvalMetrics
@@ -215,7 +211,6 @@ class MetricContext:
     generate: Callable[[str], Awaitable[str]] | None = None
     openclaw_url: str | None = None
     openclaw_api_key: str = "openclaw-local-dev-token"
-    mode: str = "local"
 
 
 def step_result_from_dict(data: dict[str, object]) -> StepResult:
