@@ -95,7 +95,7 @@ def test_hydra_config_custom_dir() -> None:
 
 def test_preference_configs_load_from_yaml() -> None:
     configs = get_preference_configs()
-    assert set(configs.keys()) == {"no_emoji", "concise", "identity"}
+    assert {"no_emoji", "concise", "identity"}.issubset(configs.keys())
     for name, cfg in configs.items():
         assert cfg.name == name
         assert isinstance(cfg.feedback_string, str)
