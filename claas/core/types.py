@@ -94,15 +94,32 @@ class SDPOLossResult(TypedDict):
 
 
 class DistillBatchItem(BaseModel):
-    """One prompt/response/feedback sample used in batched distillation."""
+    """Cache-enriched training sample, constructed by the API feedback endpoint.
 
-    prompt: str
-    response: str
-    feedback: str
-    response_logprobs: list[float]
-    prompt_token_ids: list[int]
-    response_token_ids: list[int]
-    user_prompt: str
+    The API resolves a FeedbackItem against the completion cache to produce this.
+    FeedbackItem carries what the client knows (clean prompt, visible response,
+    feedback text); DistillBatchItem adds what training needs (token IDs,
+    logprobs) from the cached CompletionCacheEntry.
+
+    Fields sourced from CompletionCacheEntry:
+        prompt, response, response_logprobs, prompt_token_ids, response_token_ids
+    Fields sourced from FeedbackItem:
+        feedback, user_prompt
+    """
+
+    prompt: str = Field(description="Chat-template-decorated prompt text from the completion cache.")
+    response: str = Field(description="Raw model response text from the completion cache.")
+    feedback: str = Field(description="User's feedback text (from the client's FeedbackItem).")
+    response_logprobs: list[float] = Field(description="Per-token log-probabilities of the student rollout.")
+    prompt_token_ids: list[int] = Field(description="Tokenized prompt (chat template applied).")
+    response_token_ids: list[int] = Field(description="Tokenized response (no special token stripping).")
+    user_prompt: str = Field(
+        description=(
+            "Clean user prompt without chat-template decoration (from FeedbackItem.prompt). "
+            "Used by teacher prompt construction so the teacher sees the original question, "
+            "not a nested chat template."
+        ),
+    )
 
 
 class DistillBatchRequestPayload(BaseModel):
@@ -151,7 +168,13 @@ class LoraRuntimeRef(BaseModel):
 
 
 class FeedbackItem(BaseModel):
-    """One feedback sample — the API resolves cached completion data internally."""
+    """Client-facing feedback request for one prompt/response pair.
+
+    This is the external API schema — the client sends this to POST /v1/feedback.
+    The API resolves each FeedbackItem against the completion cache (keyed by
+    a SHA-256 hash of the visible response text) to produce a DistillBatchItem
+    with token IDs and logprobs attached.
+    """
 
     lora_id: str = Field(
         ...,
@@ -160,21 +183,27 @@ class FeedbackItem(BaseModel):
     prompt: str = Field(
         ...,
         min_length=1,
-        description="User prompt text",
+        description=(
+            "Clean user prompt text (no chat-template decoration). "
+            "Becomes DistillBatchItem.user_prompt for teacher prompt construction."
+        ),
     )
     response: str = Field(
         ...,
         min_length=1,
-        description="Visible assistant response text",
+        description=(
+            "Visible assistant response text. Used as the cache lookup key "
+            "(SHA-256 hash) to retrieve token IDs and logprobs."
+        ),
     )
     feedback: str = Field(
         ...,
         min_length=1,
-        description="User's feedback text",
+        description="User's feedback about response quality, forwarded to the teacher.",
     )
     training: TrainingConfig = Field(
         default_factory=TrainingConfig,
-        description="Training configuration",
+        description="Training configuration for this distillation step.",
     )
 
 
