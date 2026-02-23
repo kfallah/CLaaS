@@ -24,6 +24,7 @@ def get_inference_backend(kind: BackendKind, cfg: CoreConfig | None = None) -> I
 
         from .tinker import TinkerBackend
 
-        assert isinstance(cfg, TinkerConfig), f"tinker backend requires TinkerConfig, got {type(cfg)}"
+        if not isinstance(cfg, TinkerConfig):
+            raise TypeError(f"tinker backend requires TinkerConfig, got {type(cfg)}")
         return TinkerBackend(cfg=cfg)
     raise ValueError(f"Unsupported inference backend: {kind!r}")
