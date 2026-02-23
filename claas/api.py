@@ -342,13 +342,7 @@ async def score_completion(req: ScoreRequest, request: Request) -> ScoreResponse
         for m in req.messages
     ]
     result = await backend.score(model=req.model, messages=messages, completion=req.completion)
-    return ScoreResponse(
-        logprobs=result.logprobs,
-        tokens=result.tokens,
-        prompt_tokens=result.prompt_tokens,
-        completion_tokens=result.completion_tokens,
-        logprob_sum=result.logprob_sum,
-    )
+    return result
 
 
 # ---------------------------------------------------------------------------

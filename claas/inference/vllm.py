@@ -14,9 +14,9 @@ import httpx
 from fastapi import FastAPI, Request, Response
 
 from claas.core.config import LocalConfig, ModalConfig
-from claas.core.types import ChoiceLogprobs, TokenLogprob, TopLogprob
+from claas.core.types import ChoiceLogprobs, ScoreResponse, TokenLogprob, TopLogprob
 
-from .base import CompletionResult, InferenceBackend, ScoreResult, TextCompletionResult
+from .base import CompletionResult, InferenceBackend, TextCompletionResult
 from .helpers import apply_chat_template_ids, coerce_content
 
 logger = logging.getLogger(__name__)
@@ -240,7 +240,7 @@ class VllmBackend(InferenceBackend):
         model: str,
         messages: list[dict[str, str]],
         completion: str,
-    ) -> ScoreResult:
+    ) -> ScoreResponse:
         if self._tokenizer is None:
             raise RuntimeError(
                 "VllmBackend.score requires a tokenizer but none is available "
@@ -265,7 +265,7 @@ class VllmBackend(InferenceBackend):
         completion_token_ids = full_token_ids[len(prompt_token_ids):]
 
         if len(completion_token_ids) == 0:
-            return ScoreResult(
+            return ScoreResponse(
                 logprobs=[],
                 tokens=[],
                 prompt_tokens=len(prompt_token_ids),
@@ -307,7 +307,7 @@ class VllmBackend(InferenceBackend):
             tokenizer.decode([tid]) for tid in completion_token_ids
         ]
 
-        return ScoreResult(
+        return ScoreResponse(
             logprobs=completion_logprobs,
             tokens=completion_tokens_str,
             prompt_tokens=prompt_len,
