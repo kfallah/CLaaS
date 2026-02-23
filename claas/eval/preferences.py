@@ -8,21 +8,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 from hydra.utils import instantiate
 
 from claas.core.types import ChatMessage
-from claas.eval.metrics.verifiers import Verifier
+from claas.eval.types import LogprobPair
 
-
-@dataclass
-class LogprobPair:
-    """A positive/negative response pair for logprob margin measurement."""
-
-    prompt_messages: list[ChatMessage]
-    positive_response: str
-    negative_response: str
+if TYPE_CHECKING:
+    from claas.eval.metrics.verifiers import Verifier
 
 
 @dataclass
@@ -43,9 +38,17 @@ def get_preference_configs() -> dict[str, PreferenceConfig]:
     """Return all preference configurations keyed by name."""
     configs: dict[str, PreferenceConfig] = {}
     for yaml_path in sorted(_PREFERENCE_DIR.glob("*.yaml")):
-        with open(yaml_path) as f:
-            data = yaml.safe_load(f)
-        name = data["name"]
+        try:
+            with open(yaml_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            name = data["name"]
+        except (KeyError, TypeError, yaml.YAMLError) as exc:
+            raise ValueError(f"Invalid preference YAML {yaml_path.name}: {exc}") from exc
+        if name in configs:
+            raise ValueError(
+                f"Duplicate preference name '{name}' in {yaml_path.name} "
+                f"(already defined by another config file)"
+            )
         verifier = instantiate(data["verifier"])
         logprob_pairs = [
             LogprobPair(
