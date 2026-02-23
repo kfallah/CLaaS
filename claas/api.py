@@ -123,7 +123,7 @@ web_app = FastAPI(
     version="0.1.0",
 )
 
-FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "dashboard" / "index.html"
+FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "dashboard" / "feedback_dashboard.html"
 
 
 def configure_web_app(cfg: CoreConfig) -> None:
