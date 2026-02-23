@@ -63,6 +63,7 @@ services:
       - lora-storage:/loras
       - hf-cache:/root/.cache/huggingface
       - claas-feedback-logs:/app/data/feedback
+      - ../data/evals:/app/data/evals
     ports:
       - "${CLAAS_API_PORT:-8080}:8080"
     deploy:
@@ -144,6 +145,7 @@ services:
     volumes:
       - claas-feedback-logs:/app/data/feedback
       - tinker-state:/data
+      - ../data/evals:/app/data/evals
     ports:
       - "${CLAAS_API_PORT:-8080}:8080"
     healthcheck:

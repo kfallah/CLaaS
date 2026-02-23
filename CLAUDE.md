@@ -1,5 +1,13 @@
 # CLaaS - Claude Code Guidelines
 
+## Debugging Philosophy
+
+**Understand the root cause before writing any code.** When something breaks, trace the error back to its systemic origin — don't patch at the point where the symptom appears. Check logs, environment variables, config, and runtime state before assuming the code is wrong.
+
+**Never add local workarounds for systemic issues.** Do not add try/except fallbacks, filtering, isinstance guards, or other defensive code to mask an error you don't fully understand. These hacks erode the codebase over time and hide real bugs. If the fix feels like a bandaid, you haven't found the real problem yet.
+
+**Treat errors as signals, not obstacles.** An unexpected value or failed assertion means something upstream is wrong. Trace the data flow end-to-end: where was this value produced? What configuration or state fed into it? The goal is durable, correct software — not silencing errors.
+
 ## Code Quality Rules
 
 ### After Every Change
@@ -30,7 +38,6 @@ uv run pytest tests/ -v -m "not integration"
 claas/
 ├── __init__.py
 ├── api.py                               # FastAPI endpoints + inference proxy (entrypoint)
-├── cli.py                               # Command-line interface (entrypoint)
 ├── index.html                           # Dashboard template
 │
 ├── core/                                # Shared types & config
@@ -62,8 +69,7 @@ claas/
 ├── modal/                               # Modal deployment modules
 │   ├── __init__.py
 │   ├── deploy.py                        # Unified Modal app deployment
-│   ├── worker.py                        # Modal DistillWorker class
-│   └── teacher_service.py               # Modal TeacherService class
+│   └── worker.py                        # Modal DistillWorker class
 │
 ├── eval/                                # Eval harness (Hydra config)
 │   ├── __init__.py
@@ -148,7 +154,8 @@ Key points:
 - Config is in `claas/eval/configs/base.yaml` — override via `key=value` CLI args
 - Tinker model names differ from HuggingFace: use `Qwen/Qwen3-30B-A3B` not `Qwen/Qwen3-Coder-30B-A3B-Instruct`
 - The API's FastAPI instance is `claas.api:web_app` (not `claas.api:app`, which is the Modal App)
-- Secrets (`CLAAS_TINKER_API_KEY`, `VLLM_API_KEY`) come from env vars, not the config
+- Secrets (`CLAAS_TINKER_API_KEY`, `OPENCLAW_GATEWAY_TOKEN`) come from env vars, not the config
+- `openclaw_url` defaults to `http://localhost:18789` — generation routes through OpenClaw for full agent context. Set `openclaw_url=null` to bypass OpenClaw and use CLaaS directly.
 - `test_eval_config.py` requires `hydra-core` (now a core dependency)
 
 ## Dependencies
@@ -164,6 +171,8 @@ Never add code to kill, restart, or spawn vLLM from within the API process. vLLM
 ## Docker
 
 Docker env files live in `docker/`. For the Tinker stack, API keys and config are in `docker/.env.tinker` — use `--env-file docker/.env.tinker` when running compose commands. Never hardcode secrets; they come from env files.
+
+After making code changes, always rebuild Docker containers with `docker compose --profile <profile> up --build -d` — do not just restart them, or the running containers will still have the old code.
 
 ## Long-Running Commands
 

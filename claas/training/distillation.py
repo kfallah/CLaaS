@@ -23,7 +23,6 @@ from claas.training.storage import (
 )
 from claas.training.teacher_helpers import (
     build_teacher_messages,
-    parse_teacher_result,
     teacher_messages_to_chat_template,
 )
 
@@ -90,7 +89,7 @@ class DistillationTrainer:
     def offload_base_model(self) -> None:
         """Move base model to CPU and release CUDA memory."""
 
-        self.base_model.to("cpu")  # type: ignore[arg-type]
+        self.base_model.to(torch.device("cpu"))  # type: ignore[arg-type]  # functools.wraps confuses ty
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
@@ -259,16 +258,16 @@ class DistillationTrainer:
             tokens_processed = 0
 
             for sample in payload.samples:
-                prompt_ids = self.tokenizer.encode(
-                    sample.prompt,
-                    add_special_tokens=True,
-                    return_tensors="pt",
-                ).to(self.device)
-                response_ids = self.tokenizer.encode(
-                    sample.response,
-                    add_special_tokens=False,
-                    return_tensors="pt",
-                ).to(self.device)
+                prompt_ids = torch.tensor(
+                    [sample.prompt_token_ids],
+                    device=self.device,
+                    dtype=torch.int64,
+                )
+                response_ids = torch.tensor(
+                    [sample.response_token_ids],
+                    device=self.device,
+                    dtype=torch.int64,
+                )
 
                 full_ids = torch.cat([prompt_ids, response_ids], dim=-1)
                 response_start = prompt_ids.shape[-1]
@@ -293,29 +292,21 @@ class DistillationTrainer:
                 del student_output
 
                 old_student_logprobs = torch.tensor(
-                    sample.rollout_logprobs,
+                    sample.response_logprobs,
                     dtype=torch.float32,
                     device=self.device,
                 ).unsqueeze(0)
                 if old_student_logprobs.shape[1] > response_token_count:
                     old_student_logprobs = old_student_logprobs[:, :response_token_count]
                 elif old_student_logprobs.shape[1] < response_token_count:
-                    raise ValueError("rollout_logprobs length must match response token length")
+                    raise ValueError("response_logprobs length must match response token length")
 
-                if config.teacher_mode == "remote":
-                    if sample.teacher_result is None:
-                        raise ValueError("teacher_mode='remote' requires teacher_result")
-                    teacher_logprobs, teacher_indices = parse_teacher_result(
-                        sample.teacher_result,
-                        str(self.device),
-                    )
-                else:
-                    teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
-                        sample.prompt,
-                        sample.feedback,
-                        response_ids,
-                        config.teacher_top_k,
-                    )
+                teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
+                    sample.user_prompt,
+                    sample.feedback,
+                    response_ids,
+                    config.teacher_top_k,
+                )
 
                 if teacher_logprobs.shape[0] != response_token_count:
                     raise ValueError("teacher logprob sequence length must match response length")
@@ -384,7 +375,6 @@ class DistillationTrainer:
                         "clip_fraction": clip_fraction,
                         "grad_norm": grad_norm_value,
                         "tokens_processed": tokens_processed,
-                        "teacher_mode": config.teacher_mode,
                         "batch_size": len(payload.samples),
                     },
                 }

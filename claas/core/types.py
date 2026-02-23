@@ -57,11 +57,6 @@ class TrainingConfig(BaseModel):
         le=100,
         description="Number of top logprobs to request from teacher",
     )
-    teacher_mode: Literal["self", "remote"] = Field(
-        default="self",
-        description="Teacher source: 'self' uses base model conditioned on feedback; "
-        "'remote' scores with TeacherService.",
-    )
 
 
 class SDPOLossInput(BaseModel):
@@ -98,67 +93,33 @@ class SDPOLossResult(TypedDict):
 # --- API Request/Response Models ---
 
 
-class DistillRequest(BaseModel):
-    """Request for a distillation step."""
-
-    lora_id: str = Field(
-        ...,
-        description="LoRA identifier (e.g., 'user123/coder-v1')",
-    )
-    prompt: str = Field(
-        ...,
-        min_length=1,
-        description="User prompt that generated the response",
-    )
-    response: str = Field(
-        ...,
-        min_length=1,
-        description="Student's response to learn from",
-    )
-    feedback: str = Field(
-        ...,
-        min_length=1,
-        description="Feedback about response quality",
-    )
-    rollout_logprobs: list[float] = Field(
-        ...,
-        min_length=1,
-        description="Log-probabilities from the inference server that generated the rollout.",
-    )
-    training: TrainingConfig = Field(
-        default_factory=TrainingConfig,
-        description="Training configuration",
-    )
-
-
-class TeacherTokenLogprobs(BaseModel):
-    """Top-k teacher token log-probabilities at one response position."""
-
-    indices: list[int]
-    logprobs: list[float]
-
-
-class DistillRequestPayload(BaseModel):
-    """Typed payload forwarded to the configured training engine."""
-
-    lora_id: str
-    prompt: str
-    response: str
-    feedback: str
-    rollout_logprobs: list[float]
-    training: TrainingConfig
-    teacher_result: list[TeacherTokenLogprobs] | None = None
-    save_in_place: bool = False
-
-
 class DistillBatchItem(BaseModel):
-    """One prompt/response/feedback sample used in batched distillation."""
+    """Cache-enriched training sample, constructed by the API feedback endpoint.
 
-    prompt: str
-    response: str
-    feedback: str
-    rollout_logprobs: list[float]
-    teacher_result: list[TeacherTokenLogprobs] | None = None
+    The API resolves a FeedbackItem against the completion cache to produce this.
+    FeedbackItem carries what the client knows (clean prompt, visible response,
+    feedback text); DistillBatchItem adds what training needs (token IDs,
+    logprobs) from the cached CompletionCacheEntry.
+
+    Fields sourced from CompletionCacheEntry:
+        prompt, response, response_logprobs, prompt_token_ids, response_token_ids
+    Fields sourced from FeedbackItem:
+        feedback, user_prompt
+    """
+
+    prompt: str = Field(description="Chat-template-decorated prompt text from the completion cache.")
+    response: str = Field(description="Raw model response text from the completion cache.")
+    feedback: str = Field(description="User's feedback text (from the client's FeedbackItem).")
+    response_logprobs: list[float] = Field(description="Per-token log-probabilities of the student rollout.")
+    prompt_token_ids: list[int] = Field(description="Tokenized prompt (chat template applied).")
+    response_token_ids: list[int] = Field(description="Tokenized response (no special token stripping).")
+    user_prompt: str = Field(
+        description=(
+            "Clean user prompt without chat-template decoration (from FeedbackItem.prompt). "
+            "Used by teacher prompt construction so the teacher sees the original question, "
+            "not a nested chat template."
+        ),
+    )
 
 
 class DistillBatchRequestPayload(BaseModel):
@@ -206,6 +167,46 @@ class LoraRuntimeRef(BaseModel):
 
 
 
+class FeedbackItem(BaseModel):
+    """Client-facing feedback request for one prompt/response pair.
+
+    This is the external API schema — the client sends this to POST /v1/feedback.
+    The API resolves each FeedbackItem against the completion cache (keyed by
+    a SHA-256 hash of the visible response text) to produce a DistillBatchItem
+    with token IDs and logprobs attached.
+    """
+
+    lora_id: str = Field(
+        ...,
+        description="LoRA identifier (e.g., 'user123/coder-v1')",
+    )
+    prompt: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Clean user prompt text (no chat-template decoration). "
+            "Becomes DistillBatchItem.user_prompt for teacher prompt construction."
+        ),
+    )
+    response: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Visible assistant response text. Used as the cache lookup key "
+            "(SHA-256 hash) to retrieve token IDs and logprobs."
+        ),
+    )
+    feedback: str = Field(
+        ...,
+        min_length=1,
+        description="User's feedback about response quality, forwarded to the teacher.",
+    )
+    training: TrainingConfig = Field(
+        default_factory=TrainingConfig,
+        description="Training configuration for this distillation step.",
+    )
+
+
 class FeedbackOrchestration(BaseModel):
     """Runtime orchestration options for feedback updates."""
 
@@ -218,7 +219,7 @@ class FeedbackOrchestration(BaseModel):
 class FeedbackBatchRequest(BaseModel):
     """Request for a feedback-triggered batched LoRA update."""
 
-    requests: list[DistillRequest] = Field(min_length=1)
+    requests: list[FeedbackItem] = Field(min_length=1)
     orchestration: FeedbackOrchestration = Field(default_factory=FeedbackOrchestration)
 
 
@@ -261,8 +262,7 @@ class FeedbackLogRecord(BaseModel):
     status: str
     phase: str
     lora_id: str
-    teacher_mode: str
-    requests: list[DistillRequest]
+    requests: list[FeedbackItem]
     vllm: FeedbackLogVllmState
     timing_ms: FeedbackTimingMs
     batch_samples: list[DistillBatchItem]
@@ -335,7 +335,6 @@ class HealthResponse(BaseModel):
 
     status: str
     worker: ServiceHealth | None = None
-    teacher: ServiceHealth | None = None
 
 
 # --- Inference Request Models ---
@@ -348,6 +347,24 @@ class ChatCompletionMessage(BaseModel):
     content: Any = ""
 
 
+class ScoreRequest(BaseModel):
+    """Request to score a completion by computing per-token logprobs."""
+
+    model: str
+    messages: list[ChatCompletionMessage]
+    completion: str
+
+
+class ScoreResponse(BaseModel):
+    """Response from scoring a completion."""
+
+    logprobs: list[float]
+    tokens: list[str]
+    prompt_tokens: int
+    completion_tokens: int
+    logprob_sum: float
+
+
 class ChatCompletionRequest(BaseModel):
     """OpenAI-compatible chat completion request."""
 
@@ -358,6 +375,8 @@ class ChatCompletionRequest(BaseModel):
     top_p: float | None = None
     stream: bool = False
     stop: list[str] | None = None
+    logprobs: bool = False
+    top_logprobs: int = 1
 
 
 class CompletionRequest(BaseModel):
@@ -375,6 +394,29 @@ class CompletionRequest(BaseModel):
 # --- Inference Response Models ---
 
 
+class TopLogprob(BaseModel):
+    """A single top logprob entry."""
+
+    token: str
+    logprob: float
+    bytes: list[int] | None = None
+
+
+class TokenLogprob(BaseModel):
+    """Logprob info for a single generated token."""
+
+    token: str
+    logprob: float
+    bytes: list[int] | None = None
+    top_logprobs: list[TopLogprob] = []
+
+
+class ChoiceLogprobs(BaseModel):
+    """Logprobs attached to a chat completion choice."""
+
+    content: list[TokenLogprob] = []
+
+
 class ChatCompletionChoiceMessage(BaseModel):
     """Message within a chat completion choice."""
 
@@ -388,6 +430,7 @@ class ChatCompletionChoice(BaseModel):
     index: int = 0
     message: ChatCompletionChoiceMessage
     finish_reason: str = "stop"
+    logprobs: ChoiceLogprobs | None = None
 
 
 class CompletionUsage(BaseModel):
@@ -428,10 +471,3 @@ class TextCompletionResponse(BaseModel):
     usage: CompletionUsage
 
 
-class RawCompletionResponse(BaseModel):
-    """Cached raw completion for the training pipeline."""
-
-    prompt: str
-    response: str
-    token_ids: list[int] | None = None
-    logprobs: list[float] | None = None

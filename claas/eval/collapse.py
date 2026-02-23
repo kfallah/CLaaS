@@ -70,7 +70,7 @@ from .types import (
     ChatMessage,
     CollapseMetrics,
     EvalRollout,
-    direct_vllm_chat_params,
+    claas_proxy_chat_params,
     openclaw_chat_params,
 )
 from .verifiers import strip_thinking
@@ -115,16 +115,14 @@ def rouge_l_score(text_a: str, text_b: str) -> float:
 
 
 async def measure_token_entropy(
-    vllm_url: str,
-    vllm_api_key: str,
+    claas_url: str,
     model: str,
     prompt: str = COLLAPSE_PROBE,
     timeout_s: float = 60.0,
 ) -> float | None:
     """Generate response with top_logprobs=20 and compute mean token entropy."""
     mean_entropy, _mean_logprob = await measure_entropy_and_mean_logprob(
-        vllm_url=vllm_url,
-        vllm_api_key=vllm_api_key,
+        claas_url=claas_url,
         model=model,
         prompt=prompt,
         timeout_s=timeout_s,
@@ -133,8 +131,7 @@ async def measure_token_entropy(
 
 
 async def measure_entropy_and_mean_logprob(
-    vllm_url: str,
-    vllm_api_key: str,
+    claas_url: str,
     model: str,
     prompt: str = COLLAPSE_PROBE,
     timeout_s: float = 60.0,
@@ -146,7 +143,7 @@ async def measure_entropy_and_mean_logprob(
     if openclaw_url:
         params = openclaw_chat_params(openclaw_url, openclaw_api_key, prompt)
     else:
-        params = direct_vllm_chat_params(vllm_url, vllm_api_key, model, prompt)
+        params = claas_proxy_chat_params(claas_url, model, prompt)
 
     async with httpx.AsyncClient(base_url=params.base_url, timeout=timeout_s) as client:
         resp = await client.post(
@@ -219,8 +216,7 @@ async def measure_entropy_and_mean_logprob(
 
 
 async def measure_self_rouge_l(
-    vllm_url: str,
-    vllm_api_key: str,
+    claas_url: str,
     model: str,
     prompt: str = COLLAPSE_PROBE,
     n_samples: int = 3,
@@ -233,7 +229,7 @@ async def measure_self_rouge_l(
     if openclaw_url:
         params = openclaw_chat_params(openclaw_url, openclaw_api_key, prompt)
     else:
-        params = direct_vllm_chat_params(vllm_url, vllm_api_key, model, prompt)
+        params = claas_proxy_chat_params(claas_url, model, prompt)
 
     responses = []
 
@@ -293,8 +289,7 @@ async def measure_self_rouge_l(
 
 
 async def measure_collapse(
-    vllm_url: str,
-    vllm_api_key: str,
+    claas_url: str,
     model: str,
     baseline_entropy: float | None = None,
     baseline_mean_logprob: float | None = None,
@@ -308,16 +303,14 @@ async def measure_collapse(
     when configured.
     """
     mean_entropy, mean_logprob = await measure_entropy_and_mean_logprob(
-        vllm_url=vllm_url,
-        vllm_api_key=vllm_api_key,
+        claas_url=claas_url,
         model=model,
         rollout_log=rollout_log,
         openclaw_url=openclaw_url,
         openclaw_api_key=openclaw_api_key,
     )
     self_rouge = await measure_self_rouge_l(
-        vllm_url,
-        vllm_api_key,
+        claas_url,
         model,
         rollout_log=rollout_log,
         openclaw_url=openclaw_url,

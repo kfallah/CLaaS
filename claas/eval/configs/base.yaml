@@ -4,8 +4,6 @@ defaults:
 
 mode: tinker
 claas_url: http://localhost:8080
-vllm_url: http://localhost:8000
-vllm_model_name: qwen3-8b
 base_model: Qwen/Qwen3-30B-A3B
 
 preferences:
@@ -30,4 +28,4 @@ seed: 42
 lora_id_prefix: eval
 output_dir: ./data/evals
 
-openclaw_url: null
+openclaw_url: http://localhost:18789

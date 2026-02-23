@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
     from fastapi.responses import Response
 
+    from claas.core.types import ChoiceLogprobs
+
 BackendKind = Literal["tinker", "local", "modal"]
 
 
@@ -20,8 +22,10 @@ class CompletionResult:
     content: str
     raw_prompt: str
     raw_response: str
-    token_ids: list[int] = field(default_factory=list)
-    logprobs: list[float] | None = None
+    response_token_ids: list[int] = field(default_factory=list)
+    prompt_token_ids: list[int] = field(default_factory=list)
+    response_logprobs: list[float] | None = None
+    logprobs_content: ChoiceLogprobs | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
@@ -33,6 +37,17 @@ class TextCompletionResult:
     text: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+
+
+@dataclass
+class ScoreResult:
+    """Result from scoring a completion by computing per-token logprobs."""
+
+    logprobs: list[float]
+    tokens: list[str]
+    prompt_tokens: int
+    completion_tokens: int
+    logprob_sum: float
 
 
 class InferenceBackend(ABC):
@@ -48,6 +63,8 @@ class InferenceBackend(ABC):
         temperature: float | None = None,
         top_p: float | None = None,
         stop: list[str] | None = None,
+        logprobs: bool = False,
+        top_logprobs: int = 1,
     ) -> CompletionResult:
         """Run a chat completion and return structured results."""
 
@@ -67,6 +84,16 @@ class InferenceBackend(ABC):
     @abstractmethod
     async def list_models(self) -> dict[str, object] | Response:
         """List available models."""
+
+    @abstractmethod
+    async def score(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        completion: str,
+    ) -> ScoreResult:
+        """Score a completion by computing per-token logprobs."""
 
     def register_routes(self, app: FastAPI) -> None:
         """Register backend-specific routes on the FastAPI app.

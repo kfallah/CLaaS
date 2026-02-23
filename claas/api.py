@@ -13,10 +13,9 @@ thinking) needed for self-distillation.
 Endpoints:
 - POST /v1/chat/completions: Chat completion (forwarded to inference backend)
 - POST /v1/completions: Text completion (forwarded to inference backend)
-- GET  /v1/completions/raw: Retrieve cached raw completion by content hash
+- POST /v1/score: Score a completion by computing per-token logprobs
 - GET  /v1/models: List available models
 - POST /v1/feedback: Run one online update transaction (primary endpoint)
-- POST /v1/distill: Run a single SDPO distillation step (low-level)
 - POST /v1/lora/init: Initialize a new LoRA adapter
 - GET  /v1/lora: List all LoRA adapters
 - GET  /v1/lora/export: Download a LoRA as a zip archive
@@ -53,7 +52,7 @@ import hydra
 import modal
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from omegaconf import OmegaConf
 
 from .core.config import (
@@ -73,8 +72,6 @@ from .core.types import (
     CompletionUsage,
     DistillBatchItem,
     DistillBatchRequestPayload,
-    DistillRequest,
-    DistillRequestPayload,
     DistillResponse,
     FeedbackBatchRequest,
     FeedbackLogRecord,
@@ -86,7 +83,8 @@ from .core.types import (
     LoraInitRequest,
     LoraInitResponse,
     LoraListResponse,
-    RawCompletionResponse,
+    ScoreRequest,
+    ScoreResponse,
     ServiceHealth,
     TextCompletionChoice,
     TextCompletionResponse,
@@ -97,6 +95,7 @@ from .inference.cache import CompletionCacheEntry, completion_cache
 from .inference.helpers import (
     coerce_content,
     extract_final_channel,
+    normalize_for_hash,
     stream_chat_response,
     stream_completion_response,
     strip_thinking,
@@ -109,7 +108,6 @@ from .training.storage import (
     configure_storage_root,
     lora_volume,
 )
-from .training.teacher_helpers import format_teacher_prompt
 
 logger = logging.getLogger(__name__)
 register_config_schemas()
@@ -174,11 +172,6 @@ def _get_engine_kind_from_cfg(cfg: CoreConfig) -> EngineKind:
 def _get_engine_kind() -> EngineKind:
     """Validate and return the configured engine kind."""
     return _get_engine_kind_from_cfg(_runtime_config())
-
-def _uses_modal_teacher() -> bool:
-    """Return whether API should fetch teacher scores from Modal TeacherService."""
-    return _get_engine_kind() == "modal"
-
 
 def _get_training_engine() -> TrainingEngine:
     """Build the configured training engine instance."""
@@ -462,7 +455,7 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
         metrics_json = json.dumps(metrics_payload, indent=2, sort_keys=True)
         vllm_json = json.dumps(record.vllm.model_dump(mode="json"), indent=2, sort_keys=True)
         error_value = record.error or ""
-        batch_size = len(record.requests)
+        batch_size = len(record.batch_samples)
         detail_row_id = f"feedback-detail-{idx}"
 
         # -- Batch summary row --
@@ -493,7 +486,7 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
 
         # -- Expandable detail row --
         sample_sections: list[str] = []
-        for item_index, req in enumerate(record.requests):
+        for item_index, sample in enumerate(record.batch_samples):
             sample_sections.append(
                 """
                 <details{open_attr}>
@@ -508,10 +501,10 @@ def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
                     open_attr=" open" if batch_size == 1 else "",
                     item_number=item_index + 1,
                     batch_size=batch_size,
-                    prompt_preview=html.escape(_feedback_prompt_preview(req.prompt, limit=80)),
-                    prompt=html.escape(req.prompt),
-                    response=html.escape(req.response),
-                    feedback=html.escape(req.feedback),
+                    prompt_preview=html.escape(_feedback_prompt_preview(sample.prompt, limit=80)),
+                    prompt=html.escape(sample.prompt),
+                    response=html.escape(sample.response),
+                    feedback=html.escape(sample.feedback),
                 )
             )
 
@@ -599,6 +592,8 @@ async def chat_completions(
         temperature=req.temperature,
         top_p=req.top_p,
         stop=req.stop,
+        logprobs=req.logprobs,
+        top_logprobs=req.top_logprobs,
     )
 
     # Strip thinking and channel tags from visible content
@@ -607,15 +602,16 @@ async def chat_completions(
 
     # Cache raw completion for training pipeline retrieval
     content_hash = hashlib.sha256(
-        strip_thinking(visible).encode("utf-8"),
+        normalize_for_hash(visible).encode("utf-8"),
     ).hexdigest()
     completion_cache.put(
         content_hash,
         CompletionCacheEntry(
             prompt=result.raw_prompt,
             response=result.raw_response,
-            token_ids=result.token_ids,
-            logprobs=result.logprobs,
+            response_token_ids=result.response_token_ids,
+            prompt_token_ids=result.prompt_token_ids,
+            response_logprobs=result.response_logprobs,
         ),
     )
 
@@ -625,15 +621,17 @@ async def chat_completions(
     if req.stream:
         return stream_chat_response(completion_id, created, req.model or "default", visible)
 
+    choice = ChatCompletionChoice(
+        message=ChatCompletionChoiceMessage(content=visible),
+    )
+    if req.logprobs and result.logprobs_content is not None:
+        choice.logprobs = result.logprobs_content
+
     return ChatCompletionResponse(
         id=completion_id,
         created=created,
         model=req.model or "default",
-        choices=[
-            ChatCompletionChoice(
-                message=ChatCompletionChoiceMessage(content=visible),
-            )
-        ],
+        choices=[choice],
         usage=CompletionUsage(
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -680,22 +678,6 @@ async def completions(
     )
 
 
-@web_app.get("/v1/completions/raw", response_model=None)
-async def get_raw_completion(content_hash: str) -> RawCompletionResponse | JSONResponse:
-    """Retrieve cached raw completion by SHA-256 hash of parsed content text."""
-    entry = completion_cache.get(content_hash)
-    if entry is None:
-        return JSONResponse(
-            status_code=404,
-            content={"error": "No cached completion found for this content hash"},
-        )
-    return RawCompletionResponse(
-        prompt=entry.prompt,
-        response=entry.response,
-        token_ids=entry.token_ids,
-        logprobs=entry.logprobs,
-    )
-
 
 @web_app.get("/v1/models", response_model=None)
 async def list_models(request: Request) -> dict[str, object] | Response:
@@ -704,78 +686,27 @@ async def list_models(request: Request) -> dict[str, object] | Response:
     return await backend.list_models()
 
 
+@web_app.post("/v1/score", response_model=ScoreResponse)
+async def score_completion(req: ScoreRequest, request: Request) -> ScoreResponse:
+    """Score a completion by computing per-token logprobs."""
+    backend = _get_inference_backend(request)
+    messages = [
+        {"role": m.role, "content": coerce_content(m.content)}
+        for m in req.messages
+    ]
+    result = await backend.score(model=req.model, messages=messages, completion=req.completion)
+    return ScoreResponse(
+        logprobs=result.logprobs,
+        tokens=result.tokens,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        logprob_sum=result.logprob_sum,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Training API endpoints
 # ---------------------------------------------------------------------------
-
-
-@web_app.post("/v1/distill", response_model=DistillResponse)
-async def distill(request: DistillRequest) -> DistillResponse:
-    """Run a single SDPO distillation step.
-
-    This endpoint:
-    1. Loads the user's LoRA from local storage (or Modal Volume in modal mode)
-    2. Runs the student model forward pass
-    3. Gets teacher logprobs from configured source
-       - self (default): base model conditioned on feedback
-       - remote: vLLM TeacherService
-    4. Computes SDPO loss (JSD-based policy gradient)
-    5. Updates LoRA parameters
-    6. Saves the updated LoRA back to local storage (or Modal Volume in modal mode)
-
-    Returns the new LoRA ID and training metrics.
-    """
-    try:
-        exists_payload = await _get_training_engine().lora_exists(request.lora_id)
-        if not exists_payload.exists:
-            raise HTTPException(
-                status_code=404,
-                detail=f"LoRA not found: {request.lora_id}",
-            )
-
-        single_payload = DistillRequestPayload.model_validate(request.model_dump())
-        payload = DistillBatchRequestPayload(
-            lora_id=single_payload.lora_id,
-            training=single_payload.training,
-            save_in_place=single_payload.save_in_place,
-            samples=[
-                DistillBatchItem(
-                    prompt=single_payload.prompt,
-                    response=single_payload.response,
-                    feedback=single_payload.feedback,
-                    rollout_logprobs=single_payload.rollout_logprobs,
-                    teacher_result=single_payload.teacher_result,
-                )
-            ],
-        )
-
-        # Remote teacher is optional; self-distillation is the default path.
-        if request.training.teacher_mode == "remote" and _uses_modal_teacher():
-            teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-            teacher_prompt = format_teacher_prompt(request.prompt, request.feedback)
-            teacher_scored = await teacher_score_fn.remote.aio(
-                prompts=[teacher_prompt],
-                completions=[request.response],
-                top_k=request.training.teacher_top_k,
-            )
-            if not teacher_scored or not teacher_scored[0]:
-                raise HTTPException(
-                    status_code=502,
-                    detail="Remote teacher returned empty scores",
-                )
-            payload.samples[0] = payload.samples[0].model_copy(update={"teacher_result": teacher_scored[0]})
-
-        result = await _run_distill(payload)
-
-        return result
-
-    except HTTPException:
-        raise
-    except (ValueError, RuntimeError, OSError) as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Distillation failed: {str(e)}",
-        ) from e
 
 
 @web_app.post("/v1/feedback", response_model=FeedbackResponse)
@@ -805,6 +736,35 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
         if req.training.model_dump(mode="json") != training_ref:
             raise HTTPException(status_code=400, detail="all requests must use the same training config")
 
+    # Resolve cache entries before acquiring lock or doing orchestration.
+    batch_samples: list[DistillBatchItem] = []
+    for req in batch_requests:
+        content_hash = hashlib.sha256(
+            normalize_for_hash(req.response).encode("utf-8"),
+        ).hexdigest()
+        entry = completion_cache.get(content_hash)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No cached completion for content_hash={content_hash[:16]}…",
+            )
+        if entry.response_logprobs is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Cached completion has no logprobs (content_hash={content_hash[:16]}…)",
+            )
+        batch_samples.append(
+            DistillBatchItem(
+                prompt=entry.prompt,
+                response=entry.response,
+                feedback=req.feedback,
+                response_logprobs=entry.response_logprobs,
+                prompt_token_ids=entry.prompt_token_ids,
+                response_token_ids=entry.response_token_ids,
+                user_prompt=req.prompt,
+            )
+        )
+
     try:
         exists_payload = await _get_training_engine().lora_exists(lora_id)
         if not exists_payload.exists:
@@ -817,17 +777,6 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
         await asyncio.wait_for(lock.acquire(), timeout=lock_timeout)
 
         try:
-            batch_samples: list[DistillBatchItem] = []
-            for req in batch_requests:
-                batch_samples.append(
-                    DistillBatchItem(
-                        prompt=req.prompt,
-                        response=req.response,
-                        feedback=req.feedback,
-                        rollout_logprobs=req.rollout_logprobs,
-                    )
-                )
-
             if request.orchestration.sleep_before and _get_engine_kind() != "tinker":
                 phase = "drain"
                 try:
@@ -854,33 +803,23 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                 save_in_place=True,
             )
 
-            if first_request.training.teacher_mode == "remote" and _uses_modal_teacher():
-                teacher_score_fn = modal.Function.from_name("claas-distill", "TeacherService.score_tokens")
-                teacher_scored = await teacher_score_fn.remote.aio(
-                    prompts=[format_teacher_prompt(s.prompt, s.feedback) for s in batch_samples],
-                    completions=[s.response for s in batch_samples],
-                    top_k=first_request.training.teacher_top_k,
-                )
-                if not teacher_scored or len(teacher_scored) != len(batch_samples):
-                    raise HTTPException(status_code=502, detail="Remote teacher returned invalid scores")
-                payload.samples = [
-                    sample_item.model_copy(update={"teacher_result": teacher_scored[idx]})
-                    for idx, sample_item in enumerate(payload.samples)
-                ]
-
             distill_result = await _run_distill(payload)
             timing_ms.distill = int((time.perf_counter() - distill_start) * 1000)
 
+            # Always reload LoRA so vLLM picks up new weights
+            if _get_engine_kind() not in {"tinker"}:
+                await _vllm_reload_lora(lora_id)
+
+            # Resume vLLM from sleep (separate concern — GPU memory management)
             if request.orchestration.wake_after and _get_engine_kind() != "tinker":
                 phase = "wake"
                 wake_start = time.perf_counter()
                 await _vllm_post("/resume")
-                await _vllm_reload_lora(lora_id)
                 timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
                 woke = True
 
             if _get_engine_kind() == "tinker" and distill_result is not None:
-                sampler_path = (distill_result.metadata or {}).get("sampler_weights_path")
+                sampler_path = distill_result.metadata.get("sampler_weights_path")
                 if sampler_path:
                     phase = "wake"
                     wake_start = time.perf_counter()
@@ -931,19 +870,10 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             status="ok" if error_message is None else "error",
             phase=phase,
             lora_id=lora_id,
-            teacher_mode=first_request.training.teacher_mode,
             requests=batch_requests,
             vllm=FeedbackLogVllmState(slept=slept, woke=woke),
             timing_ms=timing_ms,
-            batch_samples=[
-                DistillBatchItem(
-                    prompt=req.prompt,
-                    response=req.response,
-                    feedback=req.feedback,
-                    rollout_logprobs=req.rollout_logprobs,
-                )
-                for req in batch_requests
-            ],
+            batch_samples=batch_samples,
             distill_result=distill_result,
             error=error_message,
         )
@@ -977,7 +907,13 @@ async def init_lora(request: LoraInitRequest) -> LoraInitResponse:
         _validate_init_base_model(request.base_model)
 
     try:
-        return await _get_training_engine().init_lora(request)
+        result = await _get_training_engine().init_lora(request)
+        if _get_engine_kind() in {"local", "modal"}:
+            try:
+                await _vllm_reload_lora(result.lora_id)
+            except Exception:
+                logger.warning("Failed to load LoRA into vLLM after init", exc_info=True)
+        return result
     except (ValueError, RuntimeError, OSError, httpx.HTTPError) as e:
         raise HTTPException(
             status_code=500,
@@ -1056,18 +992,7 @@ async def health_check() -> HealthResponse:
         worker = ServiceHealth(status="unhealthy", error=str(e))
         status = "degraded"
 
-    if _uses_modal_teacher():
-        try:
-            teacher_health_fn = modal.Function.from_name("claas-distill", "TeacherService.health_check")
-            data = await asyncio.wait_for(teacher_health_fn.remote.aio(), timeout=15)
-            teacher = ServiceHealth.model_validate(data)
-        except (asyncio.TimeoutError, ConnectionError, OSError, ValueError, RuntimeError) as e:
-            teacher = ServiceHealth(status="unhealthy", error=str(e))
-            status = "degraded"
-    else:
-        teacher = ServiceHealth(status="healthy", error=None)
-
-    return HealthResponse(status=status, worker=worker, teacher=teacher)
+    return HealthResponse(status=status, worker=worker)
 
 
 @web_app.get("/v1/dashboard", response_class=HTMLResponse)

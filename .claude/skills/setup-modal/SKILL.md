@@ -13,7 +13,7 @@ When this skill is invoked, perform the following steps:
 
 1. **Deploy the Modal app**:
    ```bash
-   modal deploy -m claas.deploy
+   modal deploy -m claas.modal.deploy
    ```
 
 2. **Extract the endpoint URL** from the deployment output (look for the line with the FastAPI endpoint URL)
@@ -26,9 +26,8 @@ When this skill is invoked, perform the following steps:
 ## Deployed Services
 
 The deployment includes:
-- **DistillWorker**: L40S GPU worker with Qwen3-8B student model
-- **TeacherService**: H100 GPU worker with Qwen3-Coder-30B-A3B teacher model (vLLM)
-- **FastAPI endpoint**: REST API for distillation requests
+- **DistillWorker**: L40S GPU worker with Qwen3-8B student model (self-distillation)
+- **FastAPI endpoint**: REST API for feedback and distillation requests
 
 ## Health Check
 

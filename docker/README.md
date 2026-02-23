@@ -101,11 +101,12 @@ curl http://localhost:8080/v1/lora
 curl -X POST http://localhost:8080/v1/feedback \
   -H "Content-Type: application/json" \
   -d '{
-    "lora_id": "openclaw/assistant-latest",
-    "prompt": "hi",
-    "response": "hello",
-    "feedback": "good",
-    "training": {"teacher_mode": "self"}
+    "requests": [{
+      "lora_id": "openclaw/assistant-latest",
+      "prompt": "hi",
+      "response": "hello",
+      "feedback": "good"
+    }]
   }'
 ```
 

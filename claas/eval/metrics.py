@@ -61,8 +61,7 @@ class LogprobMetric:
         margins: list[LogprobMargin] = []
         for pair in ctx.pref.logprob_pairs:
             margin = await measure_logprob_margin(
-                ctx.vllm_url, ctx.vllm_api_key, ctx.vllm_model, pair, baseline_margin,
-                mode=ctx.mode,
+                ctx.claas_url, ctx.model, pair, baseline_margin,
                 use_default_system_prompt=ctx.openclaw_url is None,
             )
             margins.append(margin)
@@ -130,9 +129,8 @@ class GeneralMetric:
         try:
             rollout_log: list[EvalRollout] = []
             metrics.general = await evaluate_general_capability(
-                ctx.vllm_url,
-                ctx.vllm_api_key,
-                ctx.vllm_model,
+                ctx.claas_url,
+                ctx.model,
                 rollout_log=rollout_log,
                 openclaw_url=ctx.openclaw_url,
                 openclaw_api_key=ctx.openclaw_api_key,
@@ -157,7 +155,7 @@ class CollapseMetric:
         try:
             rollout_log: list[EvalRollout] = []
             metrics.collapse = await measure_collapse(
-                ctx.vllm_url, ctx.vllm_api_key, ctx.vllm_model,
+                ctx.claas_url, ctx.model,
                 baseline_entropy=baseline_entropy,
                 baseline_mean_logprob=baseline_mean_logprob,
                 rollout_log=rollout_log,

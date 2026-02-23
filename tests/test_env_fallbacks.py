@@ -40,14 +40,6 @@ def _reload(module_name: str):
     return importlib.import_module(module_name)
 
 
-def test_teacher_service_import_allows_missing_secret(monkeypatch) -> None:
-    monkeypatch.delenv("CLAAS_HF_SECRET_NAME", raising=False)
-
-    teacher_service = _reload("claas.modal.teacher_service")
-
-    assert teacher_service.teacher_secrets == []
-
-
 def test_worker_import_allows_missing_tokens_and_model_env(monkeypatch) -> None:
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("CLAAS_BASE_MODEL_ID", raising=False)

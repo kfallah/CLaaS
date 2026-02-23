@@ -6,10 +6,8 @@ which brings up and tears down the Docker stack automatically.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import re
 import uuid
 from typing import TYPE_CHECKING
 
@@ -18,47 +16,12 @@ import pytest
 
 from claas.training.teacher_helpers import build_teacher_messages
 
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
-
 if TYPE_CHECKING:
     from conftest import TinkerStack
 
 pytestmark = pytest.mark.integration
 
 logger = logging.getLogger(__name__)
-
-
-def _fetch_raw_completion(
-    client: httpx.Client,
-    claas_url: str,
-    response_content: str,
-) -> tuple[str, list[float]]:
-    """Fetch raw completion text and rollout logprobs from the API cache.
-
-    Mirrors the OpenClaw feedback plugin: hash the parsed content, hit
-    ``/v1/completions/raw``, and return ``(raw_text, logprobs)``.
-
-    Returns the raw response and logprobs as-is from the API cache.
-    """
-    visible = _THINK_RE.sub("", response_content)
-    idx = visible.find("</think>")
-    if idx >= 0:
-        visible = visible[idx + len("</think>"):]
-    visible = visible.strip()
-    content_hash = hashlib.sha256(visible.encode("utf-8")).hexdigest()
-    resp = client.get(
-        f"{claas_url}/v1/completions/raw",
-        params={"content_hash": content_hash},
-        timeout=15.0,
-    )
-    assert resp.status_code == 200, (
-        f"Failed to fetch raw completion (hash={content_hash[:12]}…): {resp.text}"
-    )
-    data = resp.json()
-    logprobs = data["logprobs"]
-    assert logprobs is not None, "API returned null logprobs"
-
-    return data["response"], logprobs
 
 
 # ---------------------------------------------------------------------------
@@ -170,16 +133,9 @@ class TestTinkerStackRoundTrip:
                 assert len(response_content) > 0
                 logger.info("Model response: %s", response_content)
 
-                # 3b. Fetch raw response + rollout logprobs from API cache
-                raw_response, rollout_logprobs = _fetch_raw_completion(
-                    client, claas_url, response_content,
-                )
-                logger.info(
-                    "Fetched %d rollout logprobs from API cache",
-                    len(rollout_logprobs),
-                )
-
                 # 4. Distill via feedback endpoint (teacher_mode=self)
+                #    The API resolves prompt, response, and logprobs from
+                #    the completion cache by hashing the response text.
                 teacher_messages = build_teacher_messages(user_prompt, feedback_text)
                 logger.info(
                     "Teacher messages (built by engine for self-distillation):\n%s",
@@ -191,10 +147,9 @@ class TestTinkerStackRoundTrip:
                         {
                             "lora_id": lora_id,
                             "prompt": user_prompt,
-                            "response": raw_response,
+                            "response": response_content,
                             "feedback": feedback_text,
-                            "rollout_logprobs": rollout_logprobs,
-                            "training": {"teacher_mode": "self"},
+                            "training": {},
                         },
                     ],
                     "orchestration": {

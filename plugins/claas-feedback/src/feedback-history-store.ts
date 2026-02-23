@@ -6,7 +6,6 @@ export interface FeedbackHistoryEntry {
   prompt: string;
   response: string;
   feedback: string;
-  rollout_logprobs: number[] | null;
   timestamp: number;
 }
 
@@ -23,13 +22,11 @@ export function appendFeedback(
   prompt: string,
   response: string,
   feedback: string,
-  rolloutLogprobs: number[] | null,
 ): { pendingSize: number } {
   const entry: FeedbackHistoryEntry = {
     prompt,
     response,
     feedback,
-    rollout_logprobs: rolloutLogprobs,
     timestamp: Date.now(),
   };
 
