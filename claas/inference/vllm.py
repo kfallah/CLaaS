@@ -137,7 +137,9 @@ class VllmBackend(InferenceBackend):
                 content, add_special_tokens=False,
             )
         else:
-            raw_prompt = content
+            raw_prompt = "\n".join(
+                f"{m['role']}: {m['content']}" for m in messages_dicts
+            )
             prompt_token_ids = []
             response_token_ids = []
 
