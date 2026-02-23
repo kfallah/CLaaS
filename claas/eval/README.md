@@ -77,7 +77,6 @@ Secrets are resolved from env vars at runtime, NOT stored in config:
 |---|---|---|
 | `CLAAS_TINKER_API_KEY` | Tinker mode | Tinker SDK authentication |
 | `OPENCLAW_GATEWAY_TOKEN` | When `openclaw_url` is set | Auth token for OpenClaw gateway |
-| `GEMINI_API_KEY` | `general` metric | Gemini-based capability evaluation |
 
 ## Running (Tinker mode, no GPU)
 
@@ -120,14 +119,6 @@ Select metrics with the `metrics` list in config or via override.
 | `compliance` | Generates responses to probe prompts, runs a programmatic verifier (e.g. emoji count, sentence count, keyword presence), and averages the pass rate. |
 | `general` | Coding task (fibonacci, exec + verify) + 3 IFEval-style instruction-following probes. Measures capability retention during training. |
 | `collapse` | Three collapse detectors: **token entropy** (distribution confidence), **self-ROUGE-L** (output diversity across stochastic samples), and **logprob drift** (mean logprob shift from baseline). |
-
-### Collapse thresholds
-
-| Signal | Alert threshold | What it means |
-|---|---|---|
-| Entropy ratio | < 0.6 | Token distribution > 40% narrower than baseline |
-| Self-ROUGE-L | > 0.85 | Stochastic samples are nearly identical |
-| Logprob drift | > 2.0 nats | ~7x change in mean token probability from baseline |
 
 ### Preferences (YAML-based)
 
