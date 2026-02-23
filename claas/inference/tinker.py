@@ -17,8 +17,9 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from claas.core.config import TinkerConfig
+from claas.core.types import ScoreResponse
 
-from .base import CompletionResult, InferenceBackend, ScoreResult, TextCompletionResult
+from .base import CompletionResult, InferenceBackend, TextCompletionResult
 from .helpers import apply_chat_template_ids, bounded_float, bounded_int, coerce_content
 
 if TYPE_CHECKING:
@@ -293,7 +294,7 @@ class TinkerBackend(InferenceBackend):
         model: str,  # noqa: ARG002 — Tinker uses its current sampler implicitly
         messages: list[dict[str, str]],
         completion: str,
-    ) -> ScoreResult:
+    ) -> ScoreResponse:
         import tinker.types as T  # noqa: N812
 
         tokenizer = self._holder.tokenizer
@@ -316,7 +317,7 @@ class TinkerBackend(InferenceBackend):
         completion_token_ids = full_token_ids[len(prompt_token_ids):]
 
         if len(completion_token_ids) == 0:
-            return ScoreResult(
+            return ScoreResponse(
                 logprobs=[],
                 tokens=[],
                 prompt_tokens=len(prompt_token_ids),
@@ -339,7 +340,7 @@ class TinkerBackend(InferenceBackend):
             tokenizer.decode([tid]) for tid in completion_token_ids
         ]
 
-        return ScoreResult(
+        return ScoreResponse(
             logprobs=completion_logprobs,
             tokens=completion_tokens_str,
             prompt_tokens=len(prompt_token_ids),

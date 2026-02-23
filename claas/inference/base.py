@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
     from fastapi.responses import Response
 
-    from claas.core.types import ChoiceLogprobs
+    from claas.core.types import ChoiceLogprobs, ScoreResponse
 
 BackendKind = Literal["tinker", "local", "modal"]
 
@@ -37,17 +37,6 @@ class TextCompletionResult:
     text: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
-
-
-@dataclass
-class ScoreResult:
-    """Result from scoring a completion by computing per-token logprobs."""
-
-    logprobs: list[float]
-    tokens: list[str]
-    prompt_tokens: int
-    completion_tokens: int
-    logprob_sum: float
 
 
 class InferenceBackend(ABC):
@@ -92,7 +81,7 @@ class InferenceBackend(ABC):
         model: str,
         messages: list[dict[str, str]],
         completion: str,
-    ) -> ScoreResult:
+    ) -> ScoreResponse:
         """Score a completion by computing per-token logprobs."""
 
     def register_routes(self, app: FastAPI) -> None:
