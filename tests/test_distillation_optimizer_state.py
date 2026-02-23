@@ -6,7 +6,12 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from claas.training.distillation import DistillationTrainer  # noqa: E402
+from claas.training.cache import LoraAdapterConfig, LoraCacheEntry  # noqa: E402
+from claas.training.distillation import (  # noqa: E402
+    DistillationTrainer,
+    _cpu_optimizer_state,
+    _gpu_optimizer_state,
+)
 
 
 class _SimpleLoraModel(torch.nn.Module):
@@ -90,3 +95,81 @@ def test_optimizer_state_missing_gracefully_skips(trainer: DistillationTrainer, 
     trainer._load_optimizer_state(str(tmp_path), optimizer)
 
     assert len(optimizer.state) == 0
+
+
+def test_cpu_optimizer_state_moves_tensors_to_cpu() -> None:
+    """_cpu_optimizer_state produces a state dict with all tensors on CPU."""
+    model = _SimpleLoraModel()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    loss = model.first.sum()
+    loss.backward()
+    optimizer.step()
+
+    original = optimizer.state_dict()
+    cpu_state = _cpu_optimizer_state(original)
+
+    for param_state in cpu_state["state"].values():
+        for v in param_state.values():
+            if isinstance(v, torch.Tensor):
+                assert v.device == torch.device("cpu")
+
+
+def test_cpu_gpu_optimizer_state_roundtrip() -> None:
+    """_cpu_optimizer_state / _gpu_optimizer_state round-trip preserves values."""
+    model = _SimpleLoraModel()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    loss = model.first.sum()
+    loss.backward()
+    optimizer.step()
+
+    original = optimizer.state_dict()
+    cpu_state = _cpu_optimizer_state(original)
+    roundtripped = _gpu_optimizer_state(cpu_state, torch.device("cpu"))
+
+    # Step counts match
+    for param_id in original["state"]:
+        assert roundtripped["state"][param_id]["step"] == original["state"][param_id]["step"]
+
+    # Tensor values match
+    for param_id in original["state"]:
+        for key in ("exp_avg", "exp_avg_sq"):
+            orig_tensor = original["state"][param_id][key]
+            rt_tensor = roundtripped["state"][param_id][key]
+            assert torch.equal(orig_tensor, rt_tensor)
+
+
+def test_cpu_optimizer_state_does_not_mutate_original() -> None:
+    """_cpu_optimizer_state deep-copies — mutating the copy leaves the original intact."""
+    model = _SimpleLoraModel()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    loss = model.first.sum()
+    loss.backward()
+    optimizer.step()
+
+    original = optimizer.state_dict()
+    original_exp_avg = original["state"][0]["exp_avg"].clone()
+
+    cpu_state = _cpu_optimizer_state(original)
+    # Mutate the copy
+    cpu_state["state"][0]["exp_avg"].zero_()
+
+    # Original is unchanged
+    assert torch.equal(original["state"][0]["exp_avg"], original_exp_avg)
+
+
+def test_lora_cache_entry_is_frozen() -> None:
+    """LoraCacheEntry is immutable — attribute assignment raises."""
+    entry = LoraCacheEntry(
+        lora_state_dict={"w": torch.zeros(2)},
+        optimizer_state_dict={"state": {}, "param_groups": []},
+        adapter_config=LoraAdapterConfig(
+            r=8,
+            lora_alpha=16,
+            target_modules=["q_proj"],
+            lora_dropout=0.0,
+            bias="none",
+            task_type="CAUSAL_LM",
+        ),
+    )
+    with pytest.raises(AttributeError):
+        entry.lora_state_dict = {}  # type: ignore[misc]

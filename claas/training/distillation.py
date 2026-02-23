@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -11,6 +12,11 @@ from typing import TYPE_CHECKING, cast
 import torch
 
 from claas.core.types import DistillBatchRequestPayload, DistillResponse, SDPOLossInput
+from claas.training.cache import (
+    DistillStepResult,
+    LoraAdapterConfig,
+    LoraCacheEntry,
+)
 from claas.training.sdpo_loss import compute_sdpo_loss
 from claas.training.storage import (
     cleanup_local_lora,
@@ -32,6 +38,51 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _cpu_optimizer_state(state_dict: dict[str, object]) -> dict[str, object]:
+    """Deep-copy optimizer state with all tensors moved to CPU."""
+    result: dict[str, object] = {}
+    for key, value in state_dict.items():
+        if key == "state":
+            param_states = cast("dict[int, dict[str, object]]", value)
+            cpu_states: dict[int, dict[str, object]] = {}
+            for param_id, param_state in param_states.items():
+                cpu_param: dict[str, object] = {}
+                for k, v in param_state.items():
+                    if isinstance(v, torch.Tensor):
+                        cpu_param[k] = v.detach().cpu().clone()
+                    else:
+                        cpu_param[k] = copy.deepcopy(v)
+                cpu_states[param_id] = cpu_param
+            result[key] = cpu_states
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
+def _gpu_optimizer_state(
+    state_dict: dict[str, object],
+    device: torch.device,
+) -> dict[str, object]:
+    """Deep-copy optimizer state with all tensors moved to a target device."""
+    result: dict[str, object] = {}
+    for key, value in state_dict.items():
+        if key == "state":
+            param_states = cast("dict[int, dict[str, object]]", value)
+            gpu_states: dict[int, dict[str, object]] = {}
+            for param_id, param_state in param_states.items():
+                gpu_param: dict[str, object] = {}
+                for k, v in param_state.items():
+                    if isinstance(v, torch.Tensor):
+                        gpu_param[k] = v.detach().to(device).clone()
+                    else:
+                        gpu_param[k] = copy.deepcopy(v)
+                gpu_states[param_id] = gpu_param
+            result[key] = gpu_states
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
 
 
 class DistillationTrainer:
@@ -86,6 +137,10 @@ class DistillationTrainer:
         self.optimizer_cls = torch.optim.AdamW
         self.functional = torch.nn.functional
 
+    def reload_base_model(self) -> None:
+        """Move base model from CPU back to CUDA."""
+        self.base_model.to(self.device)  # type: ignore[arg-type]  # functools.wraps confuses ty
+
     def offload_base_model(self) -> None:
         """Move base model to CPU and release CUDA memory."""
 
@@ -128,6 +183,33 @@ class DistillationTrainer:
             task_type=config_dict["task_type"],
         )
         return get_peft_model(self.base_model, lora_config)
+
+    def _load_lora_from_cache(
+        self,
+        cached: LoraCacheEntry,
+    ) -> "PeftModel | PeftMixedModel":
+        """Restore a LoRA adapter from a CPU cache entry.
+
+        Args:
+            cached: CPU-resident snapshot of adapter state.
+
+        Returns:
+            Trainable PEFT model with cached weights loaded.
+        """
+        from peft import LoraConfig, get_peft_model, set_peft_model_state_dict
+
+        cfg = cached.adapter_config
+        lora_config = LoraConfig(
+            r=cfg.r,
+            lora_alpha=cfg.lora_alpha,
+            target_modules=cfg.target_modules,
+            lora_dropout=cfg.lora_dropout,
+            bias=cfg.bias,
+            task_type=cfg.task_type,
+        )
+        model = get_peft_model(self.base_model, lora_config)
+        set_peft_model_state_dict(model, cached.lora_state_dict)
+        return model
 
     def _load_optimizer_state(
         self,
@@ -213,14 +295,58 @@ class DistillationTrainer:
         torch.cuda.empty_cache()
         return top_logprobs, top_indices
 
-    def distill(self, payload: DistillBatchRequestPayload) -> DistillResponse:
+    def _build_cache_entry(
+        self,
+        model: "PeftModel | PeftMixedModel",
+        optimizer: "torch.optim.Optimizer",
+    ) -> LoraCacheEntry:
+        """Snapshot current model + optimizer state into a CPU-resident cache entry."""
+        from peft import PeftModel as PeftModelCls
+
+        peft_config = model.peft_config["default"]
+        adapter_config = LoraAdapterConfig(
+            r=peft_config.r,
+            lora_alpha=peft_config.lora_alpha,
+            target_modules=list(peft_config.target_modules),
+            lora_dropout=peft_config.lora_dropout,
+            bias=peft_config.bias,
+            task_type=peft_config.task_type,
+        )
+
+        # Determine state dict — use PEFT's adapter-only extraction if available
+        if isinstance(model, PeftModelCls):
+            from peft import get_peft_model_state_dict
+
+            raw_state = get_peft_model_state_dict(model)
+        else:
+            raw_state = model.state_dict()
+
+        lora_state = {k: v.detach().cpu().clone() for k, v in raw_state.items()}
+        opt_state = _cpu_optimizer_state(optimizer.state_dict())
+
+        return LoraCacheEntry(
+            lora_state_dict=lora_state,
+            optimizer_state_dict=opt_state,
+            adapter_config=adapter_config,
+        )
+
+    def distill(
+        self,
+        payload: DistillBatchRequestPayload,
+        *,
+        cached: LoraCacheEntry | None = None,
+    ) -> DistillStepResult:
         """Run one SDPO distillation step.
 
         Args:
             payload: Distillation request payload.
+            cached: When provided, skip disk reads and load LoRA + optimizer
+                state from this CPU-resident cache entry. When ``None``,
+                load from disk (cold start).
 
         Returns:
-            Distillation response with metrics.
+            Result containing both the distillation response and a cache
+            entry for the post-step state.
         """
 
         torch.cuda.empty_cache()
@@ -231,10 +357,18 @@ class DistillationTrainer:
         if len(payload.samples) == 0:
             raise ValueError("samples must contain at least one item")
 
-        lora_local_path = load_lora(payload.lora_id)
+        # Disk path (cold start) or cache path
+        lora_local_path: str | None = None
+        if cached is None:
+            lora_local_path = load_lora(payload.lora_id)
+
         try:
             try:
-                model = self._load_or_create_lora(lora_local_path)
+                if cached is not None:
+                    model = self._load_lora_from_cache(cached)
+                else:
+                    assert lora_local_path is not None
+                    model = self._load_or_create_lora(lora_local_path)
                 model.train()
                 model.gradient_checkpointing_enable(
                     gradient_checkpointing_kwargs={"use_reentrant": False},
@@ -249,7 +383,13 @@ class DistillationTrainer:
                 betas=(0.9, 0.999),
                 weight_decay=0.01,
             )
-            self._load_optimizer_state(lora_local_path, optimizer)
+
+            if cached is not None:
+                optimizer.load_state_dict(
+                    _gpu_optimizer_state(cached.optimizer_state_dict, self.device)
+                )
+            elif lora_local_path is not None:
+                self._load_optimizer_state(lora_local_path, optimizer)
 
             batch_loss_tensors: list[torch.Tensor] = []
             batch_distill_loss: list[float] = []
@@ -362,10 +502,12 @@ class DistillationTrainer:
             clip_fraction = sum(batch_clip_fraction) / len(batch_clip_fraction)
             grad_norm_value = grad_norm.item() if hasattr(grad_norm, "item") else float(grad_norm)
 
+            cache_entry = self._build_cache_entry(model, optimizer)
+
             del model, optimizer, batch_loss_tensors
             torch.cuda.empty_cache()
 
-            return DistillResponse.model_validate(
+            response = DistillResponse.model_validate(
                 {
                     "lora_id": new_lora_id,
                     "metadata": {
@@ -380,5 +522,7 @@ class DistillationTrainer:
                     },
                 }
             )
+            return DistillStepResult(response=response, cache_entry=cache_entry)
         finally:
-            cleanup_local_lora(lora_local_path)
+            if lora_local_path is not None:
+                cleanup_local_lora(lora_local_path)
