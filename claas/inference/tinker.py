@@ -347,6 +347,11 @@ class TinkerBackend(InferenceBackend):
             logprob_sum=sum(completion_logprobs),
         )
 
+    def refresh_sampler(self, model_path: str) -> None:
+        """Refresh the sampling client to a new checkpoint."""
+        self._holder.refresh(model_path=model_path)
+        logger.info("Tinker sampler refreshed to checkpoint: %s", model_path)
+
     def register_routes(self, app: FastAPI) -> None:
         """Register Tinker-specific endpoints: refresh, status."""
         def _current_backend() -> TinkerBackend:
