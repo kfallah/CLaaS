@@ -217,7 +217,7 @@ def load_optimizer_state(lora_dir: str) -> dict[str, object]:
     if not os.path.exists(state_path):
         raise FileNotFoundError(f"Optimizer state not found: {state_path}")
 
-    state = torch.load(state_path, map_location="cpu")
+    state = torch.load(state_path, map_location="cpu", weights_only=True)
     if not isinstance(state, dict):
         raise ValueError("optimizer state must be a dictionary")
     if "state" not in state:

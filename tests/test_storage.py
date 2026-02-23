@@ -380,10 +380,6 @@ class TestLoraAliases:
         assert (lora_dir / "adapter_config.json").exists()
         assert "user/model-latest" not in storage._read_aliases()
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
-
-
 class TestOptimizerStateArtifacts:
     """Tests for optimizer state persistence through storage operations."""
 
@@ -478,3 +474,7 @@ class TestOptimizerStateArtifacts:
             assert (Path(loaded_dir) / "optimizer_state.pt").read_bytes() == b"optim-state-v2"
         finally:
             storage.cleanup_local_lora(loaded_dir)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
