@@ -66,13 +66,14 @@ import math
 
 import httpx
 
-from .types import (
-    ChatMessage,
+from claas.core.types import ChatMessage
+from claas.eval.types import (
     CollapseMetrics,
     EvalRollout,
     claas_proxy_chat_params,
     openclaw_chat_params,
 )
+
 from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)

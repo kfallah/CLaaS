@@ -19,8 +19,7 @@ from claas.core.types import (
     FeedbackOrchestration,
 )
 
-from .logprob import derive_model_name
-from .metrics import Metric, build_metrics
+from .metrics import Metric, build_metrics, derive_model_name
 from .plotting import generate_plots
 from .preferences import PreferenceConfig, get_preference_configs
 from .types import (

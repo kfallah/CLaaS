@@ -2,7 +2,7 @@ name: concise
 feedback_string: "Be more concise, keep responses under 3 sentences"
 
 verifier:
-  _target_: claas.eval.verifiers.ConciseVerifier
+  _target_: claas.eval.metrics.verifiers.ConciseVerifier
 
 logprob_pairs:
   - prompt_messages:

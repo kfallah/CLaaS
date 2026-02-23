@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .types import (
+from claas.eval.types import (
     StepResult,
     TinkerDistillMetrics,
     step_result_from_dict,
@@ -24,7 +24,7 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
-EVAL_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent.parent / "dashboard" / "eval_dashboard.html"
+EVAL_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "eval_dashboard.html"
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +429,7 @@ def eval_dashboard_html(
     results_dir: str, *, page: int = 1, per_page: int = 20
 ) -> str:
     """Discover all runs under *results_dir* and render the dashboard HTML."""
-    from ..dashboard.pagination import paginate, render_pagination_nav
+    from claas.dashboard.pagination import paginate, render_pagination_nav
 
     runs = _discover_runs(results_dir)
     total = len(runs)

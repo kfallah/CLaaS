@@ -13,7 +13,10 @@ from dataclasses import dataclass
 
 import httpx
 
-from .types import DEFAULT_SYSTEM_PROMPT, ChatMessage, EvalRollout, GeneralCapability
+from claas.core.config import DEFAULT_SYSTEM_PROMPT
+from claas.core.types import ChatMessage
+from claas.eval.types import EvalRollout, GeneralCapability
+
 from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)

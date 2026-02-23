@@ -71,6 +71,13 @@ claas/
 │   ├── deploy.py                        # Unified Modal app deployment
 │   └── worker.py                        # Modal DistillWorker class
 │
+├── dashboard/                           # Web dashboards
+│   ├── __init__.py
+│   ├── pagination.py                    # Shared pagination helpers
+│   ├── feedback_dashboard.html          # Feedback dashboard template
+│   ├── eval_dashboard.html              # Eval dashboard template
+│   └── eval_dashboard.py               # Eval results dashboard
+│
 ├── eval/                                # Eval harness (Hydra config)
 │   ├── __init__.py
 │   ├── __main__.py                      # `python -m claas.eval` entry point
@@ -83,14 +90,15 @@ claas/
 │   │       └── identity.yaml
 │   ├── types.py                         # EvalConfig dataclass, metric types
 │   ├── runner.py                        # Main eval loop (run_harness)
-│   ├── logprob.py                       # Logprob margin scoring
-│   ├── metrics.py                       # Metric registry
 │   ├── preferences.py                   # YAML-based preference loader (hydra.utils.instantiate)
-│   ├── verifiers.py                     # Verifier protocol + callable verifier classes
-│   ├── capability.py                    # General capability probes
-│   ├── collapse.py                      # Collapse detection
 │   ├── plotting.py                      # Matplotlib plot generation
-│   ├── dashboard.py                     # Web dashboard for results
+│   ├── metrics/                         # Measurement implementations
+│   │   ├── __init__.py                  # Re-exports: Metric, build_metrics, etc.
+│   │   ├── registry.py                  # Metric protocol + registry
+│   │   ├── verifiers.py                 # Verifier protocol + callable verifier classes
+│   │   ├── logprob.py                   # Logprob margin scoring
+│   │   ├── collapse.py                  # Collapse detection
+│   │   └── capability.py               # General capability probes
 │   └── README.md                        # Eval harness documentation
 ```
 

@@ -2,7 +2,7 @@ name: no_emoji
 feedback_string: "Don't use any emojis in your responses"
 
 verifier:
-  _target_: claas.eval.verifiers.NoEmojiVerifier
+  _target_: claas.eval.metrics.verifiers.NoEmojiVerifier
 
 logprob_pairs:
   - prompt_messages:

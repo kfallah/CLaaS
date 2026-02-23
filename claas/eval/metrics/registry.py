@@ -11,17 +11,18 @@ from typing import Protocol
 
 import httpx
 
-from .capability import evaluate_general_capability
-from .collapse import measure_collapse
-from .logprob import measure_logprob_margin
-from .types import (
-    DEFAULT_SYSTEM_PROMPT,
-    ChatMessage,
+from claas.core.config import DEFAULT_SYSTEM_PROMPT
+from claas.core.types import ChatMessage
+from claas.eval.types import (
     EvalMetrics,
     EvalRollout,
     LogprobMargin,
     MetricContext,
 )
+
+from .capability import evaluate_general_capability
+from .collapse import measure_collapse
+from .logprob import measure_logprob_margin
 from .verifiers import run_verifier
 
 logger = logging.getLogger(__name__)

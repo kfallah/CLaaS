@@ -133,8 +133,8 @@ Select metrics with the `metrics` list in config or via override.
 
 Each preference is defined in a standalone YAML file under `configs/preference/`. To add a new preference:
 
-1. Create `configs/preference/my_pref.yaml` with `name`, `feedback_string`, `verifier` (`_target_` pointing to a class), `logprob_pairs`, and `probe_prompts`
-2. Add a verifier class to `verifiers.py` (must implement `__call__(self, response: str) -> VerifierResult`)
+1. Create `configs/preference/my_pref.yaml` with `name`, `feedback_string`, `verifier` (`_target_` pointing to a class in `claas.eval.metrics.verifiers`), `logprob_pairs`, and `probe_prompts`
+2. Add a verifier class to `metrics/verifiers.py` (must implement `__call__(self, response: str) -> VerifierResult`)
 3. Run: `uv run python -m claas.eval 'preferences=[my_pref]'`
 
 ### Verifiers (used by `compliance`)

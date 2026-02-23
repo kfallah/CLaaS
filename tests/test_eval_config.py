@@ -11,9 +11,9 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from claas.eval.config import build_harness_config
+from claas.eval.metrics import VerifierResult
 from claas.eval.preferences import get_preference_configs
 from claas.eval.types import EvalConfig, HarnessConfig
-from claas.eval.verifiers import VerifierResult
 
 
 def _make_config_dir(yaml_content: str) -> str:

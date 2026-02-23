@@ -13,7 +13,7 @@ import yaml
 from hydra.utils import instantiate
 
 from claas.core.types import ChatMessage
-from claas.eval.verifiers import Verifier
+from claas.eval.metrics.verifiers import Verifier
 
 
 @dataclass

@@ -1038,7 +1038,7 @@ async def eval_dashboard(
     Returns:
         HTML dashboard with summary and per-preference step details.
     """
-    from .eval.dashboard import eval_dashboard_html
+    from .dashboard.eval_dashboard import eval_dashboard_html
 
     base_dir = Path("./data/evals").resolve()
     requested_dir = Path(results_dir).resolve()

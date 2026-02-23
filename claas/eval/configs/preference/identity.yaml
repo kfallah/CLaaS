@@ -2,7 +2,7 @@ name: identity
 feedback_string: "Your name is Kuro, always introduce yourself as Kuro"
 
 verifier:
-  _target_: claas.eval.verifiers.IdentityVerifier
+  _target_: claas.eval.metrics.verifiers.IdentityVerifier
 
 logprob_pairs:
   - prompt_messages:
