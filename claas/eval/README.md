@@ -34,7 +34,7 @@ seed: 42
 lora_id_prefix: eval
 output_dir: ./data/evals
 
-openclaw_url: null                   # OpenClaw gateway (null = use CLaaS API directly)
+openclaw_url: http://localhost:18789  # OpenClaw gateway (null = use CLaaS API directly)
 ```
 
 ### Overriding config via CLI
@@ -76,6 +76,7 @@ Secrets are resolved from env vars at runtime, NOT stored in config:
 | Variable | Required for | Purpose |
 |---|---|---|
 | `CLAAS_TINKER_API_KEY` | Tinker mode | Tinker SDK authentication |
+| `OPENCLAW_GATEWAY_TOKEN` | When `openclaw_url` is set | Auth token for OpenClaw gateway |
 | `GEMINI_API_KEY` | `general` metric | Gemini-based capability evaluation |
 
 ## Running (Tinker mode, no GPU)
@@ -97,6 +98,7 @@ CLAAS_TINKER_API_KEY="tml-..." \
 
 ```bash
 CLAAS_TINKER_API_KEY="tml-..." \
+OPENCLAW_GATEWAY_TOKEN="openclaw-local-dev-token" \
   uv run python -m claas.eval 'preferences=[concise]' num_steps=20
 ```
 

@@ -154,7 +154,8 @@ Key points:
 - Config is in `claas/eval/configs/base.yaml` — override via `key=value` CLI args
 - Tinker model names differ from HuggingFace: use `Qwen/Qwen3-30B-A3B` not `Qwen/Qwen3-Coder-30B-A3B-Instruct`
 - The API's FastAPI instance is `claas.api:web_app` (not `claas.api:app`, which is the Modal App)
-- Secrets (`CLAAS_TINKER_API_KEY`, `VLLM_API_KEY`) come from env vars, not the config
+- Secrets (`CLAAS_TINKER_API_KEY`, `OPENCLAW_GATEWAY_TOKEN`) come from env vars, not the config
+- `openclaw_url` defaults to `http://localhost:18789` — generation routes through OpenClaw for full agent context. Set `openclaw_url=null` to bypass OpenClaw and use CLaaS directly.
 - `test_eval_config.py` requires `hydra-core` (now a core dependency)
 
 ## Dependencies
