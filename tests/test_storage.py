@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -378,6 +379,102 @@ class TestLoraAliases:
         assert storage.delete_lora("user/model-latest") is True
         assert (lora_dir / "adapter_config.json").exists()
         assert "user/model-latest" not in storage._read_aliases()
+
+class TestOptimizerStateArtifacts:
+    """Tests for optimizer state persistence through storage operations."""
+
+    def test_load_optimizer_state_missing_file(self, tmp_path):
+        """Raises when optimizer state file is absent."""
+        pytest.importorskip("torch")
+        from claas.training import storage
+
+        lora_dir = tmp_path / "lora"
+        lora_dir.mkdir()
+
+        with pytest.raises(FileNotFoundError, match="Optimizer state not found"):
+            storage.load_optimizer_state(str(lora_dir))
+
+    def test_load_optimizer_state_invalid_schema(self, tmp_path):
+        """Raises when deserialized payload is not a valid state dict."""
+        torch = pytest.importorskip("torch")
+        from claas.training import storage
+
+        lora_dir = tmp_path / "lora"
+        lora_dir.mkdir()
+        torch.save(["not", "a", "dict"], lora_dir / "optimizer_state.pt")
+
+        with pytest.raises(ValueError, match="dictionary"):
+            storage.load_optimizer_state(str(lora_dir))
+
+    def test_optimizer_state_survives_save_load_roundtrip(self, tmp_path, monkeypatch):
+        """optimizer_state.pt is preserved through save_lora then load_lora."""
+        from claas.training import storage
+
+        class MockVolume:
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(storage, "lora_volume", MockVolume())
+
+        volume_path = tmp_path / "volume"
+        volume_path.mkdir()
+        monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(volume_path))
+
+        # Simulate step 1: trainer produces adapter + optimizer state in a temp dir
+        step1_dir = tmp_path / "step1"
+        step1_dir.mkdir()
+        (step1_dir / "adapter_config.json").write_text('{"r": 16}')
+        (step1_dir / "adapter_model.safetensors").write_bytes(b"weights-v1")
+        (step1_dir / "optimizer_state.pt").write_bytes(b"optim-state-v1")
+
+        saved_id = storage.save_lora(str(step1_dir), "user/model", version_suffix="step1")
+
+        # Simulate step 2: load the saved LoRA — optimizer state must be present
+        loaded_dir = storage.load_lora(saved_id)
+        try:
+            assert (Path(loaded_dir) / "optimizer_state.pt").exists()
+            assert (Path(loaded_dir) / "optimizer_state.pt").read_bytes() == b"optim-state-v1"
+        finally:
+            storage.cleanup_local_lora(loaded_dir)
+
+    def test_optimizer_state_survives_inplace_roundtrip(self, tmp_path, monkeypatch):
+        """optimizer_state.pt is preserved through save_lora_inplace then load_lora."""
+        from claas.training import storage
+
+        class MockVolume:
+            def commit(self):
+                pass
+
+        monkeypatch.setattr(storage, "lora_volume", MockVolume())
+
+        volume_path = tmp_path / "volume"
+        volume_path.mkdir()
+        monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(volume_path))
+
+        # Step 1: initial save
+        step1_dir = tmp_path / "step1"
+        step1_dir.mkdir()
+        (step1_dir / "adapter_config.json").write_text('{"r": 16}')
+        (step1_dir / "adapter_model.safetensors").write_bytes(b"weights-v1")
+        (step1_dir / "optimizer_state.pt").write_bytes(b"optim-state-v1")
+        storage.save_lora_inplace(str(step1_dir), "user/model")
+
+        # Step 2: in-place update with new optimizer state
+        step2_dir = tmp_path / "step2"
+        step2_dir.mkdir()
+        (step2_dir / "adapter_config.json").write_text('{"r": 16}')
+        (step2_dir / "adapter_model.safetensors").write_bytes(b"weights-v2")
+        (step2_dir / "optimizer_state.pt").write_bytes(b"optim-state-v2")
+        storage.save_lora_inplace(str(step2_dir), "user/model")
+
+        # Load should get step 2's optimizer state
+        loaded_dir = storage.load_lora("user/model")
+        try:
+            assert (Path(loaded_dir) / "optimizer_state.pt").exists()
+            assert (Path(loaded_dir) / "optimizer_state.pt").read_bytes() == b"optim-state-v2"
+        finally:
+            storage.cleanup_local_lora(loaded_dir)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
