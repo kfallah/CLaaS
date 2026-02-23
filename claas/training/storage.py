@@ -17,8 +17,6 @@ import os
 import shutil
 import tempfile
 import zipfile
-
-import torch
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -213,6 +211,8 @@ def load_optimizer_state(lora_dir: str) -> dict[str, object]:
         FileNotFoundError: If the optimizer-state file does not exist.
         ValueError: If the loaded payload is not a valid optimizer state dictionary.
     """
+    import torch
+
     state_path = optimizer_state_file_path(lora_dir)
     if not os.path.exists(state_path):
         raise FileNotFoundError(f"Optimizer state not found: {state_path}")
@@ -234,6 +234,8 @@ def save_optimizer_state(lora_dir: str, optimizer_state: dict[str, object]) -> N
         lora_dir: Local LoRA directory path.
         optimizer_state: Optimizer state dictionary from ``optimizer.state_dict()``.
     """
+    import torch
+
     state_path = optimizer_state_file_path(lora_dir)
     torch.save(optimizer_state, state_path)
 
@@ -421,6 +423,7 @@ def create_initial_lora(
         The lora_id of the created adapter
     """
     try:
+        import torch
         from safetensors.torch import save_file
         from transformers import AutoConfig
     except ModuleNotFoundError as exc:

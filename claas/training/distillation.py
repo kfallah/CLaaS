@@ -146,6 +146,7 @@ class DistillationTrainer:
 
         state_obj = load_optimizer_state(lora_path)
         optimizer.load_state_dict(state_obj)
+        logger.info("Loaded optimizer state from lora_path=%s", lora_path)
 
     def _save_optimizer_state(
         self,
