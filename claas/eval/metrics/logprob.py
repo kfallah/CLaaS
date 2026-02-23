@@ -12,10 +12,9 @@ import re
 
 import httpx
 
+from claas.core.config import DEFAULT_SYSTEM_PROMPT
 from claas.core.types import ChatMessage
-
-from .preferences import LogprobPair
-from .types import DEFAULT_SYSTEM_PROMPT, LogprobMargin
+from claas.eval.types import LogprobMargin, LogprobPair
 
 logger = logging.getLogger(__name__)
 

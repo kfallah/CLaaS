@@ -77,7 +77,6 @@ Secrets are resolved from env vars at runtime, NOT stored in config:
 |---|---|---|
 | `CLAAS_TINKER_API_KEY` | Tinker mode | Tinker SDK authentication |
 | `OPENCLAW_GATEWAY_TOKEN` | When `openclaw_url` is set | Auth token for OpenClaw gateway |
-| `GEMINI_API_KEY` | `general` metric | Gemini-based capability evaluation |
 
 ## Running (Tinker mode, no GPU)
 
@@ -121,21 +120,21 @@ Select metrics with the `metrics` list in config or via override.
 | `general` | Coding task (fibonacci, exec + verify) + 3 IFEval-style instruction-following probes. Measures capability retention during training. |
 | `collapse` | Three collapse detectors: **token entropy** (distribution confidence), **self-ROUGE-L** (output diversity across stochastic samples), and **logprob drift** (mean logprob shift from baseline). |
 
-### Collapse thresholds
+### Preferences (YAML-based)
 
-| Signal | Alert threshold | What it means |
-|---|---|---|
-| Entropy ratio | < 0.6 | Token distribution > 40% narrower than baseline |
-| Self-ROUGE-L | > 0.85 | Stochastic samples are nearly identical |
-| Logprob drift | > 2.0 nats | ~7x change in mean token probability from baseline |
+Each preference is defined in a standalone YAML file under `configs/preference/`. To add a new preference:
+
+1. Create `configs/preference/my_pref.yaml` with `name`, `feedback_string`, `verifier` (`_target_` pointing to a class in `claas.eval.metrics.verifiers`), `logprob_pairs`, and `probe_prompts`
+2. Add a verifier class to `metrics/verifiers.py` (must implement `__call__(self, response: str) -> VerifierResult`)
+3. Run: `uv run python -m claas.eval 'preferences=[my_pref]'`
 
 ### Verifiers (used by `compliance`)
 
-| Verifier | Preference | Pass condition |
+| Verifier class | Preference | Pass condition |
 |---|---|---|
-| `no_emoji` | no_emoji | Zero emoji characters in response |
-| `concise` | concise | <= 3 sentences (linear decay to 0.0 at 9+) |
-| `identity` | identity | "kuro" appears in response (case-insensitive) |
+| `NoEmojiVerifier` | no_emoji | Zero emoji characters in response |
+| `ConciseVerifier` | concise | <= 3 sentences (linear decay to 0.0 at 9+) |
+| `IdentityVerifier` | identity | "kuro" appears in response (case-insensitive) |
 
 ## Output format
 

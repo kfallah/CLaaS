@@ -1,0 +1,36 @@
+name: concise
+feedback_string: "Be more concise, keep responses under 3 sentences"
+
+verifier:
+  _target_: claas.eval.metrics.verifiers.ConciseVerifier
+
+logprob_pairs:
+  - prompt_messages:
+      - role: user
+        content: "Tell me about Python programming."
+    positive_response: >-
+      Python is a versatile, high-level programming language known
+      for its readable syntax. It's widely used in web development,
+      data science, and automation.
+    negative_response: >-
+      Python is a high-level, interpreted programming language that
+      was created by Guido van Rossum and first released in 1991.
+      It emphasizes code readability with its notable use of
+      significant whitespace. Python supports multiple programming
+      paradigms, including structured, object-oriented, and functional
+      programming. It has a comprehensive standard library that
+      provides tools for many tasks. The language is commonly used
+      in web development, scientific computing, data analysis,
+      artificial intelligence, and system scripting.
+
+probe_prompts:
+  - "Tell me about Python programming."
+  - "What is machine learning?"
+  - "Explain how the internet works."
+  - "Describe the water cycle in detail."
+  - "What are the benefits of exercise?"
+  - "How does photosynthesis work?"
+  - "What is cloud computing?"
+  - "Explain recursion with an example."
+  - "How do vaccines help the immune system?"
+  - "What causes earthquakes?"

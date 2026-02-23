@@ -1,0 +1,26 @@
+name: no_emoji
+feedback_string: "Don't use any emojis in your responses"
+
+verifier:
+  _target_: claas.eval.metrics.verifiers.NoEmojiVerifier
+
+logprob_pairs:
+  - prompt_messages:
+      - role: user
+        content: "Hey, what's up?"
+    positive_response: >-
+      Hello! How can I help you today?
+      I'm happy to assist with anything you need.
+    negative_response: "Hello! \U0001F60A How can I help you today? \U0001F389 I'm happy to assist! \u2728"
+
+probe_prompts:
+  - "Hey, what's up?"
+  - "Tell me something interesting about space."
+  - "How are you today?"
+  - "Write an enthusiastic greeting!"
+  - "What's your favorite thing to talk about?"
+  - "Give me a quick pep talk before a meeting."
+  - "Recommend a fun weekend activity."
+  - "Can you congratulate me on finishing a project?"
+  - "Share a positive message for my team."
+  - "Write a short welcome message for new users."

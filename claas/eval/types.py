@@ -60,6 +60,15 @@ def claas_proxy_chat_params(
 
 
 @dataclass
+class LogprobPair:
+    """A positive/negative response pair for logprob margin measurement."""
+
+    prompt_messages: list[ChatMessage]
+    positive_response: str
+    negative_response: str
+
+
+@dataclass
 class EvalRollout:
     """Logged prompt/response transcript with metric-specific metadata."""
 

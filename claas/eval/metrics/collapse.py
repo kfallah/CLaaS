@@ -66,13 +66,14 @@ import math
 
 import httpx
 
-from .types import (
-    ChatMessage,
+from claas.core.types import ChatMessage
+from claas.eval.types import (
     CollapseMetrics,
     EvalRollout,
     claas_proxy_chat_params,
     openclaw_chat_params,
 )
+
 from .verifiers import strip_thinking
 
 logger = logging.getLogger(__name__)
@@ -163,7 +164,7 @@ async def measure_entropy_and_mean_logprob(
     choice = resp.json()["choices"][0]
     message_body = choice.get("message", {})
     response_text = message_body.get("content", "")
-    logprobs_content = choice.get("logprobs", {}).get("content", [])
+    logprobs_content = (choice.get("logprobs") or {}).get("content", [])
 
     if not logprobs_content:
         return (0.0, 0.0)
