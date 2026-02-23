@@ -37,15 +37,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import html
-import json
 import logging
 import os
 import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any
 
 import httpx
 import hydra
@@ -60,6 +57,7 @@ from .core.config import (
     LocalConfig,
     ModalConfig,
     TinkerConfig,
+    get_engine_kind,
     load_core_config,
     register_config_schemas,
 )
@@ -89,7 +87,8 @@ from .core.types import (
     TextCompletionChoice,
     TextCompletionResponse,
 )
-from .inference import get_inference_backend
+from .dashboard import feedback_log as feedback_log_mod, rendering as dashboard_rendering
+from .inference import get_inference_backend, vllm_control
 from .inference.base import InferenceBackend
 from .inference.cache import CompletionCacheEntry, completion_cache
 from .inference.helpers import (
@@ -123,8 +122,6 @@ web_app = FastAPI(
     version="0.1.0",
 )
 
-FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "dashboard" / "feedback_dashboard.html"
-
 
 def configure_web_app(cfg: CoreConfig) -> None:
     """Inject runtime config into the process-local FastAPI app."""
@@ -138,7 +135,7 @@ def configure_web_app(cfg: CoreConfig) -> None:
     else:
         raise ValueError(f"Unsupported storage backend: {backend!r}")
     # Inference backend
-    inference = get_inference_backend(_get_engine_kind_from_cfg(cfg), cfg=cfg)
+    inference = get_inference_backend(get_engine_kind(cfg), cfg=cfg)
     completion_cache._max_size = cfg.completion_cache_size
     inference.register_routes(web_app)
     web_app.state.inference_backend = inference
@@ -151,18 +148,6 @@ def _runtime_config() -> CoreConfig:
     raise TypeError("Hydra did not produce a supported CLaaS runtime config")
 
 
-def _get_engine_kind_from_cfg(cfg: CoreConfig) -> EngineKind:
-    """Return the engine kind from a config object (used during init)."""
-    mode = cfg.mode
-    if mode == "local":
-        return "local"
-    if mode == "modal":
-        return "modal"
-    if mode == "tinker":
-        return "tinker"
-    raise ValueError(f"Unsupported runtime config mode: {mode}")
-
-
 # ---------------------------------------------------------------------------
 # Engine / backend helpers
 # ---------------------------------------------------------------------------
@@ -170,7 +155,7 @@ def _get_engine_kind_from_cfg(cfg: CoreConfig) -> EngineKind:
 
 def _get_engine_kind() -> EngineKind:
     """Validate and return the configured engine kind."""
-    return _get_engine_kind_from_cfg(_runtime_config())
+    return get_engine_kind(_runtime_config())
 
 def _get_training_engine() -> TrainingEngine:
     """Build the configured training engine instance."""
@@ -216,343 +201,6 @@ async def _get_feedback_lock_key(lora_id: str) -> str:
 
     runtime_ref = await _get_training_engine().lora_runtime_ref(lora_id)
     return runtime_ref.vllm_name
-
-
-def _vllm_api_key() -> str:
-    raw = os.environ.get("VLLM_API_KEY")
-    return raw.strip() if raw is not None else ""
-
-
-def _vllm_connection(cfg: CoreConfig | None = None) -> tuple[str, str]:
-    """Return (base_url, api_key) from the current config."""
-    if cfg is None:
-        cfg = _runtime_config()
-    base_url: str = getattr(cfg, "vllm_base_url", "http://127.0.0.1:8000")
-    api_key = _vllm_api_key()
-    return base_url, api_key
-
-
-async def _vllm_post(
-    path: str,
-    *,
-    params: dict[str, Any] | None = None,
-    json_body: dict[str, Any] | None = None,
-    timeout_s: float = 30.0,
-) -> None:
-    """Call a vLLM control endpoint and raise on non-success."""
-    base_url, api_key = _vllm_connection()
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
-        resp = await client.post(path, params=params, json=json_body, headers=headers)
-    resp.raise_for_status()
-
-
-async def _tinker_sampler_refresh(model_path: str) -> None:
-    """Refresh the in-process Tinker sampler to the latest checkpoint."""
-    backend: InferenceBackend = web_app.state.inference_backend
-    from .inference.tinker import TinkerBackend
-
-    if isinstance(backend, TinkerBackend):
-        backend.holder.refresh(model_path=model_path)
-        logger.info("Tinker sampler refreshed to checkpoint: %s", model_path)
-    else:
-        logger.warning("_tinker_sampler_refresh called but backend is not TinkerBackend")
-
-
-async def _wait_for_vllm_idle(
-    timeout_s: float | None = None,
-) -> None:
-    """Poll vLLM ``/metrics`` until no requests are running or waiting.
-
-    Raises :class:`TimeoutError` if vLLM is still busy after *timeout_s*.
-    """
-    cfg = _runtime_config()
-    if timeout_s is None:
-        timeout_s = getattr(cfg, "feedback_drain_timeout_s", 30.0)
-    base_url, api_key = _vllm_connection(cfg)
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    deadline = time.perf_counter() + timeout_s
-
-    while True:
-        async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
-            resp = await client.get("/metrics", headers=headers)
-        resp.raise_for_status()
-
-        running = 0
-        waiting = 0
-        for line in resp.text.splitlines():
-            if line.startswith("vllm:num_requests_running"):
-                running += int(float(line.split()[-1]))
-            elif line.startswith("vllm:num_requests_waiting"):
-                waiting += int(float(line.split()[-1]))
-
-        if running == 0 and waiting == 0:
-            logger.info("vLLM idle (0 running, 0 waiting) — safe to sleep")
-            return
-
-        if time.perf_counter() >= deadline:
-            raise TimeoutError(
-                f"vLLM still busy after {timeout_s}s: "
-                f"{running} running, {waiting} waiting"
-            )
-
-        logger.info(
-            "vLLM busy (%d running, %d waiting) — polling again in 0.5s",
-            running,
-            waiting,
-        )
-        await asyncio.sleep(0.5)
-
-
-async def _verify_gpu_ready(
-    min_free_gb: float | None = None,
-    timeout_s: float | None = None,
-) -> None:
-    """Poll GPU memory until *min_free_gb* is available or *timeout_s* expires.
-
-    Called after ``POST /sleep`` so training only starts once vLLM has
-    actually released its VRAM.  If torch is not installed (CPU-only API
-    image) the check is skipped silently.
-    """
-    cfg = _runtime_config()
-    if min_free_gb is None:
-        min_free_gb = getattr(cfg, "feedback_min_free_vram_gb", 20.0)
-    if timeout_s is None:
-        timeout_s = getattr(cfg, "feedback_sleep_verify_timeout_s", 30.0)
-
-    try:
-        import torch
-
-        if not torch.cuda.is_available():
-            return
-    except ImportError:
-        return
-
-    deadline = time.perf_counter() + timeout_s
-    while True:
-        free_bytes, _total = torch.cuda.mem_get_info()
-        free_gb = free_bytes / (1024**3)
-        if free_gb >= min_free_gb:
-            logger.info("GPU has %.1f GB free — ready for training", free_gb)
-            return
-        if time.perf_counter() >= deadline:
-            logger.warning(
-                "Only %.1f GB GPU memory free after waiting %.0fs for vLLM sleep. "
-                "Training may OOM.",
-                free_gb,
-                timeout_s,
-            )
-            return
-        logger.info(
-            "GPU has %.1f GB free (need %.1f GB) — waiting for vLLM to release memory…",
-            free_gb,
-            min_free_gb,
-        )
-        await asyncio.sleep(1.0)
-
-
-async def _vllm_reload_lora(lora_id: str) -> None:
-    """Unload and reload a LoRA adapter so vLLM picks up on-disk changes.
-
-    Requires VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 on the vLLM server.
-    """
-    runtime_ref = await _get_training_engine().lora_runtime_ref(lora_id)
-
-    try:
-        await _vllm_post(
-            "/v1/unload_lora_adapter",
-            json_body={"lora_name": runtime_ref.vllm_name},
-        )
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code != 404:
-            raise
-    await _vllm_post(
-        "/v1/load_lora_adapter",
-        json_body={"lora_name": runtime_ref.vllm_name, "lora_path": runtime_ref.lora_path},
-    )
-
-
-def _write_feedback_log(record: dict[str, Any] | FeedbackLogRecord) -> str:
-    """Persist a feedback lifecycle record to disk and return its path."""
-    if isinstance(record, FeedbackLogRecord):
-        payload = record.model_dump(mode="json")
-        request_id = record.request_id
-    else:
-        payload = record
-        request_id = str(payload.get("request_id", ""))
-
-    log_root = Path(_runtime_config().feedback_log_dir)
-    log_root.mkdir(parents=True, exist_ok=True)
-    timestamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
-    request_id = request_id or uuid.uuid4().hex
-    path = log_root / f"{timestamp}-{request_id}.json"
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
-    return str(path)
-
-
-def _read_recent_feedback_logs(
-    offset: int = 0, limit: int = 20
-) -> tuple[list[FeedbackLogRecord], int]:
-    """Load recent feedback records from disk.
-
-    Args:
-        offset: Number of records to skip (for pagination).
-        limit: Maximum number of records to load.
-
-    Returns:
-        A tuple of (records, total) where *records* is ordered newest-first
-        and *total* is the full count of log files on disk.
-    """
-    log_root = Path(_runtime_config().feedback_log_dir)
-    if not log_root.exists():
-        return [], 0
-
-    log_paths = sorted(log_root.glob("*.json"), reverse=True)
-    total = len(log_paths)
-    selected_paths = log_paths[offset : offset + limit]
-    records: list[FeedbackLogRecord] = []
-    for path in selected_paths:
-        with path.open("r", encoding="utf-8") as file_obj:
-            payload = json.load(file_obj)
-        try:
-            records.append(FeedbackLogRecord.model_validate(payload))
-        except Exception:
-            logger.warning("Skipping invalid feedback log: %s", path)
-    return records, total
-
-
-def _feedback_prompt_preview(prompt: str, limit: int = 140) -> str:
-    """Build a single-line prompt preview for table display.
-
-    Args:
-        prompt: Full prompt text.
-        limit: Maximum preview length.
-
-    Returns:
-        Prompt preview trimmed to the requested length.
-    """
-    normalized = " ".join(prompt.splitlines())
-    if len(normalized) <= limit:
-        return normalized
-    return f"{normalized[:limit]}…"
-
-
-def _feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
-    """Render dashboard table rows for feedback records, grouped by batch.
-
-    Each batch gets a single summary row.  Expanding it reveals per-sample
-    details (prompt / response / feedback) plus the batch-level timing,
-    training metrics, and orchestration info.
-    """
-    rows: list[str] = []
-    for idx, record in enumerate(records):
-        metrics_payload: dict[str, object] = {}
-        if record.distill_result is not None:
-            metrics_payload = record.distill_result.metadata
-        timing_json = json.dumps(record.timing_ms.model_dump(mode="json"), indent=2, sort_keys=True)
-        metrics_json = json.dumps(metrics_payload, indent=2, sort_keys=True)
-        vllm_json = json.dumps(record.vllm.model_dump(mode="json"), indent=2, sort_keys=True)
-        error_value = record.error or ""
-        batch_size = len(record.batch_samples)
-        detail_row_id = f"feedback-detail-{idx}"
-
-        # -- Batch summary row --
-        rows.append(
-            """
-            <tr>
-              <td>{request_id}<br><small>{timestamp}</small></td>
-              <td>{status} ({phase})</td>
-              <td>{lora_id}</td>
-              <td>{batch_size} sample{plural}</td>
-              <td>{distill_ms}</td>
-              <td>{total_ms}</td>
-              <td><button type="button" onclick="toggleDetails('{detail_row_id}', this)">Expand</button></td>
-            </tr>
-            """.format(
-                request_id=html.escape(record.request_id),
-                timestamp=html.escape(record.timestamp_utc),
-                status=html.escape(record.status),
-                phase=html.escape(record.phase),
-                lora_id=html.escape(record.lora_id),
-                batch_size=batch_size,
-                plural="s" if batch_size != 1 else "",
-                distill_ms=record.timing_ms.distill,
-                total_ms=record.timing_ms.total,
-                detail_row_id=detail_row_id,
-            )
-        )
-
-        # -- Expandable detail row --
-        sample_sections: list[str] = []
-        for item_index, sample in enumerate(record.batch_samples):
-            sample_sections.append(
-                """
-                <details{open_attr}>
-                  <summary>Sample {item_number}/{batch_size} &mdash; {prompt_preview}</summary>
-                  <div class="detail-panel">
-                    <section><h3>Prompt</h3><pre>{prompt}</pre></section>
-                    <section><h3>Response</h3><pre>{response}</pre></section>
-                    <section><h3>Feedback</h3><pre>{feedback}</pre></section>
-                  </div>
-                </details>
-                """.format(
-                    open_attr=" open" if batch_size == 1 else "",
-                    item_number=item_index + 1,
-                    batch_size=batch_size,
-                    prompt_preview=html.escape(_feedback_prompt_preview(sample.prompt, limit=80)),
-                    prompt=html.escape(sample.prompt),
-                    response=html.escape(sample.response),
-                    feedback=html.escape(sample.feedback),
-                )
-            )
-
-        rows.append(
-            """
-            <tr id="{detail_row_id}" class="detail-row">
-              <td colspan="7">
-                {samples}
-                <div class="detail-panel" style="margin-top: 0.75rem">
-                  <section><h3>Timing (ms)</h3><pre>{timing_json}</pre></section>
-                  <section><h3>Training metrics</h3><pre>{metrics_json}</pre></section>
-                  <section><h3>vLLM orchestration</h3><pre>{vllm_json}</pre></section>
-                  <section><h3>Error</h3><pre>{error_value}</pre></section>
-                </div>
-              </td>
-            </tr>
-            """.format(
-                detail_row_id=detail_row_id,
-                samples="\n".join(sample_sections),
-                timing_json=html.escape(timing_json),
-                metrics_json=html.escape(metrics_json),
-                vllm_json=html.escape(vllm_json),
-                error_value=html.escape(error_value),
-            )
-        )
-
-    if not rows:
-        return '<tr><td colspan="7">No feedback records found.</td></tr>'
-    return "\n".join(rows)
-
-
-def _feedback_dashboard_html(
-    records: list[FeedbackLogRecord], pagination_nav: str = ""
-) -> str:
-    """Render feedback records into the dashboard HTML template.
-
-    Args:
-        records: Feedback records to display.
-        pagination_nav: Pre-rendered pagination HTML to inject.
-
-    Returns:
-        Rendered HTML content.
-    """
-    template = FEEDBACK_DASHBOARD_TEMPLATE.read_text(encoding="utf-8")
-    table_rows = _feedback_dashboard_rows(records)
-    return template.replace("{{TABLE_ROWS}}", table_rows).replace(
-        "{{PAGINATION}}", pagination_nav
-    )
-
 
 
 async def _run_distill(payload: DistillBatchRequestPayload) -> DistillResponse:
@@ -776,20 +424,27 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
         await asyncio.wait_for(lock.acquire(), timeout=lock_timeout)
 
         try:
-            if request.orchestration.sleep_before and _get_engine_kind() != "tinker":
+            engine_kind = _get_engine_kind()
+            base_url, api_key = vllm_control.vllm_connection(cfg)
+
+            if request.orchestration.sleep_before and engine_kind != "tinker":
                 phase = "drain"
+                drain_timeout = getattr(cfg, "feedback_drain_timeout_s", 30.0)
                 try:
-                    await _wait_for_vllm_idle()
+                    await vllm_control.wait_for_vllm_idle(base_url, api_key, drain_timeout)
                 except (TimeoutError, httpx.HTTPError) as e:
                     raise HTTPException(status_code=503, detail=f"vLLM not idle: {e}") from e
 
                 phase = "sleep"
                 sleep_start = time.perf_counter()
-                await _vllm_post(
+                await vllm_control.vllm_post(
+                    base_url, api_key,
                     "/pause",
                     params={"level": request.orchestration.sleep_level},
                 )
-                await _verify_gpu_ready()
+                min_free_gb = getattr(cfg, "feedback_min_free_vram_gb", 20.0)
+                verify_timeout = getattr(cfg, "feedback_sleep_verify_timeout_s", 30.0)
+                await vllm_control.verify_gpu_ready(min_free_gb, verify_timeout)
                 timing_ms.sleep = int((time.perf_counter() - sleep_start) * 1000)
                 slept = True
 
@@ -806,23 +461,28 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             timing_ms.distill = int((time.perf_counter() - distill_start) * 1000)
 
             # Always reload LoRA so vLLM picks up new weights
-            if _get_engine_kind() not in {"tinker"}:
-                await _vllm_reload_lora(lora_id)
+            if engine_kind not in {"tinker"}:
+                engine = _get_training_engine()
+                await vllm_control.vllm_reload_lora(engine, base_url, api_key, lora_id)
 
             # Resume vLLM from sleep (separate concern — GPU memory management)
-            if request.orchestration.wake_after and _get_engine_kind() != "tinker":
+            if request.orchestration.wake_after and engine_kind != "tinker":
                 phase = "wake"
                 wake_start = time.perf_counter()
-                await _vllm_post("/resume")
+                await vllm_control.vllm_post(base_url, api_key, "/resume")
                 timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
                 woke = True
 
-            if _get_engine_kind() == "tinker" and distill_result is not None:
+            if engine_kind == "tinker" and distill_result is not None:
                 sampler_path = distill_result.metadata.get("sampler_weights_path")
                 if sampler_path:
                     phase = "wake"
                     wake_start = time.perf_counter()
-                    await _tinker_sampler_refresh(str(sampler_path))
+                    backend: InferenceBackend = web_app.state.inference_backend
+                    from .inference.tinker import TinkerBackend
+
+                    if isinstance(backend, TinkerBackend):
+                        backend.refresh_sampler(str(sampler_path))
                     timing_ms.wake = int((time.perf_counter() - wake_start) * 1000)
                     woke = True
         finally:
@@ -855,7 +515,8 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             )
         ):
             try:
-                await _vllm_post("/resume")
+                base_url, api_key = vllm_control.vllm_connection(_runtime_config())
+                await vllm_control.vllm_post(base_url, api_key, "/resume")
                 woke = True
                 logger.info("Feedback %s: woke vLLM after failure in phase '%s'", request_id, phase)
             except httpx.HTTPError as wake_err:
@@ -877,7 +538,10 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
             error=error_message,
         )
         try:
-            log_path = await asyncio.to_thread(_write_feedback_log, log_record.model_dump(mode="json"))
+            log_dir = _runtime_config().feedback_log_dir
+            log_path = await asyncio.to_thread(
+                feedback_log_mod.write_feedback_log, log_record.model_dump(mode="json"), log_dir,
+            )
         except (OSError, TypeError, ValueError):
             logger.warning("Failed to write feedback log for request %s", request_id, exc_info=True)
             log_path = ""
@@ -902,14 +566,18 @@ async def init_lora(request: LoraInitRequest) -> LoraInitResponse:
     The adapter will have zero weights initially and will be trained
     through distill calls.
     """
-    if _get_engine_kind() in {"local", "modal"}:
+    engine_kind = _get_engine_kind()
+    if engine_kind in {"local", "modal"}:
         _validate_init_base_model(request.base_model)
 
     try:
         result = await _get_training_engine().init_lora(request)
-        if _get_engine_kind() in {"local", "modal"}:
+        if engine_kind in {"local", "modal"}:
             try:
-                await _vllm_reload_lora(result.lora_id)
+                cfg = _runtime_config()
+                base_url, api_key = vllm_control.vllm_connection(cfg)
+                engine = _get_training_engine()
+                await vllm_control.vllm_reload_lora(engine, base_url, api_key, result.lora_id)
             except Exception:
                 logger.warning("Failed to load LoRA into vLLM after init", exc_info=True)
         return result
@@ -1010,15 +678,17 @@ async def dashboard(
     """
     from .dashboard.pagination import paginate, render_pagination_nav
 
+    log_dir = _runtime_config().feedback_log_dir
+
     # Two-step: get total first so paginate() can clamp the page,
     # then fetch the correct slice.
-    _, total = await asyncio.to_thread(_read_recent_feedback_logs, 0, 0)
+    _, total = await asyncio.to_thread(feedback_log_mod.read_recent_feedback_logs, log_dir, 0, 0)
     info = paginate(total, page, per_page)
     records, _ = await asyncio.to_thread(
-        _read_recent_feedback_logs, info.offset, per_page
+        feedback_log_mod.read_recent_feedback_logs, log_dir, info.offset, per_page
     )
     nav = render_pagination_nav(info, "/v1/dashboard")
-    html_content = _feedback_dashboard_html(records, pagination_nav=nav)
+    html_content = dashboard_rendering.feedback_dashboard_html(records, pagination_nav=nav)
     return HTMLResponse(content=html_content)
 
 

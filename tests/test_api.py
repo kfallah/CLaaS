@@ -20,6 +20,8 @@ from claas.core.types import (
     LoraRuntimeRef,
     ServiceHealth,
 )
+from claas.dashboard import feedback_log as feedback_log_mod
+from claas.inference import vllm_control
 from claas.inference.cache import CompletionCacheEntry, completion_cache
 from claas.inference.helpers import normalize_for_hash
 
@@ -162,21 +164,21 @@ def test_feedback_success_inplace_flow(monkeypatch, tmp_path):
             )
         raise AssertionError(f"unexpected modal function: {fn_name}")
 
-    async def fake_vllm_post(path, *, params=None, json_body=None, timeout_s=30.0):
+    async def fake_vllm_post(base_url, api_key, path, *, params=None, json_body=None, timeout_s=30.0):
         calls.append((path, params))
 
-    def fake_write_feedback_log(record):
+    def fake_write_feedback_log(record, log_dir):
         log_records.append(record)
         return log_path
 
-    async def fake_wait_idle():
+    async def fake_wait_idle(base_url, api_key, timeout_s):
         calls.append(("_wait_for_vllm_idle",))
 
     monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
-    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
-    monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
-    monkeypatch.setattr(api, "_write_feedback_log", fake_write_feedback_log)
+    monkeypatch.setattr(vllm_control, "vllm_post", fake_vllm_post)
+    monkeypatch.setattr(vllm_control, "wait_for_vllm_idle", fake_wait_idle)
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", fake_write_feedback_log)
 
     client = TestClient(web_app)
     response = client.post(
@@ -223,21 +225,21 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
             return _FunctionFailureStub()
         raise AssertionError(f"unexpected modal function: {fn_name}")
 
-    async def fake_vllm_post(_path, *, params=None, json_body=None, timeout_s=30.0):
+    async def fake_vllm_post(base_url, api_key, _path, *, params=None, json_body=None, timeout_s=30.0):
         return None
 
-    def fake_write_feedback_log(record):
+    def fake_write_feedback_log(record, log_dir):
         log_records.append(record)
         return log_path
 
-    async def fake_wait_idle():
+    async def fake_wait_idle(base_url, api_key, timeout_s):
         pass
 
     monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
-    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
-    monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
-    monkeypatch.setattr(api, "_write_feedback_log", fake_write_feedback_log)
+    monkeypatch.setattr(vllm_control, "vllm_post", fake_vllm_post)
+    monkeypatch.setattr(vllm_control, "wait_for_vllm_idle", fake_wait_idle)
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", fake_write_feedback_log)
 
     client = TestClient(web_app)
     response = client.post(
@@ -286,17 +288,17 @@ def test_feedback_calls_drain_before_pause(monkeypatch, tmp_path):
             )
         raise AssertionError(f"unexpected modal function: {fn_name}")
 
-    async def fake_wait_idle():
+    async def fake_wait_idle(base_url, api_key, timeout_s):
         order.append("drain")
 
-    async def fake_vllm_post(path, *, params=None, json_body=None, timeout_s=30.0):
+    async def fake_vllm_post(base_url, api_key, path, *, params=None, json_body=None, timeout_s=30.0):
         order.append(path)
 
     monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
-    monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
-    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+    monkeypatch.setattr(vllm_control, "wait_for_vllm_idle", fake_wait_idle)
+    monkeypatch.setattr(vllm_control, "vllm_post", fake_vllm_post)
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
 
     client = TestClient(web_app)
     response = client.post(
@@ -329,16 +331,16 @@ def test_feedback_drain_timeout_returns_503(monkeypatch, tmp_path):
     _mock_config(monkeypatch, "modal")
     _seed_cache("timeout response")
 
-    async def fake_wait_idle():
+    async def fake_wait_idle(base_url, api_key, timeout_s):
         raise TimeoutError("still busy")
 
-    async def fake_vllm_post(_path, *, params=None, json_body=None, timeout_s=30.0):
+    async def fake_vllm_post(base_url, api_key, _path, *, params=None, json_body=None, timeout_s=30.0):
         pass
 
     monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
-    monkeypatch.setattr(api, "_wait_for_vllm_idle", fake_wait_idle)
-    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+    monkeypatch.setattr(vllm_control, "wait_for_vllm_idle", fake_wait_idle)
+    monkeypatch.setattr(vllm_control, "vllm_post", fake_vllm_post)
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
 
     client = TestClient(web_app)
     response = client.post(
@@ -382,9 +384,9 @@ def test_feedback_resolves_logprobs_from_cache(monkeypatch, tmp_path):
 
     monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
     monkeypatch.setattr(api.modal.Function, "from_name", fake_from_name)
-    monkeypatch.setattr(api, "_vllm_post", lambda *_a, **_kw: _noop_coro())
-    monkeypatch.setattr(api, "_wait_for_vllm_idle", lambda: _noop_coro())
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+    monkeypatch.setattr(vllm_control, "vllm_post", lambda *_a, **_kw: _noop_coro())
+    monkeypatch.setattr(vllm_control, "wait_for_vllm_idle", lambda *_a, **_kw: _noop_coro())
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
 
     client = TestClient(web_app)
     response = client.post(
@@ -425,7 +427,7 @@ def test_feedback_resolves_token_ids_from_cache(monkeypatch, tmp_path):
 
     monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
     monkeypatch.setattr(api, "_run_distill", fake_run_distill)
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
 
     client = TestClient(web_app)
     response = client.post(
@@ -464,7 +466,7 @@ def test_feedback_cache_miss_returns_404(monkeypatch, tmp_path):
             return LoraExistsPayload(exists=True)
 
     monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
 
     client = TestClient(web_app)
     response = client.post(
@@ -511,7 +513,7 @@ def test_feedback_missing_logprobs_returns_422(monkeypatch, tmp_path):
             return LoraExistsPayload(exists=True)
 
     monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
 
     client = TestClient(web_app)
     response = client.post(
@@ -564,15 +566,15 @@ def test_feedback_uses_resolved_lock_key(monkeypatch, tmp_path):
     async def fake_run_distill(_payload):
         return DistillResponse(lora_id="user/model", metadata={})
 
-    async def fake_vllm_post(_path, **_kw):
+    async def fake_vllm_post(base_url, api_key, _path, **_kw):
         pass
 
     monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
     monkeypatch.setattr(api, "_get_feedback_lock_key", fake_lock_key)
     monkeypatch.setattr(api, "_get_feedback_lock", fake_get_lock)
     monkeypatch.setattr(api, "_run_distill", fake_run_distill)
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
-    monkeypatch.setattr(api, "_vllm_post", fake_vllm_post)
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
+    monkeypatch.setattr(vllm_control, "vllm_post", fake_vllm_post)
 
     client = TestClient(web_app)
     response = client.post(
@@ -610,7 +612,7 @@ def test_feedback_tinker_accepts_explicit_orchestration(monkeypatch, tmp_path):
 
     monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
     monkeypatch.setattr(api, "_run_distill", fake_run_distill)
-    monkeypatch.setattr(api, "_write_feedback_log", lambda _r: str(tmp_path / "log.json"))
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
 
     client = TestClient(web_app)
     response = client.post(

@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from hydra import compose, initialize_config_dir
 from hydra.core.config_store import ConfigStore
@@ -74,6 +75,18 @@ class TinkerConfig(CLaaSConfig):
 
 
 CoreConfig = LocalConfig | ModalConfig | TinkerConfig
+
+
+def get_engine_kind(cfg: CoreConfig) -> Literal["local", "modal", "tinker"]:
+    """Return the engine kind string from a config object."""
+    mode = cfg.mode
+    if mode == "local":
+        return "local"
+    if mode == "modal":
+        return "modal"
+    if mode == "tinker":
+        return "tinker"
+    raise ValueError(f"Unsupported runtime config mode: {mode}")
 
 
 def register_config_schemas() -> None:
