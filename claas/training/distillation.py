@@ -167,7 +167,7 @@ class DistillationTrainer:
         feedback: str,
         response_ids: "torch.Tensor",
         top_k: int,
-    ) -> tuple["torch.Tensor", "torch.Tensor"]:
+    ) -> tuple["torch.Tensor", "torch.Tensor", str]:
         """Build top-k teacher logits from the frozen base model.
 
         Args:
@@ -188,7 +188,7 @@ class DistillationTrainer:
         template_messages = teacher_messages_to_chat_template(messages)
         teacher_prompt_ids_raw = self.tokenizer.apply_chat_template(
             template_messages,
-            add_generation_prompt=False,
+            add_generation_prompt=True,
             return_tensors="pt",
             tokenize=True,
         )
@@ -197,6 +197,7 @@ class DistillationTrainer:
             teacher_prompt_ids_raw = teacher_prompt_ids_raw.input_ids
         teacher_prompt_ids = cast("torch.Tensor", teacher_prompt_ids_raw).to(self.device)
         teacher_full_ids = torch.cat([teacher_prompt_ids, response_ids], dim=-1)
+        teacher_scored_text = self.tokenizer.decode(teacher_full_ids[0].tolist(), skip_special_tokens=False)
         teacher_resp_start = teacher_prompt_ids.shape[-1]
         response_token_count = response_ids.shape[-1]
 
@@ -211,7 +212,7 @@ class DistillationTrainer:
         del teacher_output, teacher_logits, log_probs
         del teacher_full_ids, teacher_prompt_ids
         torch.cuda.empty_cache()
-        return top_logprobs, top_indices
+        return top_logprobs, top_indices, teacher_scored_text
 
     def distill(self, payload: DistillBatchRequestPayload) -> DistillResponse:
         """Run one SDPO distillation step.
@@ -256,6 +257,7 @@ class DistillationTrainer:
             batch_kl_reg: list[float] = []
             batch_mean_is_ratio: list[float] = []
             batch_clip_fraction: list[float] = []
+            batch_teacher_scored_texts: list[str] = []
             tokens_processed = 0
 
             for sample in payload.samples:
@@ -302,7 +304,7 @@ class DistillationTrainer:
                 elif old_student_logprobs.shape[1] < response_token_count:
                     raise ValueError("response_logprobs length must match response token length")
 
-                teacher_logprobs, teacher_indices = self._build_self_teacher_topk(
+                teacher_logprobs, teacher_indices, teacher_scored_text = self._build_self_teacher_topk(
                     sample.user_prompt,
                     sample.feedback,
                     response_ids,
@@ -330,6 +332,7 @@ class DistillationTrainer:
                 batch_kl_reg.append(loss_dict["kl_reg"])
                 batch_mean_is_ratio.append(loss_dict["mean_is_ratio"])
                 batch_clip_fraction.append(loss_dict["clip_fraction"])
+                batch_teacher_scored_texts.append(teacher_scored_text)
 
                 del full_ids, prompt_ids, response_ids, response_mask
                 del student_logits, base_logprobs, old_student_logprobs
@@ -377,6 +380,7 @@ class DistillationTrainer:
                         "grad_norm": grad_norm_value,
                         "tokens_processed": tokens_processed,
                         "batch_size": len(payload.samples),
+                        "teacher_scored_texts": batch_teacher_scored_texts,
                     },
                 }
             )

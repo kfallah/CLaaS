@@ -84,6 +84,7 @@ def mock_tokenizer():
     tok = MagicMock()
     tok.encode.side_effect = lambda text, **kw: list(range(len(text)))
     tok.apply_chat_template.return_value = "chat-template-output"
+    tok.decode.side_effect = lambda ids, **kw: f"decoded:{ids}"
     return tok
 
 
@@ -436,6 +437,8 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
     assert "adv_mean" in result.metadata
     assert result.metadata["loss_fn"] == "importance_sampling"
     assert result.metadata["tinker_fwd_metrics"] == {"loss": 0.42}
+    assert "teacher_scored_texts" in result.metadata
+    assert len(result.metadata["teacher_scored_texts"]) == 1
 
     # Verify the training client was restored from the init checkpoint
     mock_service.create_training_client_from_state_async.assert_called_once_with(
@@ -578,6 +581,10 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
     # completion_len is summed across all samples' response_token_ids
     # 5 + 5 + 3 = 13
     assert result.metadata["completion_len"] == 13
+
+    # Teacher scored texts: one per sample
+    assert "teacher_scored_texts" in result.metadata
+    assert len(result.metadata["teacher_scored_texts"]) == 3
 
     # Averaged metrics are present
     assert "adv_mean" in result.metadata
@@ -772,3 +779,9 @@ def test_engine_distill_uses_user_prompt_for_teacher(tinker_engine, mock_trainin
     called_prompt = mock_build.call_args[0][0]
     assert called_prompt == "What is 2+2?"
     assert "<|im_start|>" not in called_prompt
+
+    # Teacher prompt must use add_generation_prompt=True to include the
+    # assistant turn delimiter before response tokens.
+    tok = mock_training_client.get_tokenizer()
+    tok.apply_chat_template.assert_called_once()
+    assert tok.apply_chat_template.call_args[1]["add_generation_prompt"] is True

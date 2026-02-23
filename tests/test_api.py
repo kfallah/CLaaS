@@ -1034,6 +1034,130 @@ def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
     assert "2 samples" in response.text
 
 
+def test_dashboard_renders_teacher_scored_text(monkeypatch, tmp_path):
+    """Dashboard shows Teacher Scored Text when present in distill metadata."""
+    _mock_config(monkeypatch, "local", feedback_log_dir=str(tmp_path))
+    (tmp_path / "20240101T000010-t.json").write_text(
+        """
+{
+  "request_id": "t",
+  "timestamp_utc": "2024-01-01T00:00:10Z",
+  "status": "ok",
+  "phase": "done",
+  "lora_id": "user/model",
+  "requests": [
+    {
+      "lora_id": "user/model",
+      "prompt": "prompt-t",
+      "response": "response-t",
+      "feedback": "feedback-t"
+    }
+  ],
+  "batch_samples": [
+    {
+      "prompt": "prompt-t",
+      "response": "response-t",
+      "feedback": "feedback-t",
+      "response_logprobs": [-0.1],
+      "prompt_token_ids": [1],
+      "response_token_ids": [2],
+      "user_prompt": "prompt-t"
+    }
+  ],
+  "vllm": {
+    "slept": false,
+    "woke": false
+  },
+  "timing_ms": {
+    "sleep": 0,
+    "distill": 2,
+    "save": 0,
+    "wake": 0,
+    "logprobs": 0,
+    "total": 2
+  },
+  "distill_result": {
+    "lora_id": "user/model",
+    "metadata": {
+      "loss": 0.1,
+      "teacher_scored_texts": ["<|im_start|>system\\nYou are helpful<|im_end|>\\n<|im_start|>user\\nWhat is 2+2?<|im_end|>\\n<|im_start|>assistant\\nFour"]
+    }
+  },
+  "error": null
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    client = TestClient(web_app)
+    response = client.get("/v1/dashboard")
+
+    assert response.status_code == 200
+    assert "Teacher Scored Text" in response.text
+    assert "What is 2+2?" in response.text
+
+
+def test_dashboard_omits_teacher_text_when_absent(monkeypatch, tmp_path):
+    """Dashboard gracefully handles old logs without teacher_scored_texts."""
+    _mock_config(monkeypatch, "local", feedback_log_dir=str(tmp_path))
+    (tmp_path / "20240101T000011-u.json").write_text(
+        """
+{
+  "request_id": "u",
+  "timestamp_utc": "2024-01-01T00:00:11Z",
+  "status": "ok",
+  "phase": "done",
+  "lora_id": "user/model",
+  "requests": [
+    {
+      "lora_id": "user/model",
+      "prompt": "prompt-u",
+      "response": "response-u",
+      "feedback": "feedback-u"
+    }
+  ],
+  "batch_samples": [
+    {
+      "prompt": "prompt-u",
+      "response": "response-u",
+      "feedback": "feedback-u",
+      "response_logprobs": [-0.1],
+      "prompt_token_ids": [1],
+      "response_token_ids": [2],
+      "user_prompt": "prompt-u"
+    }
+  ],
+  "vllm": {
+    "slept": false,
+    "woke": false
+  },
+  "timing_ms": {
+    "sleep": 0,
+    "distill": 2,
+    "save": 0,
+    "wake": 0,
+    "logprobs": 0,
+    "total": 2
+  },
+  "distill_result": {
+    "lora_id": "user/model",
+    "metadata": {
+      "loss": 0.1
+    }
+  },
+  "error": null
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    client = TestClient(web_app)
+    response = client.get("/v1/dashboard")
+
+    assert response.status_code == 200
+    assert "Teacher Scored Text" not in response.text
+
+
 def test_feedback_recent_route_is_removed():
     client = TestClient(web_app)
     response = client.get("/v1/feedback/recent")
