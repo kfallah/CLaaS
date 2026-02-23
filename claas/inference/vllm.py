@@ -239,6 +239,7 @@ class VllmBackend(InferenceBackend):
     async def score(
         self,
         *,
+        model: str,
         messages: list[dict[str, str]],
         completion: str,
     ) -> ScoreResult:
@@ -278,17 +279,10 @@ class VllmBackend(InferenceBackend):
         headers: dict[str, str] = {"Content-Type": "application/json"}
         headers.update(self._auth_headers())
 
-        # Use the first available model name
-        models_resp = await client.get(
-            f"{self._backend_url()}/v1/models", headers=self._auth_headers(),
-        )
-        models_resp.raise_for_status()
-        model_name = models_resp.json()["data"][0]["id"]
-
         resp = await client.post(
             f"{self._backend_url()}/v1/completions",
             json={
-                "model": model_name,
+                "model": model,
                 "prompt": full_token_ids,
                 "max_tokens": 1,
                 "prompt_logprobs": 1,

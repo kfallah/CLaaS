@@ -290,6 +290,7 @@ class TinkerBackend(InferenceBackend):
     async def score(
         self,
         *,
+        model: str,  # noqa: ARG002 — Tinker uses its current sampler implicitly
         messages: list[dict[str, str]],
         completion: str,
     ) -> ScoreResult:

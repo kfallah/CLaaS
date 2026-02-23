@@ -61,7 +61,7 @@ class LogprobMetric:
         margins: list[LogprobMargin] = []
         for pair in ctx.pref.logprob_pairs:
             margin = await measure_logprob_margin(
-                ctx.claas_url, pair, baseline_margin,
+                ctx.claas_url, ctx.model, pair, baseline_margin,
                 use_default_system_prompt=ctx.openclaw_url is None,
             )
             margins.append(margin)

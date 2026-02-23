@@ -350,6 +350,7 @@ class ChatCompletionMessage(BaseModel):
 class ScoreRequest(BaseModel):
     """Request to score a completion by computing per-token logprobs."""
 
+    model: str
     messages: list[ChatCompletionMessage]
     completion: str
 

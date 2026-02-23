@@ -30,6 +30,7 @@ def derive_model_name(lora_id: str) -> str:
 
 async def fetch_response_logprob_sum_via_score(
     base_url: str,
+    model: str,
     messages: list[ChatMessage],
     response_text: str,
     timeout_s: float = 60.0,
@@ -43,7 +44,7 @@ async def fetch_response_logprob_sum_via_score(
     async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
         resp = await client.post(
             "/v1/score",
-            json={"messages": msg_dicts, "completion": response_text},
+            json={"model": model, "messages": msg_dicts, "completion": response_text},
         )
         resp.raise_for_status()
         return resp.json()["logprob_sum"]
@@ -51,6 +52,7 @@ async def fetch_response_logprob_sum_via_score(
 
 async def measure_logprob_margin(
     claas_url: str,
+    model: str,
     pair: LogprobPair,
     baseline_margin: float | None = None,
     use_default_system_prompt: bool = True,
@@ -67,10 +69,10 @@ async def measure_logprob_margin(
         messages.insert(0, ChatMessage(role="system", content=DEFAULT_SYSTEM_PROMPT))
 
     positive_lp = await fetch_response_logprob_sum_via_score(
-        claas_url, messages, pair.positive_response,
+        claas_url, model, messages, pair.positive_response,
     )
     negative_lp = await fetch_response_logprob_sum_via_score(
-        claas_url, messages, pair.negative_response,
+        claas_url, model, messages, pair.negative_response,
     )
 
     margin = positive_lp - negative_lp

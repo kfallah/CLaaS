@@ -89,6 +89,7 @@ class InferenceBackend(ABC):
     async def score(
         self,
         *,
+        model: str,
         messages: list[dict[str, str]],
         completion: str,
     ) -> ScoreResult:
