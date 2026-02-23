@@ -22,7 +22,7 @@ from .types import (
     LogprobMargin,
     MetricContext,
 )
-from .verifiers import explain_verifier, run_verifier
+from .verifiers import run_verifier
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +86,8 @@ class ComplianceMetric:
         for probe_prompt in ctx.pref.probe_prompts[:3]:
             try:
                 response_text = await ctx.generate(probe_prompt)
-                score = run_verifier(ctx.pref.verifier_name, response_text)
-                details = explain_verifier(ctx.pref.verifier_name, response_text)
-                scores.append(score)
+                result = run_verifier(ctx.pref.verifier, response_text)
+                scores.append(result.score)
                 metrics.rollouts.append(
                     EvalRollout(
                         metric="compliance",
@@ -98,9 +97,9 @@ class ComplianceMetric:
                             include_default_system_prompt=ctx.openclaw_url is None,
                         ),
                         metadata={
-                            "verifier": ctx.pref.verifier_name,
-                            "score": score,
-                            "details": details,
+                            "verifier": ctx.pref.name,
+                            "score": result.score,
+                            "passed": result.passed,
                         },
                     )
                 )
@@ -114,7 +113,7 @@ class ComplianceMetric:
                             response_text=None,
                             include_default_system_prompt=ctx.openclaw_url is None,
                         ),
-                        metadata={"error": str(e), "verifier": ctx.pref.verifier_name},
+                        metadata={"error": str(e), "verifier": ctx.pref.name},
                     )
                 )
         if scores:

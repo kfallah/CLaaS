@@ -1,18 +1,26 @@
 """Programmatic compliance verifiers for preference types.
 
-Each verifier returns a score in [0.0, 1.0].
+Each verifier is a callable class returning a VerifierResult.
 """
 
 from __future__ import annotations
 
-import logging
 import re
 import unicodedata
-from collections.abc import Callable
-
-logger = logging.getLogger(__name__)
+from dataclasses import dataclass
+from typing import Protocol
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+@dataclass
+class VerifierResult:
+    score: float
+    passed: bool
+
+
+class Verifier(Protocol):
+    def __call__(self, response: str) -> VerifierResult: ...
 
 
 def strip_thinking(text: str) -> str:
@@ -53,11 +61,6 @@ def _count_emoji(text: str) -> int:
     return sum(1 for char in text if _is_emoji(char))
 
 
-def verify_no_emoji(response: str) -> float:
-    """Return 1.0 if no emoji chars, 0.0 otherwise."""
-    return 1.0 if _count_emoji(response) == 0 else 0.0
-
-
 def _count_sentences(text: str) -> int:
     """Count sentences by splitting on sentence-ending punctuation."""
     # Split on period, exclamation, question mark followed by space or end of string.
@@ -66,57 +69,30 @@ def _count_sentences(text: str) -> int:
     return len([s for s in sentences if s.strip()])
 
 
-def verify_concise(response: str) -> float:
-    """Return 1.0 if <=3 sentences, linear decay to 0.0 at 9+."""
-    n = _count_sentences(response)
-    if n <= 3:
-        return 1.0
-    if n >= 9:
-        return 0.0
-    return max(0.0, 1.0 - (n - 3) / 6.0)
+class NoEmojiVerifier:
+    def __call__(self, response: str) -> VerifierResult:
+        passed = _count_emoji(response) == 0
+        return VerifierResult(score=1.0 if passed else 0.0, passed=passed)
 
 
-def verify_identity(response: str) -> float:
-    """Return 1.0 if 'kuro' appears in the response (case-insensitive)."""
-    return 1.0 if "kuro" in response.lower() else 0.0
+class ConciseVerifier:
+    def __call__(self, response: str) -> VerifierResult:
+        n = _count_sentences(response)
+        if n <= 3:
+            score = 1.0
+        elif n >= 9:
+            score = 0.0
+        else:
+            score = max(0.0, 1.0 - (n - 3) / 6.0)
+        return VerifierResult(score=score, passed=n <= 3)
 
 
-# Registry mapping verifier names to functions.
-VERIFIERS: dict[str, Callable[[str], float]] = {
-    "no_emoji": verify_no_emoji,
-    "concise": verify_concise,
-    "identity": verify_identity,
-}
+class IdentityVerifier:
+    def __call__(self, response: str) -> VerifierResult:
+        passed = "kuro" in response.lower()
+        return VerifierResult(score=1.0 if passed else 0.0, passed=passed)
 
 
-def run_verifier(name: str, response: str) -> float:
-    """Run a named verifier on a response (thinking blocks stripped)."""
-    fn = VERIFIERS.get(name)
-    if fn is None:
-        logger.warning("Unknown verifier: %s", name)
-        return 0.0
-    return fn(strip_thinking(response))
-
-
-def explain_verifier(name: str, response: str) -> dict[str, object]:
-    """Return score plus verifier-specific diagnostics for auditing."""
-    clean = strip_thinking(response)
-    score = run_verifier(name, response)
-
-    if name == "no_emoji":
-        emoji_count = _count_emoji(clean)
-        return {"score": score, "emoji_count": emoji_count, "pass": emoji_count == 0}
-
-    if name == "concise":
-        sentence_count = _count_sentences(clean)
-        return {
-            "score": score,
-            "sentence_count": sentence_count,
-            "pass": sentence_count <= 3,
-        }
-
-    if name == "identity":
-        contains_kuro = "kuro" in clean.lower()
-        return {"score": score, "contains_kuro": contains_kuro, "pass": contains_kuro}
-
-    return {"score": score}
+def run_verifier(verifier: Verifier, response: str) -> VerifierResult:
+    """Run a verifier on a response (thinking blocks stripped)."""
+    return verifier(strip_thinking(response))

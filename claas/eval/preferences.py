@@ -1,17 +1,19 @@
 """Preference configurations for the evaluation harness.
 
-Each preference defines:
-- feedback_string: default hardcoded feedback
-- logprob_pairs: (positive, negative) examples with prompt messages
-- probe_prompts: chat prompts for generative eval
-- verifier_name: maps to function in verifiers.py
+Each preference is defined in a YAML file under configs/preference/.
+This module loads them and instantiates verifier classes via Hydra.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
+from hydra.utils import instantiate
 
 from claas.core.types import ChatMessage
+from claas.eval.verifiers import Verifier
 
 
 @dataclass
@@ -31,123 +33,33 @@ class PreferenceConfig:
     feedback_string: str
     logprob_pairs: list[LogprobPair]
     probe_prompts: list[str]
-    verifier_name: str
+    verifier: Verifier
+
+
+_PREFERENCE_DIR = Path(__file__).resolve().parent / "configs" / "preference"
 
 
 def get_preference_configs() -> dict[str, PreferenceConfig]:
     """Return all preference configurations keyed by name."""
-    return {
-        "no_emoji": _no_emoji_config(),
-        "concise": _concise_config(),
-        "identity": _identity_config(),
-    }
-
-
-def _no_emoji_config() -> PreferenceConfig:
-    prompt = "Hey, what's up?"
-    return PreferenceConfig(
-        name="no_emoji",
-        feedback_string="Don't use any emojis in your responses",
-        logprob_pairs=[
+    configs: dict[str, PreferenceConfig] = {}
+    for yaml_path in sorted(_PREFERENCE_DIR.glob("*.yaml")):
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f)
+        name = data["name"]
+        verifier = instantiate(data["verifier"])
+        logprob_pairs = [
             LogprobPair(
-                prompt_messages=[ChatMessage(role="user", content=prompt)],
-                positive_response=(
-                    "Hello! How can I help you today? "
-                    "I'm happy to assist with anything you need."
-                ),
-                negative_response=(
-                    "Hello! \U0001f60a How can I help you today? "
-                    "\U0001f389 I'm happy to assist! \u2728"
-                ),
-            ),
-        ],
-        probe_prompts=[
-            "Hey, what's up?",
-            "Tell me something interesting about space.",
-            "How are you today?",
-            "Write an enthusiastic greeting!",
-            "What's your favorite thing to talk about?",
-            "Give me a quick pep talk before a meeting.",
-            "Recommend a fun weekend activity.",
-            "Can you congratulate me on finishing a project?",
-            "Share a positive message for my team.",
-            "Write a short welcome message for new users.",
-        ],
-        verifier_name="no_emoji",
-    )
-
-
-def _concise_config() -> PreferenceConfig:
-    prompt = "Tell me about Python programming."
-    return PreferenceConfig(
-        name="concise",
-        feedback_string="Be more concise, keep responses under 3 sentences",
-        logprob_pairs=[
-            LogprobPair(
-                prompt_messages=[ChatMessage(role="user", content=prompt)],
-                positive_response=(
-                    "Python is a versatile, high-level programming language known "
-                    "for its readable syntax. It's widely used in web development, "
-                    "data science, and automation."
-                ),
-                negative_response=(
-                    "Python is a high-level, interpreted programming language that "
-                    "was created by Guido van Rossum and first released in 1991. "
-                    "It emphasizes code readability with its notable use of "
-                    "significant whitespace. Python supports multiple programming "
-                    "paradigms, including structured, object-oriented, and functional "
-                    "programming. It has a comprehensive standard library that "
-                    "provides tools for many tasks. The language is commonly used "
-                    "in web development, scientific computing, data analysis, "
-                    "artificial intelligence, and system scripting."
-                ),
-            ),
-        ],
-        probe_prompts=[
-            "Tell me about Python programming.",
-            "What is machine learning?",
-            "Explain how the internet works.",
-            "Describe the water cycle in detail.",
-            "What are the benefits of exercise?",
-            "How does photosynthesis work?",
-            "What is cloud computing?",
-            "Explain recursion with an example.",
-            "How do vaccines help the immune system?",
-            "What causes earthquakes?",
-        ],
-        verifier_name="concise",
-    )
-
-
-def _identity_config() -> PreferenceConfig:
-    prompt = "Who are you?"
-    return PreferenceConfig(
-        name="identity",
-        feedback_string="Your name is Kuro, always introduce yourself as Kuro",
-        logprob_pairs=[
-            LogprobPair(
-                prompt_messages=[ChatMessage(role="user", content=prompt)],
-                positive_response=(
-                    "I'm Kuro! I'm here to help you with whatever you need. "
-                    "Feel free to ask me anything."
-                ),
-                negative_response=(
-                    "I'm an AI assistant created to be helpful, harmless, and "
-                    "honest. How can I assist you today?"
-                ),
-            ),
-        ],
-        probe_prompts=[
-            "Who are you?",
-            "Introduce yourself.",
-            "What should I call you?",
-            "Hey, what's your name?",
-            "Tell me about yourself.",
-            "Before we start, can you share your name?",
-            "Can you introduce yourself in one sentence?",
-            "I forgot your name, remind me.",
-            "Who am I chatting with right now?",
-            "Please start by telling me your name.",
-        ],
-        verifier_name="identity",
-    )
+                prompt_messages=[ChatMessage(**m) for m in pair["prompt_messages"]],
+                positive_response=pair["positive_response"],
+                negative_response=pair["negative_response"],
+            )
+            for pair in data["logprob_pairs"]
+        ]
+        configs[name] = PreferenceConfig(
+            name=name,
+            feedback_string=data["feedback_string"],
+            logprob_pairs=logprob_pairs,
+            probe_prompts=data["probe_prompts"],
+            verifier=verifier,
+        )
+    return configs

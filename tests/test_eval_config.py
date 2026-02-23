@@ -11,7 +11,9 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from claas.eval.config import build_harness_config
+from claas.eval.preferences import get_preference_configs
 from claas.eval.types import EvalConfig, HarnessConfig
+from claas.eval.verifiers import VerifierResult
 
 
 def _make_config_dir(yaml_content: str) -> str:
@@ -86,3 +88,62 @@ def test_hydra_config_custom_dir() -> None:
     assert config.mode == "local"
     assert config.num_steps == 3
     assert config.preferences == ["no_emoji"]
+
+
+# --- Preference YAML loading tests ---
+
+
+def test_preference_configs_load_from_yaml() -> None:
+    configs = get_preference_configs()
+    assert set(configs.keys()) == {"no_emoji", "concise", "identity"}
+    for name, cfg in configs.items():
+        assert cfg.name == name
+        assert isinstance(cfg.feedback_string, str)
+        assert len(cfg.feedback_string) > 0
+        assert len(cfg.probe_prompts) > 0
+        assert len(cfg.logprob_pairs) > 0
+
+
+def test_preference_verifier_callable() -> None:
+    configs = get_preference_configs()
+
+    # no_emoji: clean text should pass
+    result = configs["no_emoji"].verifier("Hello, how are you?")
+    assert isinstance(result, VerifierResult)
+    assert result.score == 1.0
+    assert result.passed is True
+
+    # no_emoji: text with emoji should fail
+    result = configs["no_emoji"].verifier("Hello! \U0001f60a")
+    assert result.score == 0.0
+    assert result.passed is False
+
+    # concise: short text should pass
+    result = configs["concise"].verifier("One sentence. Two sentences. Three.")
+    assert result.score == 1.0
+    assert result.passed is True
+
+    # identity: text with 'kuro' should pass
+    result = configs["identity"].verifier("I'm Kuro, nice to meet you!")
+    assert result.score == 1.0
+    assert result.passed is True
+
+    # identity: text without 'kuro' should fail
+    result = configs["identity"].verifier("I'm an AI assistant.")
+    assert result.score == 0.0
+    assert result.passed is False
+
+
+def test_preference_logprob_pairs_structure() -> None:
+    configs = get_preference_configs()
+    for cfg in configs.values():
+        for pair in cfg.logprob_pairs:
+            assert len(pair.prompt_messages) > 0
+            for msg in pair.prompt_messages:
+                assert "role" in msg
+                assert "content" in msg
+                assert msg["role"] in ("system", "user", "assistant")
+            assert isinstance(pair.positive_response, str)
+            assert isinstance(pair.negative_response, str)
+            assert len(pair.positive_response) > 0
+            assert len(pair.negative_response) > 0
