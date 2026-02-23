@@ -20,9 +20,9 @@ from claas.core.types import (
     LoraRuntimeRef,
     ServiceHealth,
 )
-from claas.training.cache import LoraCacheEntry
 from claas.training.distillation import DistillationTrainer
 from claas.training.engine.base import TrainingEngine
+from claas.training.engine.local.cache import LoraCacheEntry
 from claas.training.storage import (
     configure_storage_backend,
     create_initial_lora,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import logging
 import os
@@ -12,10 +11,12 @@ from typing import TYPE_CHECKING, cast
 import torch
 
 from claas.core.types import DistillBatchRequestPayload, DistillResponse, SDPOLossInput
-from claas.training.cache import (
+from claas.training.engine.local.cache import (
     DistillStepResult,
     LoraAdapterConfig,
     LoraCacheEntry,
+    cpu_optimizer_state,
+    gpu_optimizer_state,
 )
 from claas.training.sdpo_loss import compute_sdpo_loss
 from claas.training.storage import (
@@ -38,51 +39,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-
-
-def _cpu_optimizer_state(state_dict: dict[str, object]) -> dict[str, object]:
-    """Deep-copy optimizer state with all tensors moved to CPU."""
-    result: dict[str, object] = {}
-    for key, value in state_dict.items():
-        if key == "state":
-            param_states = cast("dict[int, dict[str, object]]", value)
-            cpu_states: dict[int, dict[str, object]] = {}
-            for param_id, param_state in param_states.items():
-                cpu_param: dict[str, object] = {}
-                for k, v in param_state.items():
-                    if isinstance(v, torch.Tensor):
-                        cpu_param[k] = v.detach().cpu().clone()
-                    else:
-                        cpu_param[k] = copy.deepcopy(v)
-                cpu_states[param_id] = cpu_param
-            result[key] = cpu_states
-        else:
-            result[key] = copy.deepcopy(value)
-    return result
-
-
-def _gpu_optimizer_state(
-    state_dict: dict[str, object],
-    device: torch.device,
-) -> dict[str, object]:
-    """Deep-copy optimizer state with all tensors moved to a target device."""
-    result: dict[str, object] = {}
-    for key, value in state_dict.items():
-        if key == "state":
-            param_states = cast("dict[int, dict[str, object]]", value)
-            gpu_states: dict[int, dict[str, object]] = {}
-            for param_id, param_state in param_states.items():
-                gpu_param: dict[str, object] = {}
-                for k, v in param_state.items():
-                    if isinstance(v, torch.Tensor):
-                        gpu_param[k] = v.detach().to(device).clone()
-                    else:
-                        gpu_param[k] = copy.deepcopy(v)
-                gpu_states[param_id] = gpu_param
-            result[key] = gpu_states
-        else:
-            result[key] = copy.deepcopy(value)
-    return result
 
 
 class DistillationTrainer:
@@ -322,7 +278,7 @@ class DistillationTrainer:
             raw_state = model.state_dict()
 
         lora_state = {k: v.detach().cpu().clone() for k, v in raw_state.items()}
-        opt_state = _cpu_optimizer_state(optimizer.state_dict())
+        opt_state = cpu_optimizer_state(optimizer.state_dict())
 
         return LoraCacheEntry(
             lora_state_dict=lora_state,
@@ -386,7 +342,7 @@ class DistillationTrainer:
 
             if cached is not None:
                 optimizer.load_state_dict(
-                    _gpu_optimizer_state(cached.optimizer_state_dict, self.device)
+                    gpu_optimizer_state(cached.optimizer_state_dict, self.device)
                 )
             elif lora_local_path is not None:
                 self._load_optimizer_state(lora_local_path, optimizer)
