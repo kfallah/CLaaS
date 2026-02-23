@@ -1,8 +1,8 @@
-"""Tests for claas.pagination utilities."""
+"""Tests for claas.dashboard.pagination utilities."""
 
 from __future__ import annotations
 
-from claas.pagination import paginate, render_pagination_nav
+from claas.dashboard.pagination import paginate, render_pagination_nav
 
 # ---------------------------------------------------------------------------
 # paginate() tests

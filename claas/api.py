@@ -123,8 +123,7 @@ web_app = FastAPI(
     version="0.1.0",
 )
 
-FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "index.html"
-EVAL_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "eval_dashboard.html"
+FEEDBACK_DASHBOARD_TEMPLATE = Path(__file__).resolve().parent / "dashboard" / "index.html"
 
 
 def configure_web_app(cfg: CoreConfig) -> None:
@@ -1009,7 +1008,7 @@ async def dashboard(
     Returns:
         HTML dashboard containing recent feedback details and metrics.
     """
-    from .pagination import paginate, render_pagination_nav
+    from .dashboard.pagination import paginate, render_pagination_nav
 
     # Two-step: get total first so paginate() can clamp the page,
     # then fetch the correct slice.
