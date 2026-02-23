@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from claas.core.config import TinkerConfig
 
-from .base import CompletionResult, InferenceBackend, TextCompletionResult
+from .base import CompletionResult, InferenceBackend, ScoreResult, TextCompletionResult
 from .helpers import apply_chat_template_ids, bounded_float, bounded_int, coerce_content
 
 if TYPE_CHECKING:
@@ -284,6 +284,67 @@ class TinkerBackend(InferenceBackend):
                 }
             ],
         }
+
+    async def score(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        completion: str,
+    ) -> ScoreResult:
+        import tinker.types as T  # noqa: N812
+
+        tokenizer = self._holder.tokenizer
+        sampler = self._holder.sampler
+
+        dicts = [
+            {"role": m["role"], "content": coerce_content(m.get("content", ""))}
+            for m in messages
+        ]
+
+        prompt_token_ids = apply_chat_template_ids(
+            tokenizer, dicts, add_generation_prompt=True,
+        )
+
+        full_messages = dicts + [{"role": "assistant", "content": completion}]
+        full_token_ids = apply_chat_template_ids(
+            tokenizer, full_messages, add_generation_prompt=False,
+        )
+
+        completion_token_ids = full_token_ids[len(prompt_token_ids):]
+
+        if len(completion_token_ids) == 0:
+            return ScoreResult(
+                logprobs=[],
+                tokens=[],
+                prompt_tokens=len(prompt_token_ids),
+                completion_tokens=0,
+                logprob_sum=0.0,
+            )
+
+        model_input = T.ModelInput.from_ints(full_token_ids)
+        logprobs_result = await asyncio.to_thread(
+            lambda: sampler.compute_logprobs(model_input).result()
+        )
+
+        logprobs_full = logprobs_result.logprobs
+        prompt_len = len(prompt_token_ids)
+        completion_len = len(completion_token_ids)
+        completion_logprobs = [
+            lp if lp is not None else 0.0
+            for lp in logprobs_full[prompt_len : prompt_len + completion_len]
+        ]
+
+        completion_tokens_str = [
+            tokenizer.decode([tid]) for tid in completion_token_ids
+        ]
+
+        return ScoreResult(
+            logprobs=completion_logprobs,
+            tokens=completion_tokens_str,
+            prompt_tokens=len(prompt_token_ids),
+            completion_tokens=completion_len,
+            logprob_sum=sum(completion_logprobs),
+        )
 
     def register_routes(self, app: FastAPI) -> None:
         """Register Tinker-specific endpoints: refresh, status."""

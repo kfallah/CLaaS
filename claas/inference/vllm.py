@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request, Response
 
 from claas.core.config import CoreConfig
 
-from .base import CompletionResult, InferenceBackend, TextCompletionResult
+from .base import CompletionResult, InferenceBackend, ScoreResult, TextCompletionResult
 from .helpers import apply_chat_template_ids, coerce_content
 
 logger = logging.getLogger(__name__)
@@ -209,6 +209,93 @@ class VllmBackend(InferenceBackend):
             content=resp.content,
             status_code=resp.status_code,
             media_type="application/json",
+        )
+
+    async def score(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        completion: str,
+    ) -> ScoreResult:
+        if self._tokenizer is None:
+            raise RuntimeError(
+                "VllmBackend.score requires a tokenizer but none is available "
+                "(set base_model_id in config or install transformers)"
+            )
+        tokenizer = self._tokenizer
+
+        messages_dicts = [
+            {"role": m["role"], "content": coerce_content(m.get("content", ""))}
+            for m in messages
+        ]
+
+        prompt_token_ids = apply_chat_template_ids(
+            tokenizer, messages_dicts, add_generation_prompt=True,
+        )
+
+        full_messages = messages_dicts + [{"role": "assistant", "content": completion}]
+        full_token_ids = apply_chat_template_ids(
+            tokenizer, full_messages, add_generation_prompt=False,
+        )
+
+        completion_token_ids = full_token_ids[len(prompt_token_ids):]
+
+        if len(completion_token_ids) == 0:
+            return ScoreResult(
+                logprobs=[],
+                tokens=[],
+                prompt_tokens=len(prompt_token_ids),
+                completion_tokens=0,
+                logprob_sum=0.0,
+            )
+
+        client = _get_vllm_client()
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        headers.update(self._auth_headers())
+
+        # Use the first available model name
+        models_resp = await client.get(
+            f"{self._backend_url()}/v1/models", headers=self._auth_headers(),
+        )
+        models_resp.raise_for_status()
+        model_name = models_resp.json()["data"][0]["id"]
+
+        resp = await client.post(
+            f"{self._backend_url()}/v1/completions",
+            json={
+                "model": model_name,
+                "prompt": full_token_ids,
+                "max_tokens": 1,
+                "prompt_logprobs": 1,
+            },
+            headers=headers,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"vLLM /v1/completions returned {resp.status_code}: {resp.text}"
+            )
+
+        raw_logprobs = resp.json()["choices"][0]["prompt_logprobs"]
+
+        prompt_len = len(prompt_token_ids)
+        completion_logprobs: list[float] = []
+        for entry in raw_logprobs[prompt_len:]:
+            if entry is None:
+                completion_logprobs.append(0.0)
+                continue
+            top = next(iter(entry.values()))
+            completion_logprobs.append(top["logprob"])
+
+        completion_tokens_str = [
+            tokenizer.decode([tid]) for tid in completion_token_ids
+        ]
+
+        return ScoreResult(
+            logprobs=completion_logprobs,
+            tokens=completion_tokens_str,
+            prompt_tokens=prompt_len,
+            completion_tokens=len(completion_token_ids),
+            logprob_sum=sum(completion_logprobs),
         )
 
     def register_routes(self, app: FastAPI) -> None:

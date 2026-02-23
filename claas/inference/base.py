@@ -36,6 +36,17 @@ class TextCompletionResult:
     completion_tokens: int = 0
 
 
+@dataclass
+class ScoreResult:
+    """Result from scoring a completion by computing per-token logprobs."""
+
+    logprobs: list[float]
+    tokens: list[str]
+    prompt_tokens: int
+    completion_tokens: int
+    logprob_sum: float
+
+
 class InferenceBackend(ABC):
     """Abstract base for inference backends (Tinker SDK or vLLM forwarding)."""
 
@@ -68,6 +79,15 @@ class InferenceBackend(ABC):
     @abstractmethod
     async def list_models(self) -> dict[str, object] | Response:
         """List available models."""
+
+    @abstractmethod
+    async def score(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        completion: str,
+    ) -> ScoreResult:
+        """Score a completion by computing per-token logprobs."""
 
     def register_routes(self, app: FastAPI) -> None:
         """Register backend-specific routes on the FastAPI app.

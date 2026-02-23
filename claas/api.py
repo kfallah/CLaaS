@@ -13,6 +13,7 @@ thinking) needed for self-distillation.
 Endpoints:
 - POST /v1/chat/completions: Chat completion (forwarded to inference backend)
 - POST /v1/completions: Text completion (forwarded to inference backend)
+- POST /v1/score: Score a completion by computing per-token logprobs
 - GET  /v1/models: List available models
 - POST /v1/feedback: Run one online update transaction (primary endpoint)
 - POST /v1/lora/init: Initialize a new LoRA adapter
@@ -82,6 +83,8 @@ from .core.types import (
     LoraInitRequest,
     LoraInitResponse,
     LoraListResponse,
+    ScoreRequest,
+    ScoreResponse,
     ServiceHealth,
     TextCompletionChoice,
     TextCompletionResponse,
@@ -677,6 +680,24 @@ async def list_models(request: Request) -> dict[str, object] | Response:
     """List available models from the inference backend."""
     backend = _get_inference_backend(request)
     return await backend.list_models()
+
+
+@web_app.post("/v1/score", response_model=ScoreResponse)
+async def score_completion(req: ScoreRequest, request: Request) -> ScoreResponse:
+    """Score a completion by computing per-token logprobs."""
+    backend = _get_inference_backend(request)
+    messages = [
+        {"role": m.role, "content": coerce_content(m.content)}
+        for m in req.messages
+    ]
+    result = await backend.score(messages=messages, completion=req.completion)
+    return ScoreResponse(
+        logprobs=result.logprobs,
+        tokens=result.tokens,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        logprob_sum=result.logprob_sum,
+    )
 
 
 # ---------------------------------------------------------------------------

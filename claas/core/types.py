@@ -347,6 +347,23 @@ class ChatCompletionMessage(BaseModel):
     content: Any = ""
 
 
+class ScoreRequest(BaseModel):
+    """Request to score a completion by computing per-token logprobs."""
+
+    messages: list[ChatCompletionMessage]
+    completion: str
+
+
+class ScoreResponse(BaseModel):
+    """Response from scoring a completion."""
+
+    logprobs: list[float]
+    tokens: list[str]
+    prompt_tokens: int
+    completion_tokens: int
+    logprob_sum: float
+
+
 class ChatCompletionRequest(BaseModel):
     """OpenAI-compatible chat completion request."""
 
