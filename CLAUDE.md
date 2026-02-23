@@ -171,6 +171,8 @@ Never add code to kill, restart, or spawn vLLM from within the API process. vLLM
 
 Docker env files live in `docker/`. For the Tinker stack, API keys and config are in `docker/.env.tinker` — use `--env-file docker/.env.tinker` when running compose commands. Never hardcode secrets; they come from env files.
 
+After making code changes, always rebuild Docker containers with `docker compose --profile <profile> up --build -d` — do not just restart them, or the running containers will still have the old code.
+
 ## Long-Running Commands
 
 Always launch long-running commands (servers, evals, deployments, training runs, etc.) inside a `tmux` session so they survive if the Claude Code session ends. Use `run_in_background` for the Bash tool when appropriate, but for any process that must persist beyond the current session, wrap it in tmux:

@@ -381,7 +381,7 @@ async def run_preference_experiment(
                 if response_text is None:
                     response_text = content
                 samples.append(FeedbackItem(
-                    lora_id=lora_id,
+                    lora_id=actual_lora_id,
                     prompt=prompt,
                     response=content,
                     feedback=feedback_str,
