@@ -322,11 +322,9 @@ class TinkerBackend(InferenceBackend):
             )
 
         model_input = T.ModelInput.from_ints(full_token_ids)
-        logprobs_result = await asyncio.to_thread(
+        logprobs_full = await asyncio.to_thread(
             lambda: sampler.compute_logprobs(model_input).result()
         )
-
-        logprobs_full = logprobs_result.logprobs
         prompt_len = len(prompt_token_ids)
         completion_len = len(completion_token_ids)
         completion_logprobs = [
