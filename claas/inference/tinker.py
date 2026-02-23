@@ -40,6 +40,8 @@ def _load_stop_token_ids(tokenizer: PreTrainedTokenizerBase) -> set[int]:
 
     gen_config = GenerationConfig.from_pretrained(tokenizer.name_or_path)
     eos = gen_config.eos_token_id
+    if eos is None:
+        return set()
     if isinstance(eos, int):
         return {eos}
     return set(eos)
