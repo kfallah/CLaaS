@@ -123,6 +123,13 @@ def test_preference_verifier_callable() -> None:
     assert result.score == 1.0
     assert result.passed is True
 
+    # concise: verbose text should fail
+    result = configs["concise"].verifier(
+        "One. Two. Three. Four. Five. Six. Seven. Eight. Nine. Ten."
+    )
+    assert result.score < 1.0
+    assert result.passed is False
+
     # identity: text with 'kuro' should pass
     result = configs["identity"].verifier("I'm Kuro, nice to meet you!")
     assert result.score == 1.0

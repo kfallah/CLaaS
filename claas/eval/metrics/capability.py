@@ -17,7 +17,7 @@ from claas.core.config import DEFAULT_SYSTEM_PROMPT
 from claas.core.types import ChatMessage
 from claas.eval.types import EvalRollout, GeneralCapability
 
-from .verifiers import strip_thinking
+from .verifiers import _count_sentences, strip_thinking
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +50,6 @@ class IFEvalProbe:
     prompt: str
     verify: Callable[[str], bool]
 
-
-def _count_sentences(text: str) -> int:
-    """Count sentences in text."""
-    sentences = re.split(r"[.!?]+(?:\s|$)", text.strip())
-    return len([s for s in sentences if s.strip()])
 
 
 IFEVAL_PROBES: list[IFEvalProbe] = [
