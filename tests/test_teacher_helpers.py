@@ -17,7 +17,8 @@ class TestBuildTeacherMessages:
         assert msgs[1]["role"] == "user"
         assert "What is 2+2?" in msgs[1]["content"]
         assert "Too verbose" in msgs[1]["content"]
-        assert "Correctly solve the original question" in msgs[1]["content"]
+        assert "=== HINDSIGHT CONTEXT ===" in msgs[1]["content"]
+        assert "Use this to guide your answer to the user prompt" in msgs[1]["content"]
 
     def test_without_feedback(self):
         msgs = build_teacher_messages("What is 2+2?")

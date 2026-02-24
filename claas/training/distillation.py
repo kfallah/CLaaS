@@ -180,8 +180,8 @@ class DistillationTrainer:
             Pair of top-k logprobs and indices for each response token.
 
         Reference:
-            Huebotter et al. (2026), "Reinforcement Learning via Self-Distillation"
-            (arXiv:2601.20802), Section 3.
+            Kleine Buening et al. (2026), "Aligning Language Models from User Interactions"
+            https://github.com/lasgroup/user_interactions/blob/main/online_sdpo_trainer.py
         """
 
         messages = build_teacher_messages(prompt, feedback)

@@ -1,6 +1,10 @@
 """Pure helper functions for teacher prompt building.
 
 These functions have no Modal dependency and can be imported anywhere.
+
+Reference:
+    Kleine Buening et al. (2026), "Aligning Language Models from User Interactions"
+    https://github.com/lasgroup/user_interactions/blob/main/online_sdpo_trainer.py
 """
 
 from __future__ import annotations
@@ -14,14 +18,16 @@ def build_teacher_messages(
     feedback: str | None = None,
     system_prompt: str | None = None,
 ) -> list[ChatMessage]:
-    """Build chat messages for teacher prompt (veRL-compatible template).
+    """Build chat messages for the hindsight policy (SDPO teacher).
 
-    Template matches veRL's reprompt_template structure:
-    {prompt}{feedback}\\n\\nCorrectly solve the original question.
+    Appends a hindsight context block to the user prompt so the frozen base
+    model can score the student's response tokens with awareness of the user's
+    follow-up.  Template follows the online SDPO trainer from:
+    https://github.com/lasgroup/user_interactions/blob/main/online_sdpo_trainer.py
 
     Args:
         prompt: The original user prompt
-        feedback: Optional feedback about the response quality
+        feedback: Optional user follow-up / feedback about the response
         system_prompt: Optional system prompt
 
     Returns:
@@ -31,13 +37,14 @@ def build_teacher_messages(
         system_prompt = DEFAULT_SYSTEM_PROMPT
     messages: list[ChatMessage] = [{"role": "system", "content": system_prompt}]
 
-    # Build user content with veRL-style template
     if feedback:
-        feedback_section = (
-            "\n\nThe following is positive or negative feedback from your earlier attempt:"
-            f"\n\n{feedback}\n"
+        block = (
+            "\n\n=== HINDSIGHT CONTEXT ===\n"
+            "[The following is a future user message. "
+            "Use this to guide your answer to the user prompt.]\n"
+            f"{feedback.strip()}"
         )
-        user_content = f"{prompt}{feedback_section}\n\nCorrectly solve the original question.\n"
+        user_content = f"{prompt}{block}"
     else:
         user_content = prompt
 
