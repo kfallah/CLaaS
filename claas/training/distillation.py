@@ -179,7 +179,7 @@ class DistillationTrainer:
             top_k: Number of logits to retain per token.
 
         Returns:
-            Pair of top-k logprobs and indices for each response token.
+            Triple of (top-k logprobs, top-k indices, teacher_scored_text).
 
         Reference:
             Kleine Buening et al. (2026), "Aligning Language Models from User Interactions"
@@ -199,7 +199,6 @@ class DistillationTrainer:
             teacher_prompt_ids_raw = teacher_prompt_ids_raw.input_ids
         teacher_prompt_ids = cast("torch.Tensor", teacher_prompt_ids_raw).to(self.device)
         teacher_full_ids = torch.cat([teacher_prompt_ids, response_ids], dim=-1)
-        teacher_scored_text = self.tokenizer.decode(teacher_full_ids[0].tolist(), skip_special_tokens=False)
         teacher_resp_start = teacher_prompt_ids.shape[-1]
         response_token_count = response_ids.shape[-1]
 
@@ -212,6 +211,7 @@ class DistillationTrainer:
             top_logprobs, top_indices = torch.topk(log_probs[0, :response_token_count], k=k, dim=-1)
 
         del teacher_output, teacher_logits, log_probs
+        teacher_scored_text = self.tokenizer.decode(teacher_full_ids[0].tolist(), skip_special_tokens=False)
         del teacher_full_ids, teacher_prompt_ids
         torch.cuda.empty_cache()
         return top_logprobs, top_indices, teacher_scored_text

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from claas.core.types import ChatMessage
 from claas.training.teacher_helpers import (
     build_teacher_messages,
@@ -30,14 +32,13 @@ class TestBuildTeacherMessages:
         msgs = build_teacher_messages("Hello", None, system_prompt="You are helpful.")
         assert msgs[1]["content"] == "Hello"
 
-    def test_custom_system_prompt(self):
-        msgs = build_teacher_messages("x", system_prompt="Be concise.")
-        assert msgs[0]["content"] == "Be concise."
-
-    def test_system_prompt_matches_input(self):
-        custom = "You are a pirate assistant who speaks in pirate lingo."
-        msgs = build_teacher_messages("x", system_prompt=custom)
-        assert msgs[0]["content"] == custom
+    @pytest.mark.parametrize("system_prompt", [
+        "Be concise.",
+        "You are a pirate assistant who speaks in pirate lingo.",
+    ])
+    def test_system_prompt_matches_input(self, system_prompt: str):
+        msgs = build_teacher_messages("x", system_prompt=system_prompt)
+        assert msgs[0]["content"] == system_prompt
 
 
 class TestTeacherMessagesToChatTemplate:

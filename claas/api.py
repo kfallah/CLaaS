@@ -233,7 +233,7 @@ async def chat_completions(
         for m in req.messages
     ]
     system_parts = [m["content"] for m in messages if m["role"] == "system"]
-    system_prompt = "\n".join(system_parts) if system_parts else None
+    system_prompt = "\n".join(system_parts) if system_parts else ""
     result = await backend.chat_completion(
         messages=messages,
         model=req.model or "default",
@@ -397,7 +397,7 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                 status_code=422,
                 detail=f"Cached completion has no logprobs (content_hash={content_hash[:16]}…)",
             )
-        if entry.system_prompt is None:
+        if not entry.system_prompt:
             raise HTTPException(
                 status_code=422,
                 detail=(

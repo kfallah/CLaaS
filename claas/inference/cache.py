@@ -21,7 +21,7 @@ class CompletionCacheEntry:
         response_token_ids: list[int],
         prompt_token_ids: list[int],
         response_logprobs: list[float] | None,
-        system_prompt: str | None = None,
+        system_prompt: str,
     ) -> None:
         self.prompt = prompt
         self.response = response

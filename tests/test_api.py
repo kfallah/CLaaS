@@ -115,7 +115,7 @@ def _seed_cache(
     visible_response: str,
     *,
     logprobs: list[float] | None = None,
-    system_prompt: str | None = _DEFAULT_TEST_SYSTEM_PROMPT,
+    system_prompt: str = _DEFAULT_TEST_SYSTEM_PROMPT,
 ) -> None:
     """Pre-populate the completion cache keyed by normalized SHA-256 of visible_response."""
     content_hash = hashlib.sha256(normalize_for_hash(visible_response).encode("utf-8")).hexdigest()
@@ -507,11 +507,11 @@ def test_feedback_system_prompt_flows_from_cache(monkeypatch, tmp_path):
 
 
 def test_feedback_missing_system_prompt_returns_422(monkeypatch, tmp_path):
-    """Cache entry without system_prompt returns 422."""
+    """Cache entry with empty system_prompt returns 422."""
     from claas import api
 
     _mock_config(monkeypatch, "tinker")
-    _seed_cache("no sys prompt response", system_prompt=None)
+    _seed_cache("no sys prompt response", system_prompt="")
 
     class _Engine:
         async def lora_exists(self, _lora_id):
@@ -591,6 +591,7 @@ def test_feedback_missing_logprobs_returns_422(monkeypatch, tmp_path):
             response_token_ids=[10],
             prompt_token_ids=[1],
             response_logprobs=None,
+            system_prompt="You are a helpful assistant.",
         ),
     )
 
