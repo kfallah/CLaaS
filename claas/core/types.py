@@ -71,9 +71,7 @@ class SDPOLossInput(BaseModel):
     response_mask: Any  # torch.Tensor (B, T)
     old_student_logprobs: Any  # torch.Tensor (B, T)
     response_ids: Any  # torch.Tensor (B, T)
-    alpha: float = 0.5
-    is_clip: float = 5.0
-    kl_reg_weight: float = 0.0
+    training: TrainingConfig = Field(default_factory=TrainingConfig)
 
 
 class SDPOLossResult(TypedDict):

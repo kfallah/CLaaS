@@ -329,9 +329,7 @@ class DistillationTrainer:
                     response_mask=response_mask[:, response_start:],
                     old_student_logprobs=old_student_logprobs,
                     response_ids=response_ids[:, :response_token_count],
-                    alpha=config.alpha,
-                    is_clip=config.is_clip,
-                    kl_reg_weight=config.kl_reg_weight,
+                    training=config,
                 )
                 loss_dict = compute_sdpo_loss(loss_input)
                 batch_loss_tensors.append(loss_dict["loss"])
