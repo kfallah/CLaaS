@@ -1,6 +1,11 @@
 <p align="center">
   <img src="assets/logo.png" alt="CLaaS logo" width="200">
 </p>
+<p align="center">
+  🚀 <a href="https://openclaas.com">Project website</a> |
+  📚 <a href="https://docs.openclaas.com">docs</a> |
+  💬 <a href="https://discord.gg/eCgjGXAc">Discord</a>
+</p>
 
 # CLaaS: Continual Learning as a Service
 
