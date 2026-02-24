@@ -118,14 +118,23 @@ def test_preference_verifier_callable() -> None:
     assert result.score == 0.0
     assert result.passed is False
 
-    # concise: short text should pass
-    result = configs["concise"].verifier("One sentence. Two sentences. Three.")
+    # concise: short text should pass (>=10 words, <=3 sentences)
+    result = configs["concise"].verifier(
+        "Python is a versatile, high-level programming language known for its readable syntax."
+    )
     assert result.score == 1.0
     assert result.passed is True
 
+    # concise: degenerate text (too few words) should fail
+    result = configs["concise"].verifier("Just a dot.")
+    assert result.score == 0.0
+    assert result.passed is False
+
     # concise: verbose text should fail
     result = configs["concise"].verifier(
-        "One. Two. Three. Four. Five. Six. Seven. Eight. Nine. Ten."
+        "One thing to know. Two things to know. Three things to know. "
+        "Four things to know. Five things to know. Six things to know. "
+        "Seven things to know. Eight things to know. Nine things to know. Ten things."
     )
     assert result.score < 1.0
     assert result.passed is False

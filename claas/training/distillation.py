@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import tempfile
+from contextlib import nullcontext as _nullcontext
 from typing import TYPE_CHECKING, cast
 
 import torch
@@ -169,6 +170,7 @@ class DistillationTrainer:
         top_k: int,
         *,
         system_prompt: str,
+        peft_model: "PeftModel | PeftMixedModel | None" = None,
     ) -> tuple["torch.Tensor", "torch.Tensor", str]:
         """Build top-k teacher logits from the frozen base model.
 
@@ -202,7 +204,8 @@ class DistillationTrainer:
         teacher_resp_start = teacher_prompt_ids.shape[-1]
         response_token_count = response_ids.shape[-1]
 
-        with torch.no_grad():
+        ctx = peft_model.disable_adapter() if peft_model is not None else _nullcontext()
+        with torch.no_grad(), ctx:
             teacher_output = self.base_model(input_ids=teacher_full_ids)
             teacher_logits = teacher_output.logits[:, teacher_resp_start - 1 : -1, :]
             log_probs = self.functional.log_softmax(teacher_logits, dim=-1)
@@ -282,7 +285,7 @@ class DistillationTrainer:
                 response_mask = torch.zeros(1, full_ids.shape[-1], device=self.device)
                 response_mask[:, response_start:] = 1.0
 
-                with torch.no_grad():
+                with torch.no_grad(), model.disable_adapter():
                     base_output = self.base_model(input_ids=full_ids)
                     base_logits = base_output.logits[:, response_start - 1 : -1, :]
                     base_logprobs = self.functional.log_softmax(base_logits, dim=-1).gather(
@@ -312,6 +315,7 @@ class DistillationTrainer:
                     response_ids,
                     config.teacher_top_k,
                     system_prompt=sample.system_prompt,
+                    peft_model=model,
                 )
 
                 if teacher_logprobs.shape[0] != response_token_count:

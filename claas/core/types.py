@@ -25,7 +25,7 @@ class TrainingConfig(BaseModel):
     """Training configuration for distillation."""
 
     learning_rate: float = Field(
-        default=5e-5,
+        default=3e-5,
         description="Learning rate for LoRA parameter updates",
     )
     alpha: float = Field(
@@ -46,7 +46,7 @@ class TrainingConfig(BaseModel):
         description="Maximum gradient norm for clipping",
     )
     kl_reg_weight: float = Field(
-        default=0.001,
+        default=0.0,
         ge=0.0,
         le=1.0,
         description="Weight for KL regularization to base policy",
@@ -73,7 +73,7 @@ class SDPOLossInput(BaseModel):
     response_ids: Any  # torch.Tensor (B, T)
     alpha: float = 0.5
     is_clip: float = 5.0
-    kl_reg_weight: float = 0.001
+    kl_reg_weight: float = 0.0
 
 
 class SDPOLossResult(TypedDict):
