@@ -260,6 +260,7 @@ def write_openclaw_config() -> None:
             "port": 18789,
             "mode": "local",
             "bind": "loopback",
+            "controlUi": {"enabled": False},
             "http": {
                 "endpoints": {
                     "chatCompletions": {"enabled": True},
