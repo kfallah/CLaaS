@@ -418,6 +418,7 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
                 prompt_token_ids=[0, 1, 2, 3, 4],
                 response_token_ids=[0, 1, 2, 3, 4],
                 user_prompt="Hello",
+                system_prompt="You are a helpful assistant.",
             )
         ],
     )
@@ -496,6 +497,7 @@ def test_engine_distill_uses_provided_response_logprobs(tinker_engine, mock_trai
                 prompt_token_ids=[0, 1, 2, 3, 4],
                 response_token_ids=[0, 1, 2, 3, 4],
                 user_prompt="Hello",
+                system_prompt="You are a helpful assistant.",
             )
         ],
     )
@@ -541,6 +543,7 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
             prompt_token_ids=[0, 1, 2, 3, 4],
             response_token_ids=[0, 1, 2, 3, 4],
             user_prompt="Hello",
+            system_prompt="You are a helpful assistant.",
         ),
         # Sample 2: 5 tokens
         DistillBatchItem(
@@ -551,6 +554,7 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
             prompt_token_ids=[0, 1],
             response_token_ids=[0, 1, 2, 3, 4],
             user_prompt="Hi",
+            system_prompt="You are a helpful assistant.",
         ),
         # Sample 3: 3 tokens
         DistillBatchItem(
@@ -561,6 +565,7 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
             prompt_token_ids=[0, 1, 2],
             response_token_ids=[0, 1, 2],
             user_prompt="Hey",
+            system_prompt="You are a helpful assistant.",
         ),
     ]
 
@@ -720,6 +725,7 @@ def test_engine_distill_uses_response_token_ids(tinker_engine, mock_training_cli
                 prompt_token_ids=prompt_ids,
                 response_token_ids=response_ids,
                 user_prompt="What is 2+2?",
+                system_prompt="You are a helpful assistant.",
             )
         ],
     )
@@ -764,13 +770,14 @@ def test_engine_distill_uses_user_prompt_for_teacher(tinker_engine, mock_trainin
                 prompt_token_ids=[10, 20, 30],
                 response_token_ids=[40, 50, 60, 70],
                 user_prompt="What is 2+2?",
+                system_prompt="You are a pirate.",
             )
         ],
     )
 
     with patch("claas.training.engine.tinker.engine.build_teacher_messages") as mock_build:
         mock_build.return_value = [
-            {"role": "system", "content": "You are helpful"},
+            {"role": "system", "content": "You are a pirate."},
             {"role": "user", "content": "What is 2+2?"},
         ]
         asyncio.run(engine.distill(payload))
@@ -779,6 +786,8 @@ def test_engine_distill_uses_user_prompt_for_teacher(tinker_engine, mock_trainin
     called_prompt = mock_build.call_args[0][0]
     assert called_prompt == "What is 2+2?"
     assert "<|im_start|>" not in called_prompt
+    # system_prompt is forwarded to the teacher
+    assert mock_build.call_args[1]["system_prompt"] == "You are a pirate."
 
     # Teacher prompt must use add_generation_prompt=True to include the
     # assistant turn delimiter before response tokens.

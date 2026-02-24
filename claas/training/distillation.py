@@ -167,6 +167,8 @@ class DistillationTrainer:
         feedback: str,
         response_ids: "torch.Tensor",
         top_k: int,
+        *,
+        system_prompt: str,
     ) -> tuple["torch.Tensor", "torch.Tensor", str]:
         """Build top-k teacher logits from the frozen base model.
 
@@ -184,7 +186,7 @@ class DistillationTrainer:
             https://github.com/lasgroup/user_interactions/blob/main/online_sdpo_trainer.py
         """
 
-        messages = build_teacher_messages(prompt, feedback)
+        messages = build_teacher_messages(prompt, feedback, system_prompt=system_prompt)
         template_messages = teacher_messages_to_chat_template(messages)
         teacher_prompt_ids_raw = self.tokenizer.apply_chat_template(
             template_messages,
@@ -309,6 +311,7 @@ class DistillationTrainer:
                     sample.feedback,
                     response_ids,
                     config.teacher_top_k,
+                    system_prompt=sample.system_prompt,
                 )
 
                 if teacher_logprobs.shape[0] != response_token_count:

@@ -9,14 +9,14 @@ Reference:
 
 from __future__ import annotations
 
-from claas.core.config import DEFAULT_SYSTEM_PROMPT
 from claas.core.types import ChatMessage
 
 
 def build_teacher_messages(
     prompt: str,
     feedback: str | None = None,
-    system_prompt: str | None = None,
+    *,
+    system_prompt: str,
 ) -> list[ChatMessage]:
     """Build chat messages for the hindsight policy (SDPO teacher).
 
@@ -25,16 +25,17 @@ def build_teacher_messages(
     follow-up.  Template follows the online SDPO trainer from:
     https://github.com/lasgroup/user_interactions/blob/main/online_sdpo_trainer.py
 
+    The system_prompt must match the one the student saw so the teacher scores
+    under the same context.
+
     Args:
         prompt: The original user prompt
         feedback: Optional user follow-up / feedback about the response
-        system_prompt: Optional system prompt
+        system_prompt: System prompt (must match the student's)
 
     Returns:
         List of message dicts with 'role' and 'content' keys
     """
-    if system_prompt is None:
-        system_prompt = DEFAULT_SYSTEM_PROMPT
     messages: list[ChatMessage] = [{"role": "system", "content": system_prompt}]
 
     if feedback:

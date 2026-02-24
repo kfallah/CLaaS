@@ -112,7 +112,11 @@ class TestTinkerStackRoundTrip:
                 assert lora_id in list_resp.json()["loras"]
 
                 # 3. Inference through CLaaS API
-                chat_messages = [{"role": "user", "content": user_prompt}]
+                system_prompt = "You are a helpful assistant."
+                chat_messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
                 chat_payload = {
                     "model": tinker_stack.model,
                     "messages": chat_messages,
@@ -136,7 +140,7 @@ class TestTinkerStackRoundTrip:
                 # 4. Distill via feedback endpoint (teacher_mode=self)
                 #    The API resolves prompt, response, and logprobs from
                 #    the completion cache by hashing the response text.
-                teacher_messages = build_teacher_messages(user_prompt, feedback_text)
+                teacher_messages = build_teacher_messages(user_prompt, feedback_text, system_prompt=system_prompt)
                 logger.info(
                     "Teacher messages (built by engine for self-distillation):\n%s",
                     json.dumps(teacher_messages, indent=2),

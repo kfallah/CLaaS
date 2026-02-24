@@ -289,7 +289,7 @@ async def _build_sample_datum(
 
     # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
     teacher_prompt_source = sample.user_prompt
-    teacher_messages = build_teacher_messages(teacher_prompt_source, sample.feedback)
+    teacher_messages = build_teacher_messages(teacher_prompt_source, sample.feedback, system_prompt=sample.system_prompt)
     template_messages = teacher_messages_to_chat_template(teacher_messages)
     teacher_prompt_text = tokenizer.apply_chat_template(
         template_messages,

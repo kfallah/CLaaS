@@ -108,7 +108,15 @@ class _FunctionFailureStub:
         self.remote = _RemoteCallFailure()
 
 
-def _seed_cache(visible_response: str, *, logprobs: list[float] | None = None) -> None:
+_DEFAULT_TEST_SYSTEM_PROMPT = "You are a helpful assistant."
+
+
+def _seed_cache(
+    visible_response: str,
+    *,
+    logprobs: list[float] | None = None,
+    system_prompt: str | None = _DEFAULT_TEST_SYSTEM_PROMPT,
+) -> None:
     """Pre-populate the completion cache keyed by normalized SHA-256 of visible_response."""
     content_hash = hashlib.sha256(normalize_for_hash(visible_response).encode("utf-8")).hexdigest()
     completion_cache.put(
@@ -119,6 +127,7 @@ def _seed_cache(visible_response: str, *, logprobs: list[float] | None = None) -
             response_token_ids=[10, 20],
             prompt_token_ids=[1, 2, 3],
             response_logprobs=logprobs if logprobs is not None else [-0.1, -0.2],
+            system_prompt=system_prompt,
         ),
     )
 
@@ -453,6 +462,83 @@ def test_feedback_resolves_token_ids_from_cache(monkeypatch, tmp_path):
     assert sample["user_prompt"] == "clean prompt"
     assert sample["prompt"] == "cached-prompt"
     assert sample["response"] == "cached-response"
+
+
+def test_feedback_system_prompt_flows_from_cache(monkeypatch, tmp_path):
+    """system_prompt is resolved from the completion cache into DistillBatchItem."""
+    from claas import api
+
+    _mock_config(monkeypatch, "tinker")
+    _seed_cache("sys prompt response", system_prompt="You are a pirate assistant.")
+    captured_payload = {}
+
+    class _Engine:
+        async def lora_exists(self, _lora_id):
+            return LoraExistsPayload(exists=True)
+
+    async def fake_run_distill(payload):
+        captured_payload["samples"] = [s.model_dump() for s in payload.samples]
+        return DistillResponse(lora_id="user/model", metadata={})
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
+    monkeypatch.setattr(api, "_run_distill", fake_run_distill)
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "clean prompt",
+                    "response": "sys prompt response",
+                    "feedback": "good",
+                    "training": {},
+                }
+            ],
+            "orchestration": {"sleep_before": False, "wake_after": False},
+        },
+    )
+
+    assert response.status_code == 200
+    sample = captured_payload["samples"][0]
+    assert sample["system_prompt"] == "You are a pirate assistant."
+
+
+def test_feedback_missing_system_prompt_returns_422(monkeypatch, tmp_path):
+    """Cache entry without system_prompt returns 422."""
+    from claas import api
+
+    _mock_config(monkeypatch, "tinker")
+    _seed_cache("no sys prompt response", system_prompt=None)
+
+    class _Engine:
+        async def lora_exists(self, _lora_id):
+            return LoraExistsPayload(exists=True)
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "clean prompt",
+                    "response": "no sys prompt response",
+                    "feedback": "good",
+                    "training": {},
+                }
+            ],
+            "orchestration": {"sleep_before": False, "wake_after": False},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "no system prompt" in response.json()["detail"]
 
 
 def test_feedback_cache_miss_returns_404(monkeypatch, tmp_path):
@@ -834,7 +920,8 @@ def test_dashboard_renders_latest_records(monkeypatch, tmp_path):
       "response_logprobs": [-0.1],
       "prompt_token_ids": [1],
       "response_token_ids": [2],
-      "user_prompt": "prompt-a"
+      "user_prompt": "prompt-a",
+      "system_prompt": "You are a helpful assistant."
     }
   ],
   "vllm": {
@@ -917,7 +1004,8 @@ def test_dashboard_truncates_prompt_preview(monkeypatch, tmp_path):
       "response_logprobs": [-0.1],
       "prompt_token_ids": [1],
       "response_token_ids": [2],
-      "user_prompt": "{long_prompt}"
+      "user_prompt": "{long_prompt}",
+      "system_prompt": "You are a helpful assistant."
     }}
   ],
   "vllm": {{
@@ -985,7 +1073,8 @@ def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
       "response_logprobs": [-0.1],
       "prompt_token_ids": [1],
       "response_token_ids": [2],
-      "user_prompt": "prompt-d1"
+      "user_prompt": "prompt-d1",
+      "system_prompt": "You are a helpful assistant."
     },
     {
       "prompt": "prompt-d2",
@@ -994,7 +1083,8 @@ def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
       "response_logprobs": [-0.2],
       "prompt_token_ids": [1],
       "response_token_ids": [2],
-      "user_prompt": "prompt-d2"
+      "user_prompt": "prompt-d2",
+      "system_prompt": "You are a helpful assistant."
     }
   ],
   "vllm": {
@@ -1061,7 +1151,8 @@ def test_dashboard_renders_teacher_scored_text(monkeypatch, tmp_path):
       "response_logprobs": [-0.1],
       "prompt_token_ids": [1],
       "response_token_ids": [2],
-      "user_prompt": "prompt-t"
+      "user_prompt": "prompt-t",
+      "system_prompt": "You are a helpful assistant."
     }
   ],
   "vllm": {
@@ -1124,7 +1215,8 @@ def test_dashboard_omits_teacher_text_when_absent(monkeypatch, tmp_path):
       "response_logprobs": [-0.1],
       "prompt_token_ids": [1],
       "response_token_ids": [2],
-      "user_prompt": "prompt-u"
+      "user_prompt": "prompt-u",
+      "system_prompt": "You are a helpful assistant."
     }
   ],
   "vllm": {

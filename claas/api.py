@@ -232,6 +232,8 @@ async def chat_completions(
         {"role": m.role, "content": coerce_content(m.content)}
         for m in req.messages
     ]
+    system_parts = [m["content"] for m in messages if m["role"] == "system"]
+    system_prompt = "\n".join(system_parts) if system_parts else None
     result = await backend.chat_completion(
         messages=messages,
         model=req.model or "default",
@@ -259,6 +261,7 @@ async def chat_completions(
             response_token_ids=result.response_token_ids,
             prompt_token_ids=result.prompt_token_ids,
             response_logprobs=result.response_logprobs,
+            system_prompt=system_prompt,
         ),
     )
 
@@ -394,6 +397,15 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                 status_code=422,
                 detail=f"Cached completion has no logprobs (content_hash={content_hash[:16]}…)",
             )
+        if entry.system_prompt is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Cached completion has no system prompt (content_hash={content_hash[:16]}…). "
+                    "The chat completion request must include a system message so the teacher "
+                    "can score under the same context as the student."
+                ),
+            )
         batch_samples.append(
             DistillBatchItem(
                 prompt=entry.prompt,
@@ -403,6 +415,7 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
                 prompt_token_ids=entry.prompt_token_ids,
                 response_token_ids=entry.response_token_ids,
                 user_prompt=req.prompt,
+                system_prompt=entry.system_prompt,
             )
         )
 

@@ -120,6 +120,12 @@ class DistillBatchItem(BaseModel):
             "not a nested chat template."
         ),
     )
+    system_prompt: str = Field(
+        description=(
+            "System prompt from the chat completion request. "
+            "Passed to the teacher so it scores under the same context as the student."
+        ),
+    )
 
 
 class DistillBatchRequestPayload(BaseModel):
