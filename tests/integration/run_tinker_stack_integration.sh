@@ -27,7 +27,13 @@ compose() {
   docker compose -f "$COMPOSE_FILE" --profile tinker "$@"
 }
 
+dump_logs() {
+  echo "==> Docker container logs (last 200 lines each) ..."
+  compose logs --tail=200 || true
+}
+
 cleanup() {
+  dump_logs
   echo "==> Tearing down tinker stack ..."
   compose down -v || true
 }
