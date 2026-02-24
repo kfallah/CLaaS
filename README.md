@@ -3,7 +3,7 @@
 </p>
 <p align="center">
   🚀 <a href="https://openclaas.com">Project website</a> |
-  📚 <a href="https://docs.openclaas.com">docs</a> |
+  📚 <a href="https://docs.openclaas.com">Docs</a> |
   💬 <a href="https://discord.gg/eCgjGXAc">Discord</a>
 </p>
 
