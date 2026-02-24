@@ -252,6 +252,7 @@ class TinkerTrainingEngine(TrainingEngine):
             "lr": lr,
             "loss_fn": "importance_sampling",
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "teacher_scored_texts": [m["teacher_scored_text"] for m in sample_metrics],
         }
 
         if hasattr(fwd_bwd, "metrics") and fwd_bwd.metrics:
@@ -265,7 +266,7 @@ async def _build_sample_datum(
     tokenizer: Any,
     teacher_sampling: Any,
     kl_coef: float,
-) -> tuple[T.Datum, dict[str, float]]:
+) -> tuple[T.Datum, dict[str, float | str]]:
     """Process a single sample into a Datum and per-sample metrics.
 
     This is the per-sample logic extracted from ``distill()`` so that
@@ -288,11 +289,13 @@ async def _build_sample_datum(
 
     # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
     teacher_prompt_source = sample.user_prompt
-    teacher_messages = build_teacher_messages(teacher_prompt_source, sample.feedback)
+    teacher_messages = build_teacher_messages(
+        teacher_prompt_source, sample.feedback, system_prompt=sample.system_prompt
+    )
     template_messages = teacher_messages_to_chat_template(teacher_messages)
     teacher_prompt_text = tokenizer.apply_chat_template(
         template_messages,
-        add_generation_prompt=False,
+        add_generation_prompt=True,
         tokenize=False,
     )
     teacher_prompt_tokens: list[int] = tokenizer.encode(
@@ -302,6 +305,7 @@ async def _build_sample_datum(
     teacher_full_tokens = teacher_prompt_tokens + response_tokens
     teacher_prompt_len = len(teacher_prompt_tokens)
     teacher_full = T.ModelInput.from_ints(teacher_full_tokens)
+    teacher_scored_text = tokenizer.decode(teacher_full_tokens, skip_special_tokens=False)
 
     # ── Compute teacher logprobs (base model = self-distillation) ──
     teacher_logprobs_full = await teacher_sampling.compute_logprobs_async(teacher_full)
@@ -346,7 +350,7 @@ async def _build_sample_datum(
     adv_abs_mean = sum(abs(a) for a in advantages) / max(len(advantages), 1)
     kl_mean = sum(raw_kl_deltas) / max(len(raw_kl_deltas), 1)
 
-    metrics = {
+    metrics: dict[str, float | str] = {
         "completion_len": completion_len,
         "effective_kl_coef": effective_kl_coef,
         "kl_gain": gain,
@@ -354,6 +358,7 @@ async def _build_sample_datum(
         "adv_abs_mean": adv_abs_mean,
         "kl_mean": kl_mean,
         "adv_abs_mean_raw": adv_abs_mean_raw,
+        "teacher_scored_text": teacher_scored_text,
     }
 
     return datum, metrics

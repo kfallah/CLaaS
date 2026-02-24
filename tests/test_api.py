@@ -108,7 +108,15 @@ class _FunctionFailureStub:
         self.remote = _RemoteCallFailure()
 
 
-def _seed_cache(visible_response: str, *, logprobs: list[float] | None = None) -> None:
+_DEFAULT_TEST_SYSTEM_PROMPT = "You are a helpful assistant."
+
+
+def _seed_cache(
+    visible_response: str,
+    *,
+    logprobs: list[float] | None = None,
+    system_prompt: str = _DEFAULT_TEST_SYSTEM_PROMPT,
+) -> None:
     """Pre-populate the completion cache keyed by normalized SHA-256 of visible_response."""
     content_hash = hashlib.sha256(normalize_for_hash(visible_response).encode("utf-8")).hexdigest()
     completion_cache.put(
@@ -119,6 +127,7 @@ def _seed_cache(visible_response: str, *, logprobs: list[float] | None = None) -
             response_token_ids=[10, 20],
             prompt_token_ids=[1, 2, 3],
             response_logprobs=logprobs if logprobs is not None else [-0.1, -0.2],
+            system_prompt=system_prompt,
         ),
     )
 
@@ -455,6 +464,83 @@ def test_feedback_resolves_token_ids_from_cache(monkeypatch, tmp_path):
     assert sample["response"] == "cached-response"
 
 
+def test_feedback_system_prompt_flows_from_cache(monkeypatch, tmp_path):
+    """system_prompt is resolved from the completion cache into DistillBatchItem."""
+    from claas import api
+
+    _mock_config(monkeypatch, "tinker")
+    _seed_cache("sys prompt response", system_prompt="You are a pirate assistant.")
+    captured_payload = {}
+
+    class _Engine:
+        async def lora_exists(self, _lora_id):
+            return LoraExistsPayload(exists=True)
+
+    async def fake_run_distill(payload):
+        captured_payload["samples"] = [s.model_dump() for s in payload.samples]
+        return DistillResponse(lora_id="user/model", metadata={})
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
+    monkeypatch.setattr(api, "_run_distill", fake_run_distill)
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "clean prompt",
+                    "response": "sys prompt response",
+                    "feedback": "good",
+                    "training": {},
+                }
+            ],
+            "orchestration": {"sleep_before": False, "wake_after": False},
+        },
+    )
+
+    assert response.status_code == 200
+    sample = captured_payload["samples"][0]
+    assert sample["system_prompt"] == "You are a pirate assistant."
+
+
+def test_feedback_missing_system_prompt_returns_422(monkeypatch, tmp_path):
+    """Cache entry with empty system_prompt returns 422."""
+    from claas import api
+
+    _mock_config(monkeypatch, "tinker")
+    _seed_cache("no sys prompt response", system_prompt="")
+
+    class _Engine:
+        async def lora_exists(self, _lora_id):
+            return LoraExistsPayload(exists=True)
+
+    monkeypatch.setattr(api, "_get_training_engine", lambda: _Engine())
+    monkeypatch.setattr(feedback_log_mod, "write_feedback_log", lambda _r, _d: str(tmp_path / "log.json"))
+
+    client = TestClient(web_app)
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "clean prompt",
+                    "response": "no sys prompt response",
+                    "feedback": "good",
+                    "training": {},
+                }
+            ],
+            "orchestration": {"sleep_before": False, "wake_after": False},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "no system prompt" in response.json()["detail"]
+
+
 def test_feedback_cache_miss_returns_404(monkeypatch, tmp_path):
     """Missing cache entry returns 404 before any orchestration."""
     from claas import api
@@ -505,6 +591,7 @@ def test_feedback_missing_logprobs_returns_422(monkeypatch, tmp_path):
             response_token_ids=[10],
             prompt_token_ids=[1],
             response_logprobs=None,
+            system_prompt="You are a helpful assistant.",
         ),
     )
 
@@ -834,7 +921,8 @@ def test_dashboard_renders_latest_records(monkeypatch, tmp_path):
       "response_logprobs": [-0.1],
       "prompt_token_ids": [1],
       "response_token_ids": [2],
-      "user_prompt": "prompt-a"
+      "user_prompt": "prompt-a",
+      "system_prompt": "You are a helpful assistant."
     }
   ],
   "vllm": {
@@ -917,7 +1005,8 @@ def test_dashboard_truncates_prompt_preview(monkeypatch, tmp_path):
       "response_logprobs": [-0.1],
       "prompt_token_ids": [1],
       "response_token_ids": [2],
-      "user_prompt": "{long_prompt}"
+      "user_prompt": "{long_prompt}",
+      "system_prompt": "You are a helpful assistant."
     }}
   ],
   "vllm": {{
@@ -985,7 +1074,8 @@ def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
       "response_logprobs": [-0.1],
       "prompt_token_ids": [1],
       "response_token_ids": [2],
-      "user_prompt": "prompt-d1"
+      "user_prompt": "prompt-d1",
+      "system_prompt": "You are a helpful assistant."
     },
     {
       "prompt": "prompt-d2",
@@ -994,7 +1084,8 @@ def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
       "response_logprobs": [-0.2],
       "prompt_token_ids": [1],
       "response_token_ids": [2],
-      "user_prompt": "prompt-d2"
+      "user_prompt": "prompt-d2",
+      "system_prompt": "You are a helpful assistant."
     }
   ],
   "vllm": {
@@ -1032,6 +1123,132 @@ def test_dashboard_renders_one_row_per_batch_item(monkeypatch, tmp_path):
     assert "Sample 2/2" in response.text
     assert 'id="feedback-detail-0"' in response.text
     assert "2 samples" in response.text
+
+
+def test_dashboard_renders_teacher_scored_text(monkeypatch, tmp_path):
+    """Dashboard shows Teacher Scored Text when present in distill metadata."""
+    _mock_config(monkeypatch, "local", feedback_log_dir=str(tmp_path))
+    (tmp_path / "20240101T000010-t.json").write_text(
+        """
+{
+  "request_id": "t",
+  "timestamp_utc": "2024-01-01T00:00:10Z",
+  "status": "ok",
+  "phase": "done",
+  "lora_id": "user/model",
+  "requests": [
+    {
+      "lora_id": "user/model",
+      "prompt": "prompt-t",
+      "response": "response-t",
+      "feedback": "feedback-t"
+    }
+  ],
+  "batch_samples": [
+    {
+      "prompt": "prompt-t",
+      "response": "response-t",
+      "feedback": "feedback-t",
+      "response_logprobs": [-0.1],
+      "prompt_token_ids": [1],
+      "response_token_ids": [2],
+      "user_prompt": "prompt-t",
+      "system_prompt": "You are a helpful assistant."
+    }
+  ],
+  "vllm": {
+    "slept": false,
+    "woke": false
+  },
+  "timing_ms": {
+    "sleep": 0,
+    "distill": 2,
+    "save": 0,
+    "wake": 0,
+    "logprobs": 0,
+    "total": 2
+  },
+  "distill_result": {
+    "lora_id": "user/model",
+    "metadata": {
+      "loss": 0.1,
+      "teacher_scored_texts": ["<|im_start|>system\\nYou are helpful<|im_end|>\\n<|im_start|>user\\nWhat is 2+2?<|im_end|>\\n<|im_start|>assistant\\nFour"]
+    }
+  },
+  "error": null
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    client = TestClient(web_app)
+    response = client.get("/v1/dashboard")
+
+    assert response.status_code == 200
+    assert "Teacher Scored Text" in response.text
+    assert "What is 2+2?" in response.text
+
+
+def test_dashboard_omits_teacher_text_when_absent(monkeypatch, tmp_path):
+    """Dashboard gracefully handles old logs without teacher_scored_texts."""
+    _mock_config(monkeypatch, "local", feedback_log_dir=str(tmp_path))
+    (tmp_path / "20240101T000011-u.json").write_text(
+        """
+{
+  "request_id": "u",
+  "timestamp_utc": "2024-01-01T00:00:11Z",
+  "status": "ok",
+  "phase": "done",
+  "lora_id": "user/model",
+  "requests": [
+    {
+      "lora_id": "user/model",
+      "prompt": "prompt-u",
+      "response": "response-u",
+      "feedback": "feedback-u"
+    }
+  ],
+  "batch_samples": [
+    {
+      "prompt": "prompt-u",
+      "response": "response-u",
+      "feedback": "feedback-u",
+      "response_logprobs": [-0.1],
+      "prompt_token_ids": [1],
+      "response_token_ids": [2],
+      "user_prompt": "prompt-u",
+      "system_prompt": "You are a helpful assistant."
+    }
+  ],
+  "vllm": {
+    "slept": false,
+    "woke": false
+  },
+  "timing_ms": {
+    "sleep": 0,
+    "distill": 2,
+    "save": 0,
+    "wake": 0,
+    "logprobs": 0,
+    "total": 2
+  },
+  "distill_result": {
+    "lora_id": "user/model",
+    "metadata": {
+      "loss": 0.1
+    }
+  },
+  "error": null
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    client = TestClient(web_app)
+    response = client.get("/v1/dashboard")
+
+    assert response.status_code == 200
+    assert "Teacher Scored Text" not in response.text
 
 
 def test_feedback_recent_route_is_removed():

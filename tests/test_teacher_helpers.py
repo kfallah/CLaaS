@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from claas.core.types import ChatMessage
 from claas.training.teacher_helpers import (
     build_teacher_messages,
@@ -11,30 +13,32 @@ from claas.training.teacher_helpers import (
 
 class TestBuildTeacherMessages:
     def test_with_feedback(self):
-        msgs = build_teacher_messages("What is 2+2?", "Too verbose")
+        msgs = build_teacher_messages("What is 2+2?", "Too verbose", system_prompt="You are helpful.")
         assert len(msgs) == 2
         assert msgs[0]["role"] == "system"
+        assert msgs[0]["content"] == "You are helpful."
         assert msgs[1]["role"] == "user"
         assert "What is 2+2?" in msgs[1]["content"]
         assert "Too verbose" in msgs[1]["content"]
-        assert "Correctly solve the original question" in msgs[1]["content"]
+        assert "=== HINDSIGHT CONTEXT ===" in msgs[1]["content"]
+        assert "Use this to guide your answer to the user prompt" in msgs[1]["content"]
 
     def test_without_feedback(self):
-        msgs = build_teacher_messages("What is 2+2?")
+        msgs = build_teacher_messages("What is 2+2?", system_prompt="You are helpful.")
         assert len(msgs) == 2
         assert msgs[1]["content"] == "What is 2+2?"
 
     def test_without_feedback_explicit_none(self):
-        msgs = build_teacher_messages("Hello", None)
+        msgs = build_teacher_messages("Hello", None, system_prompt="You are helpful.")
         assert msgs[1]["content"] == "Hello"
 
-    def test_custom_system_prompt(self):
-        msgs = build_teacher_messages("x", system_prompt="Be concise.")
-        assert msgs[0]["content"] == "Be concise."
-
-    def test_default_system_prompt(self):
-        msgs = build_teacher_messages("x")
-        assert "helpful assistant" in msgs[0]["content"]
+    @pytest.mark.parametrize("system_prompt", [
+        "Be concise.",
+        "You are a pirate assistant who speaks in pirate lingo.",
+    ])
+    def test_system_prompt_matches_input(self, system_prompt: str):
+        msgs = build_teacher_messages("x", system_prompt=system_prompt)
+        assert msgs[0]["content"] == system_prompt
 
 
 class TestTeacherMessagesToChatTemplate:
@@ -50,5 +54,3 @@ class TestTeacherMessagesToChatTemplate:
         ]
         # Returns new list (not the same object)
         assert result is not msgs
-
-

@@ -172,12 +172,13 @@ The eval dashboard at `/v1/eval` displays results from running the eval harness 
 
 ## References
 
-1. Hübotter et al. (2026). "Reinforcement Learning via Self-Distillation." arXiv:2601.20802
-2. SDPO Reference Implementation: https://github.com/lasgroup/SDPO
-3. Modal GPU Memory Snapshots: https://modal.com/blog/gpu-mem-snapshots
-4. vLLM: https://github.com/vllm-project/vllm
-5. PEFT/LoRA: https://github.com/huggingface/peft
-6. Tinker SDPO training reference (continualcode): https://github.com/sdan/continualcode
+1. Kleine Buening et al. (2026). "Aligning Language Models from User Interactions." [Paper](https://self-distillation.github.io/user_interactions.pdf) · [Code](https://github.com/lasgroup/user_interactions) · [Hindsight template](https://github.com/lasgroup/user_interactions/blob/main/online_sdpo_trainer.py)
+2. Hübotter et al. (2026). "Reinforcement Learning via Self-Distillation." arXiv:2601.20802
+3. SDPO Reference Implementation: https://github.com/lasgroup/SDPO
+4. Modal GPU Memory Snapshots: https://modal.com/blog/gpu-mem-snapshots
+5. vLLM: https://github.com/vllm-project/vllm
+6. PEFT/LoRA: https://github.com/huggingface/peft
+7. Tinker SDPO training reference (continualcode): https://github.com/sdan/continualcode
 
 ## License
 

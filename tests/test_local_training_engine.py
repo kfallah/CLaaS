@@ -54,6 +54,7 @@ def test_local_engine_distill_propagates_cleanup_error(monkeypatch):
                             prompt_token_ids=[1, 2],
                             response_token_ids=[3],
                             user_prompt="p",
+                            system_prompt="You are a helpful assistant.",
                         )
                     ],
                 )

@@ -77,7 +77,15 @@ def feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
 
         # -- Expandable detail row --
         sample_sections: list[str] = []
+        _raw_texts = metrics_payload.get("teacher_scored_texts") if metrics_payload else None
+        teacher_scored_texts = list(_raw_texts) if isinstance(_raw_texts, list) else []
         for item_index, sample in enumerate(record.batch_samples):
+            teacher_section = ""
+            if item_index < len(teacher_scored_texts):
+                teacher_section = (
+                    "<section><h3>Teacher Scored Text</h3>"
+                    "<pre>{teacher_text}</pre></section>"
+                ).format(teacher_text=html.escape(str(teacher_scored_texts[item_index])))
             sample_sections.append(
                 """
                 <details{open_attr}>
@@ -86,6 +94,7 @@ def feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
                     <section><h3>Prompt</h3><pre>{prompt}</pre></section>
                     <section><h3>Response</h3><pre>{response}</pre></section>
                     <section><h3>Feedback</h3><pre>{feedback}</pre></section>
+                    {teacher_section}
                   </div>
                 </details>
                 """.format(
@@ -96,6 +105,7 @@ def feedback_dashboard_rows(records: list[FeedbackLogRecord]) -> str:
                     prompt=html.escape(sample.prompt),
                     response=html.escape(sample.response),
                     feedback=html.escape(sample.feedback),
+                    teacher_section=teacher_section,
                 )
             )
 

@@ -107,6 +107,7 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
                         prompt_token_ids=[1, 2],
                         response_token_ids=[3],
                         user_prompt="prompt",
+                        system_prompt="You are a helpful assistant.",
                     )
                 ],
             )
@@ -158,6 +159,7 @@ def test_local_engine_cleanup_failure_propagates(monkeypatch):
                             prompt_token_ids=[1, 2],
                             response_token_ids=[3],
                             user_prompt="prompt",
+                            system_prompt="You are a helpful assistant.",
                         )
                     ],
                 )
