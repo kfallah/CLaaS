@@ -40,7 +40,8 @@ logger = logging.getLogger(__name__)
 
 async def _init_lora(config: HarnessConfig, lora_id: str) -> str:
     """Initialize a fresh LoRA adapter via CLaaS API."""
-    async with httpx.AsyncClient(base_url=config.claas_url, timeout=120.0) as client:
+    # LoRA init can exceed two minutes when the remote trainer is cold-starting.
+    async with httpx.AsyncClient(base_url=config.claas_url, timeout=300.0) as client:
         resp = await client.post(
             "/v1/lora/init",
             json={"lora_id": lora_id, "base_model": config.base_model},
