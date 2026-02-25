@@ -8,12 +8,14 @@ from pathlib import Path
 
 import pytest
 from hydra import compose, initialize_config_dir
+from hydra.errors import ConfigCompositionException
 from omegaconf import OmegaConf
 
-from claas.eval.config import build_harness_config
+from claas.core.types import TrainingConfig
+from claas.eval import config as _eval_config  # noqa: F401
 from claas.eval.metrics import VerifierResult
 from claas.eval.preferences import get_preference_configs
-from claas.eval.types import EvalConfig, HarnessConfig
+from claas.eval.types import EvalConfig
 
 
 def _make_config_dir(yaml_content: str) -> str:
@@ -44,20 +46,33 @@ def _compose_eval_config(
 
 
 def test_hydra_config_defaults() -> None:
-    config = build_harness_config(_compose_eval_config())
-    assert isinstance(config, HarnessConfig)
+    config = _compose_eval_config()
+    assert isinstance(config, EvalConfig)
+    assert isinstance(config.training, TrainingConfig)
     assert config.mode == "tinker"
     assert config.num_steps == 20
     assert config.batch_size == 4
     assert config.seed == 42
     assert config.lora_id_prefix == "eval"
     assert config.plots is True
+    assert config.training.is_clip == 5.0
+    assert config.training.learning_rate == 3e-5
+    assert config.output_dir.startswith("./data/evals/")
 
 
 def test_hydra_config_with_overrides() -> None:
-    config = build_harness_config(_compose_eval_config(["num_steps=5", "seed=99"]))
+    config = _compose_eval_config(
+        ["num_steps=5", "seed=99", "training.is_clip=7.0", "training.learning_rate=1e-4"]
+    )
     assert config.num_steps == 5
     assert config.seed == 99
+    assert config.training.is_clip == 7.0
+    assert config.training.learning_rate == 1e-4
+
+
+def test_training_type_invariance_rejects_scalar() -> None:
+    with pytest.raises(ConfigCompositionException):
+        _compose_eval_config(["training=oops"])
 
 
 def test_unknown_key_rejected() -> None:
@@ -67,24 +82,29 @@ def test_unknown_key_rejected() -> None:
 
 
 def test_timestamped_output_dir() -> None:
-    config = build_harness_config(_compose_eval_config(["output_dir=/tmp/test-evals"]))
-    assert config.output_dir.startswith("/tmp/test-evals/")
-    assert len(config.output_dir) > len("/tmp/test-evals/")
+    config = _compose_eval_config()
+    assert config.output_dir.startswith("./data/evals/")
+    assert len(config.output_dir) > len("./data/evals/")
+
+
+def test_output_dir_override_respected() -> None:
+    config = _compose_eval_config(["output_dir=/tmp/test-evals"])
+    assert config.output_dir == "/tmp/test-evals"
 
 
 def test_collapse_steps_list() -> None:
-    config = build_harness_config(_compose_eval_config(["collapse_steps=[0,5,10]"]))
+    config = _compose_eval_config(["collapse_steps=[0,5,10]"])
     assert config.collapse_steps == [0, 5, 10]
 
 
 def test_steps_per_batch_from_config() -> None:
-    config = build_harness_config(_compose_eval_config(["steps_per_batch=3"]))
+    config = _compose_eval_config(["steps_per_batch=3"])
     assert config.steps_per_batch == 3
 
 
 def test_hydra_config_custom_dir() -> None:
     tmpdir = _make_config_dir("mode: local\nnum_steps: 3\npreferences:\n  - no_emoji\n")
-    config = build_harness_config(_compose_eval_config(config_dir=tmpdir))
+    config = _compose_eval_config(config_dir=tmpdir)
     assert config.mode == "local"
     assert config.num_steps == 3
     assert config.preferences == ["no_emoji"]

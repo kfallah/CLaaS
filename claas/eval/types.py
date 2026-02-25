@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from claas.core.config import DEFAULT_SYSTEM_PROMPT
-from claas.core.types import ChatMessage
+from claas.core.types import ChatMessage, TrainingConfig
 
 
 @dataclass
@@ -96,10 +96,7 @@ class EvalConfig:
     batch_size: int = 4
     steps_per_batch: int = 4
     feedback_repetitions: int = 1
-
-
-# HarnessConfig is the post-processed runtime config (still no secrets).
-HarnessConfig = EvalConfig
+    training: TrainingConfig = field(default_factory=TrainingConfig)
 
 
 @dataclass

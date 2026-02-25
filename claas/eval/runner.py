@@ -23,10 +23,10 @@ from .metrics import Metric, build_metrics, derive_model_name
 from .plotting import generate_plots
 from .preferences import PreferenceConfig, get_preference_configs
 from .types import (
+    EvalConfig,
     EvalMetrics,
     ExperimentResult,
     ExperimentSummary,
-    HarnessConfig,
     LocalDistillMetrics,
     MetricContext,
     StepResult,
@@ -38,7 +38,7 @@ from .types import (
 logger = logging.getLogger(__name__)
 
 
-async def _init_lora(config: HarnessConfig, lora_id: str) -> str:
+async def _init_lora(config: EvalConfig, lora_id: str) -> str:
     """Initialize a fresh LoRA adapter via CLaaS API."""
     # LoRA init can exceed two minutes when the remote trainer is cold-starting.
     async with httpx.AsyncClient(base_url=config.claas_url, timeout=300.0) as client:
@@ -51,7 +51,7 @@ async def _init_lora(config: HarnessConfig, lora_id: str) -> str:
 
 
 async def _submit_feedback(
-    config: HarnessConfig,
+    config: EvalConfig,
     lora_id: str,
     samples: list[FeedbackItem],
 ) -> LocalDistillMetrics | TinkerDistillMetrics | None:
@@ -92,7 +92,7 @@ async def _submit_feedback(
 
 
 async def _generate_response(
-    config: HarnessConfig,
+    config: EvalConfig,
     model: str,
     prompt: str,
     temperature: float = 0,
@@ -127,7 +127,7 @@ async def _generate_response(
 
 
 async def _measure_eval_metrics(
-    config: HarnessConfig,
+    config: EvalConfig,
     pref: PreferenceConfig,
     model_name: str,
     step: int,
@@ -205,7 +205,7 @@ def _append_step_jsonl(output_dir: str, preference: str, step: StepResult) -> No
         f.write(json.dumps(data) + "\n")
 
 
-def _write_metadata(output_dir: str, preference: str, config: HarnessConfig, lora_id: str) -> None:
+def _write_metadata(output_dir: str, preference: str, config: EvalConfig, lora_id: str) -> None:
     """Write experiment metadata."""
     pref_dir = os.path.join(output_dir, preference)
     os.makedirs(pref_dir, exist_ok=True)
@@ -273,7 +273,7 @@ def _write_summary(output_dir: str, results: list[ExperimentResult]) -> None:
 
 
 async def run_preference_experiment(
-    config: HarnessConfig,
+    config: EvalConfig,
     pref: PreferenceConfig,
     enabled_metrics: list[Metric] | None = None,
     needs_generation: bool = False,
@@ -357,6 +357,8 @@ async def run_preference_experiment(
     )
 
     # Main loop
+    training_cfg = config.training
+
     for step in range(resume_from, config.num_steps):
         step_start = time.perf_counter()
 
@@ -385,6 +387,7 @@ async def run_preference_experiment(
                     prompt=prompt,
                     response=content,
                     feedback=feedback_str,
+                    training=training_cfg,
                 ))
             except (httpx.HTTPError, KeyError, ValueError) as e:
                 logger.warning(
@@ -471,7 +474,7 @@ async def run_preference_experiment(
     return result
 
 
-async def run_harness(config: HarnessConfig) -> None:
+async def run_harness(config: EvalConfig) -> None:
     """Run the full evaluation harness."""
     logging.basicConfig(
         level=logging.INFO,
