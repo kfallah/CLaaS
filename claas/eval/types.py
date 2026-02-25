@@ -94,7 +94,7 @@ class EvalConfig:
     openclaw_url: Optional[str] = None
     base_model: str = "Qwen/Qwen3-8B"
     batch_size: int = 4
-    steps_per_batch: int = 1
+    steps_per_batch: int = 4
     feedback_repetitions: int = 1
 
 

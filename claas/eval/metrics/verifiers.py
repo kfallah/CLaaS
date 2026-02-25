@@ -76,7 +76,14 @@ class NoEmojiVerifier:
 
 
 class ConciseVerifier:
+    """Pass when response is concise (<=3 sentences) but still substantive (>=10 words)."""
+
+    MIN_WORDS = 10
+
     def __call__(self, response: str) -> VerifierResult:
+        word_count = len(response.split())
+        if word_count < self.MIN_WORDS:
+            return VerifierResult(score=0.0, passed=False)
         n = _count_sentences(response)
         if n <= 3:
             score = 1.0

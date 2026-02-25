@@ -46,9 +46,9 @@ def compute_sdpo_loss(loss_input: SDPOLossInput) -> SDPOLossResult:
     response_mask = loss_input.response_mask
     old_student_logprobs = loss_input.old_student_logprobs
     response_ids = loss_input.response_ids
-    alpha = loss_input.alpha
-    is_clip = loss_input.is_clip
-    kl_reg_weight = loss_input.kl_reg_weight
+    alpha = loss_input.training.alpha
+    is_clip = loss_input.training.is_clip
+    kl_reg_weight = loss_input.training.kl_reg_weight
 
     _B, _T, _V = student_logits.shape
 

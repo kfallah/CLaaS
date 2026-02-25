@@ -6,7 +6,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from claas.core.types import SDPOLossInput  # noqa: E402
+from claas.core.types import SDPOLossInput, TrainingConfig  # noqa: E402
 from claas.training.sdpo_loss import _lookup_token_in_topk, compute_sdpo_loss  # noqa: E402
 
 
@@ -104,8 +104,18 @@ class TestLookupTokenInTopk:
 class TestComputeSdpoLoss:
     """Tests for compute_sdpo_loss."""
 
+    _TRAINING_FIELDS = {"alpha", "is_clip", "kl_reg_weight"}
+
     @staticmethod
     def _run_loss(sample_data: dict, **overrides):
+        training_overrides = {
+            k: v for k, v in overrides.items()
+            if k in TestComputeSdpoLoss._TRAINING_FIELDS
+        }
+        tensor_overrides = {
+            k: v for k, v in overrides.items()
+            if k not in TestComputeSdpoLoss._TRAINING_FIELDS
+        }
         payload = {
             "student_logits": sample_data["student_logits"],
             "teacher_logprobs": sample_data["teacher_logprobs"],
@@ -114,8 +124,9 @@ class TestComputeSdpoLoss:
             "response_mask": sample_data["response_mask"],
             "old_student_logprobs": sample_data["old_student_logprobs"],
             "response_ids": sample_data["response_ids"],
+            "training": TrainingConfig(**training_overrides),
         }
-        payload.update(overrides)
+        payload.update(tensor_overrides)
         return compute_sdpo_loss(SDPOLossInput(**payload))
 
     def test_returns_expected_keys(self, sample_data):

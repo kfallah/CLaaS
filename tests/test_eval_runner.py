@@ -108,9 +108,9 @@ def test_step_result_from_dict_no_metrics():
 
 
 def test_steps_per_batch_default():
-    """HarnessConfig.steps_per_batch defaults to 1."""
+    """HarnessConfig.steps_per_batch defaults to 4."""
     config = HarnessConfig()
-    assert config.steps_per_batch == 1
+    assert config.steps_per_batch == 4
 
 
 def test_steps_per_batch_custom():
