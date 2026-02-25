@@ -22,12 +22,9 @@ class ChatMessage(TypedDict):
     content: str
 
 
-# NOTE: This is a dataclass (not a Pydantic BaseModel) so Hydra structured
-# configs can embed it directly (e.g., EvalConfig.training). Range validation
-# is enforced at explicit ingestion boundaries (API/eval config path).
 @dataclass
 class TrainingConfig:
-    """Training configuration for distillation."""
+    """Training hyperparameters (dataclass for Hydra structured-config compatibility)."""
 
     learning_rate: float = 3e-5
     alpha: float = 0.5
