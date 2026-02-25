@@ -30,11 +30,17 @@ collapse_steps: [0, 5, 10, 15, 19]  # steps where collapse metric runs
 plots: true                          # generate matplotlib plots
 seed: 42
 lora_id_prefix: eval
-output_dir: ./data/evals
+output_dir: ./data/evals/${now:%Y%m%d-%H%M%SZ}
 
 openclaw_url: http://localhost:18789  # OpenClaw gateway (null = use CLaaS API directly)
 
 training:                             # forwarded to /v1/feedback TrainingConfig
+  learning_rate: 3e-5
+  alpha: 0.5
+  is_clip: 5.0
+  max_grad_norm: 1.0
+  kl_reg_weight: 0.0
+  teacher_top_k: 100
   steps_per_batch: 4                 # gradient updates per batch
   feedback_repetitions: 1            # times to repeat feedback string
 ```
@@ -50,6 +56,9 @@ uv run python -m claas.eval 'preferences=[concise]' num_steps=10
 # Override base model and mode
 uv run python -m claas.eval base_model=Qwen/Qwen3-30B-A3B mode=tinker
 
+# Override training hyperparameters
+uv run python -m claas.eval training.is_clip=7.0 training.learning_rate=1e-4
+
 # Use a custom config directory
 uv run python -m claas.eval --config-dir ./my_configs --config-name my_config
 ```
@@ -57,16 +66,14 @@ uv run python -m claas.eval --config-dir ./my_configs --config-name my_config
 ### Programmatic usage
 
 ```python
-from claas.eval.config import build_harness_config
 from claas.eval.runner import run_harness
 from claas.eval.types import EvalConfig
 import asyncio
 
-config = build_harness_config(
-    EvalConfig(
-        preferences=["concise"],
-        num_steps=5,
-    )
+config = EvalConfig(
+    preferences=["concise"],
+    num_steps=5,
+    output_dir="./data/evals/manual-run",  # explicit when bypassing Hydra CLI
 )
 asyncio.run(run_harness(config))
 ```

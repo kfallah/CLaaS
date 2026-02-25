@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from claas.core.types import TrainingConfig
 from claas.eval.types import (
-    HarnessConfig,
+    EvalConfig,
     LocalDistillMetrics,
     StepResult,
     TinkerDistillMetrics,
@@ -111,22 +111,29 @@ def test_step_result_from_dict_no_metrics():
     assert result.sdpo_metrics is None
 
 
-# ── HarnessConfig defaults ───────────────────────────────────────────
+# ── EvalConfig defaults ──────────────────────────────────────────────
 
 
 def test_training_config_default():
-    """HarnessConfig.training defaults to TrainingConfig defaults."""
-    config = HarnessConfig()
+    """EvalConfig.training defaults to TrainingConfig defaults."""
+    config = EvalConfig()
     assert config.training == TrainingConfig()
 
 
 def test_training_config_custom():
-    """HarnessConfig.training accepts custom steps/repetitions."""
-    config = HarnessConfig(
+    """EvalConfig.training accepts custom steps/repetitions."""
+    config = EvalConfig(
         training=TrainingConfig(steps_per_batch=3, feedback_repetitions=4),
     )
     assert config.training.steps_per_batch == 3
     assert config.training.feedback_repetitions == 4
+
+
+def test_training_config_default_type():
+    """EvalConfig.training defaults to typed TrainingConfig."""
+    config = EvalConfig()
+    assert isinstance(config.training, TrainingConfig)
+    assert config.training.is_clip == 5.0
 
 
 # ── StepResult sub_step_count ────────────────────────────────────────

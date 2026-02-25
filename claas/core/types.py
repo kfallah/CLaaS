@@ -6,6 +6,7 @@ and ensure consistency across the codebase.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,57 +22,18 @@ class ChatMessage(TypedDict):
     content: str
 
 
-class TrainingConfig(BaseModel):
-    """Training configuration for distillation."""
+@dataclass
+class TrainingConfig:
+    """Training hyperparameters (dataclass for Hydra structured-config compatibility)."""
 
-    learning_rate: float = Field(
-        default=3e-5,
-        description="Learning rate for LoRA parameter updates",
-    )
-    alpha: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="GJS interpolation (0.5 = symmetric JSD, 1.0 = reverse KL)",
-    )
-    is_clip: float = Field(
-        default=5.0,
-        ge=1.0,
-        le=20.0,
-        description="Importance sampling ratio clip (exp space)",
-    )
-    max_grad_norm: float = Field(
-        default=1.0,
-        ge=0.0,
-        description="Maximum gradient norm for clipping",
-    )
-    kl_reg_weight: float = Field(
-        default=0.0,
-        ge=0.0,
-        le=1.0,
-        description="Weight for KL regularization to base policy",
-    )
-    teacher_top_k: int = Field(
-        default=100,
-        ge=10,
-        le=100,
-        description="Number of top logprobs to request from teacher",
-    )
-    steps_per_batch: int = Field(
-        default=1,
-        ge=1,
-        le=32,
-        description=(
-            "Number of optimizer updates to run on the same sampled batch. "
-            "Importance reweighting is recomputed after each step."
-        ),
-    )
-    feedback_repetitions: int = Field(
-        default=1,
-        ge=1,
-        le=16,
-        description="Times to repeat each feedback string before teacher scoring.",
-    )
+    learning_rate: float = 3e-5
+    alpha: float = 0.5
+    is_clip: float = 5.0
+    max_grad_norm: float = 1.0
+    kl_reg_weight: float = 0.0
+    teacher_top_k: int = 100
+    steps_per_batch: int = 1
+    feedback_repetitions: int = 1
 
 
 class SDPOLossInput(BaseModel):
@@ -488,4 +450,3 @@ class TextCompletionResponse(BaseModel):
     model: str
     choices: list[TextCompletionChoice]
     usage: CompletionUsage
-

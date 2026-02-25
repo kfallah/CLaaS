@@ -36,6 +36,7 @@ Example usage (feedback)::
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import logging
 import os
@@ -86,6 +87,7 @@ from .core.types import (
     ServiceHealth,
     TextCompletionChoice,
     TextCompletionResponse,
+    TrainingConfig,
 )
 from .dashboard import feedback_log as feedback_log_mod, rendering as dashboard_rendering
 from .inference import get_inference_backend, vllm_control
@@ -213,6 +215,28 @@ async def _run_distill(payload: DistillBatchRequestPayload) -> DistillResponse:
 def _get_inference_backend(request: Request) -> InferenceBackend:
     """Retrieve the inference backend from FastAPI app state."""
     return request.app.state.inference_backend
+
+
+def _validate_training_config(training: TrainingConfig) -> None:
+    """Validate training config ranges for direct API callers."""
+    errors: list[str] = []
+    if training.learning_rate <= 0:
+        errors.append("learning_rate must be > 0")
+    if not (0.0 <= training.alpha <= 1.0):
+        errors.append("alpha must be within [0, 1]")
+    if not (1.0 <= training.is_clip <= 20.0):
+        errors.append("is_clip must be within [1, 20]")
+    if training.max_grad_norm < 0.0:
+        errors.append("max_grad_norm must be >= 0")
+    if not (0.0 <= training.kl_reg_weight <= 1.0):
+        errors.append("kl_reg_weight must be within [0, 1]")
+    if not (10 <= training.teacher_top_k <= 100):
+        errors.append("teacher_top_k must be within [10, 100]")
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail=f"invalid training config: {'; '.join(errors)}",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -372,12 +396,14 @@ async def feedback(request: FeedbackBatchRequest) -> FeedbackResponse:
 
     first_request = batch_requests[0]
     lora_id = first_request.lora_id
-    training_ref = first_request.training.model_dump(mode="json")
+    _validate_training_config(first_request.training)
+    training_ref = dataclasses.asdict(first_request.training)
 
     for req in batch_requests[1:]:
+        _validate_training_config(req.training)
         if req.lora_id != lora_id:
             raise HTTPException(status_code=400, detail="all requests must use the same lora_id")
-        if req.training.model_dump(mode="json") != training_ref:
+        if dataclasses.asdict(req.training) != training_ref:
             raise HTTPException(status_code=400, detail="all requests must use the same training config")
 
     # Resolve cache entries before acquiring lock or doing orchestration.
