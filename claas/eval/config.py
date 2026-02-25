@@ -10,6 +10,8 @@ from pathlib import Path
 
 from hydra.core.config_store import ConfigStore
 
+from claas.core.types import TrainingConfig
+
 from .types import EvalConfig, HarnessConfig
 
 # Pattern matching the timestamped run-id suffix (e.g. 20260220-012345Z)
@@ -21,6 +23,8 @@ ConfigStore.instance().store(name="_eval_schema", node=EvalConfig)
 def build_harness_config(eval_cfg: EvalConfig) -> HarnessConfig:
     """Post-process EvalConfig → HarnessConfig (no secrets)."""
     fields = dataclasses.asdict(eval_cfg)
+    training_fields = fields.pop("training")
+    fields["training"] = TrainingConfig(**training_fields)
 
     # Timestamped output subdir (skip if output_dir already ends with a run-id,
     # which allows resuming an existing run by passing its directory).

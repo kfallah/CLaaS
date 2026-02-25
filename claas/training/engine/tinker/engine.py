@@ -14,7 +14,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypedDict
 from urllib.parse import quote
 
 import httpx
@@ -161,27 +161,32 @@ class TinkerTrainingEngine(TrainingEngine):
     ) -> DistillResponse:
         """Run one SDPO distillation step entirely through the Tinker SDK.
 
-        Supports batched samples: all samples are processed concurrently,
-        then a single forward_backward + optim_step is applied.
+        Supports batched samples with configurable multi-step updates.
+        Sample preparation (teacher signals) runs once, then each optimizer
+        step rebuilds importance-weighted datums using current behavior logprobs.
 
         Per-sample flow:
         1. Tokenize prompt + response directly (no chat wrapping)
-        2. Compute student (rollout) logprobs via SamplingClient
+        2. Read initial student (rollout) logprobs from cached response
         3. Build teacher prompt using build_teacher_messages (feedback reprompt)
         4. Compute teacher logprobs (base model conditioned on feedback)
         5. Derive advantages with adaptive KL scaling
         6. Build Datum with right-shifted alignment
 
         Batch flow:
-        7. forward_backward with importance_sampling loss (all datums)
-        8. optim_step with AdamW
-        9. Save checkpoint and update state
+        7. Repeat `steps_per_batch` times:
+           - forward_backward with importance_sampling loss
+           - optim_step with AdamW
+           - recompute behavior logprobs for next step (if needed)
+        8. Save checkpoint and update state
         """
         entry = _require_entry(payload.lora_id, self._state_path)
 
         base_model = entry.base_model
         lr = payload.training.learning_rate
         kl_coef = payload.training.alpha
+        steps_per_batch = payload.training.steps_per_batch
+        feedback_repetitions = payload.training.feedback_repetitions
 
         # ── Phase 1: Setup (once per batch) ──
         training_client = await self.service.create_training_client_from_state_async(
@@ -195,25 +200,69 @@ class TinkerTrainingEngine(TrainingEngine):
 
         # ── Phase 2: Per-sample processing (concurrent) ──
         tasks = [
-            _build_sample_datum(
-                sample, tokenizer, teacher_sampling, kl_coef
+            _prepare_sample_inputs(
+                sample=sample,
+                tokenizer=tokenizer,
+                teacher_sampling=teacher_sampling,
+                feedback_repetitions=feedback_repetitions,
             )
             for sample in payload.samples
         ]
         results = await asyncio.gather(*tasks)
-        datums = [r[0] for r in results]
-        sample_metrics = [r[1] for r in results]
+        prepared_samples = [r[0] for r in results]
+        behavior_logprobs = [r[1] for r in results]
 
-        # ── Phase 3: Training step (once per batch) ──
-        fwd_bwd = await training_client.forward_backward_async(
-            datums, "importance_sampling"
-        )
-        await training_client.optim_step_async(
-            T.AdamParams(learning_rate=lr, beta1=0.9, beta2=0.95)
-        )
+        # ── Phase 3: Multi-step training ──
+        step_metrics: list[dict[str, float | int]] = []
+        final_fwd_metrics: dict[str, object] | None = None
+        for step_idx in range(steps_per_batch):
+            datum_metrics = [
+                _build_sample_datum(
+                    prepared=prepared,
+                    student_logprobs=behavior_logprobs[sample_idx],
+                    kl_coef=kl_coef,
+                )
+                for sample_idx, prepared in enumerate(prepared_samples)
+            ]
+            datums = [dm[0] for dm in datum_metrics]
+            sample_metrics = [dm[1] for dm in datum_metrics]
 
-        # ── Phase 4: Save & return (once per batch) ──
-        new_step = entry.step + 1
+            fwd_bwd = await training_client.forward_backward_async(
+                datums, "importance_sampling"
+            )
+            await training_client.optim_step_async(
+                T.AdamParams(learning_rate=lr, beta1=0.9, beta2=0.95)
+            )
+            if hasattr(fwd_bwd, "metrics") and fwd_bwd.metrics:
+                final_fwd_metrics = dict(fwd_bwd.metrics)
+
+            n = len(sample_metrics)
+            total_completion_len = sum(m["completion_len"] for m in sample_metrics)
+            avg = lambda key: sum(m[key] for m in sample_metrics) / n  # noqa: E731
+            step_metrics.append(
+                {
+                    "step": step_idx + 1,
+                    "batch_size": n,
+                    "completion_len": total_completion_len,
+                    "effective_kl_coef": avg("effective_kl_coef"),
+                    "kl_gain": avg("kl_gain"),
+                    "adv_mean": avg("adv_mean"),
+                    "adv_abs_mean": avg("adv_abs_mean"),
+                    "kl_mean": avg("kl_mean"),
+                    "adv_abs_mean_raw": avg("adv_abs_mean_raw"),
+                }
+            )
+
+            if step_idx < steps_per_batch - 1:
+                student_sampling = await training_client.save_weights_and_get_sampling_client_async()
+                behavior_logprobs = await _compute_student_logprobs_for_batch(
+                    student_sampling=student_sampling,
+                    prepared_samples=prepared_samples,
+                )
+
+        # ── Phase 4: Save & return (once per request) ──
+        final_step = step_metrics[-1]
+        new_step = entry.step + steps_per_batch
         checkpoint_name = f"step-{new_step}"
         save_result = await _await_api_future(await training_client.save_state_async(checkpoint_name))
 
@@ -232,65 +281,69 @@ class TinkerTrainingEngine(TrainingEngine):
             path=self._state_path,
         )
 
-        # Aggregate metrics across samples.
-        n = len(sample_metrics)
-        total_completion_len = sum(m["completion_len"] for m in sample_metrics)
-        avg = lambda key: sum(m[key] for m in sample_metrics) / n  # noqa: E731
-
         metadata: dict[str, object] = {
             "step": new_step,
             "tinker_path": save_result.path,
             "sampler_weights_path": sampler_weights_path,
-            "batch_size": n,
-            "completion_len": total_completion_len,
-            "effective_kl_coef": avg("effective_kl_coef"),
-            "kl_gain": avg("kl_gain"),
-            "adv_mean": avg("adv_mean"),
-            "adv_abs_mean": avg("adv_abs_mean"),
-            "kl_mean": avg("kl_mean"),
-            "adv_abs_mean_raw": avg("adv_abs_mean_raw"),
+            "batch_size": final_step["batch_size"],
+            "completion_len": final_step["completion_len"],
+            "effective_kl_coef": final_step["effective_kl_coef"],
+            "kl_gain": final_step["kl_gain"],
+            "adv_mean": final_step["adv_mean"],
+            "adv_abs_mean": final_step["adv_abs_mean"],
+            "kl_mean": final_step["kl_mean"],
+            "adv_abs_mean_raw": final_step["adv_abs_mean_raw"],
             "lr": lr,
             "loss_fn": "importance_sampling",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "teacher_scored_texts": [m["teacher_scored_text"] for m in sample_metrics],
+            "teacher_scored_texts": [p["teacher_scored_text"] for p in prepared_samples],
+            "steps_per_batch_applied": steps_per_batch,
+            "per_step_metrics": step_metrics,
         }
 
-        if hasattr(fwd_bwd, "metrics") and fwd_bwd.metrics:
-            metadata["tinker_fwd_metrics"] = fwd_bwd.metrics
+        if final_fwd_metrics is not None:
+            metadata["tinker_fwd_metrics"] = final_fwd_metrics
 
         return DistillResponse(lora_id=payload.lora_id, metadata=metadata)
 
 
-async def _build_sample_datum(
+class PreparedSample(TypedDict):
+    full_tokens: list[int]
+    input_tokens: list[int]
+    target_tokens: list[int]
+    prompt_len: int
+    completion_len: int
+    teacher_logprobs: list[float]
+    teacher_scored_text: str
+
+
+async def _prepare_sample_inputs(
+    *,
     sample: DistillBatchItem,
     tokenizer: Any,
     teacher_sampling: Any,
-    kl_coef: float,
-) -> tuple[T.Datum, dict[str, float | str]]:
-    """Process a single sample into a Datum and per-sample metrics.
-
-    This is the per-sample logic extracted from ``distill()`` so that
-    multiple samples can be processed concurrently via ``asyncio.gather``.
-    """
-    # ── Tokenize prompt + response directly (matching local worker) ──
+    feedback_repetitions: int,
+) -> tuple[PreparedSample, list[float]]:
+    """Prepare sample-invariant tensors and initial behavior logprobs."""
     prompt_tokens = list(sample.prompt_token_ids)
     response_tokens = list(sample.response_token_ids)
-    full_tokens = prompt_tokens + response_tokens
-    prompt_len = len(prompt_tokens)
     completion_len = len(response_tokens)
-
-    # ── Validate and use provided response logprobs ──
     if len(sample.response_logprobs) != completion_len:
         raise ValueError(
             f"response_logprobs length ({len(sample.response_logprobs)}) != "
             f"completion_len ({completion_len})"
         )
-    student_logprobs = list(sample.response_logprobs)
 
-    # ── Build teacher prompt (matching local worker: build_teacher_messages) ──
-    teacher_prompt_source = sample.user_prompt
+    full_tokens = prompt_tokens + response_tokens
+    prompt_len = len(prompt_tokens)
+    input_tokens = full_tokens[:-1]
+    target_tokens = full_tokens[1:]
+
+    repeated_feedback = " ".join([sample.feedback] * feedback_repetitions)
     teacher_messages = build_teacher_messages(
-        teacher_prompt_source, sample.feedback, system_prompt=sample.system_prompt
+        sample.user_prompt,
+        repeated_feedback,
+        system_prompt=sample.system_prompt,
     )
     template_messages = teacher_messages_to_chat_template(teacher_messages)
     teacher_prompt_text = tokenizer.apply_chat_template(
@@ -307,13 +360,40 @@ async def _build_sample_datum(
     teacher_full = T.ModelInput.from_ints(teacher_full_tokens)
     teacher_scored_text = tokenizer.decode(teacher_full_tokens, skip_special_tokens=False)
 
-    # ── Compute teacher logprobs (base model = self-distillation) ──
     teacher_logprobs_full = await teacher_sampling.compute_logprobs_async(teacher_full)
     teacher_logprobs = _slice_completion_logprobs(
-        teacher_logprobs_full, teacher_prompt_len, completion_len
+        teacher_logprobs_full,
+        teacher_prompt_len,
+        completion_len,
     )
 
-    # ── Compute advantages with adaptive KL scaling ──
+    prepared = PreparedSample(
+        full_tokens=full_tokens,
+        input_tokens=input_tokens,
+        target_tokens=target_tokens,
+        prompt_len=prompt_len,
+        completion_len=completion_len,
+        teacher_logprobs=teacher_logprobs,
+        teacher_scored_text=teacher_scored_text,
+    )
+    return prepared, list(sample.response_logprobs)
+
+
+def _build_sample_datum(
+    *,
+    prepared: PreparedSample,
+    student_logprobs: list[float],
+    kl_coef: float,
+) -> tuple[T.Datum, dict[str, float]]:
+    """Build a Tinker datum from prepared teacher signals + current behavior policy."""
+    completion_len = prepared["completion_len"]
+    if len(student_logprobs) != completion_len:
+        raise ValueError(
+            f"student_logprobs length ({len(student_logprobs)}) != "
+            f"completion_len ({completion_len})"
+        )
+
+    teacher_logprobs = prepared["teacher_logprobs"]
     raw_kl_deltas = [t - s for s, t in zip(student_logprobs, teacher_logprobs, strict=True)]
     adv_abs_mean_raw = sum(abs(d) for d in raw_kl_deltas) / max(len(raw_kl_deltas), 1)
 
@@ -321,47 +401,66 @@ async def _build_sample_datum(
     if adv_abs_mean_raw > 0:
         gain = min(max(_TARGET_ADV_ABS_MEAN / adv_abs_mean_raw, 1.0), _MAX_KL_GAIN)
     effective_kl_coef = kl_coef * gain
-
     advantages = [
         effective_kl_coef * (t - s)
         for s, t in zip(student_logprobs, teacher_logprobs, strict=True)
     ]
 
-    # ── Build Datum with right-shifted alignment ──
-    input_tokens = full_tokens[:-1]
-    target_tokens = full_tokens[1:]
-    input_model_input = T.ModelInput.from_ints(input_tokens)
-
-    full_logprobs = [0.0] * prompt_len + student_logprobs
-    full_advantages = [0.0] * prompt_len + advantages
+    full_logprobs = [0.0] * prepared["prompt_len"] + student_logprobs
+    full_advantages = [0.0] * prepared["prompt_len"] + advantages
     shifted_logprobs = full_logprobs[1:]
     shifted_advantages = full_advantages[1:]
 
     datum = T.Datum(
-        model_input=input_model_input,
+        model_input=T.ModelInput.from_ints(prepared["input_tokens"]),
         loss_fn_inputs={
-            "target_tokens": TensorData(data=target_tokens, dtype="int64"),
+            "target_tokens": TensorData(data=prepared["target_tokens"], dtype="int64"),
             "logprobs": TensorData(data=shifted_logprobs, dtype="float32"),
             "advantages": TensorData(data=shifted_advantages, dtype="float32"),
         },
     )
 
-    adv_mean = sum(advantages) / max(len(advantages), 1)
-    adv_abs_mean = sum(abs(a) for a in advantages) / max(len(advantages), 1)
-    kl_mean = sum(raw_kl_deltas) / max(len(raw_kl_deltas), 1)
-
-    metrics: dict[str, float | str] = {
+    metrics = {
         "completion_len": completion_len,
         "effective_kl_coef": effective_kl_coef,
         "kl_gain": gain,
-        "adv_mean": adv_mean,
-        "adv_abs_mean": adv_abs_mean,
-        "kl_mean": kl_mean,
+        "adv_mean": sum(advantages) / max(len(advantages), 1),
+        "adv_abs_mean": sum(abs(a) for a in advantages) / max(len(advantages), 1),
+        "kl_mean": sum(raw_kl_deltas) / max(len(raw_kl_deltas), 1),
         "adv_abs_mean_raw": adv_abs_mean_raw,
-        "teacher_scored_text": teacher_scored_text,
     }
-
     return datum, metrics
+
+
+async def _compute_student_logprobs_for_batch(
+    *,
+    student_sampling: Any,
+    prepared_samples: list[PreparedSample],
+) -> list[list[float]]:
+    """Recompute behavior logprobs under the updated student policy."""
+    tasks = [
+        _compute_student_logprobs_for_sample(
+            student_sampling=student_sampling,
+            prepared=prepared,
+        )
+        for prepared in prepared_samples
+    ]
+    return await asyncio.gather(*tasks)
+
+
+async def _compute_student_logprobs_for_sample(
+    *,
+    student_sampling: Any,
+    prepared: PreparedSample,
+) -> list[float]:
+    """Compute completion logprobs for one sample under current student weights."""
+    student_full = T.ModelInput.from_ints(prepared["full_tokens"])
+    student_logprobs_full = await student_sampling.compute_logprobs_async(student_full)
+    return _slice_completion_logprobs(
+        student_logprobs_full,
+        prepared["prompt_len"],
+        prepared["completion_len"],
+    )
 
 
 def _require_entry(lora_id: str, state_path: str) -> LoraEntry:

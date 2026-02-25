@@ -57,6 +57,21 @@ class TrainingConfig(BaseModel):
         le=100,
         description="Number of top logprobs to request from teacher",
     )
+    steps_per_batch: int = Field(
+        default=1,
+        ge=1,
+        le=32,
+        description=(
+            "Number of optimizer updates to run on the same sampled batch. "
+            "Importance reweighting is recomputed after each step."
+        ),
+    )
+    feedback_repetitions: int = Field(
+        default=1,
+        ge=1,
+        le=16,
+        description="Times to repeat each feedback string before teacher scoring.",
+    )
 
 
 class SDPOLossInput(BaseModel):
@@ -473,5 +488,4 @@ class TextCompletionResponse(BaseModel):
     model: str
     choices: list[TextCompletionChoice]
     usage: CompletionUsage
-
 

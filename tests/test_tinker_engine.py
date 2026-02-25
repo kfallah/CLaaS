@@ -511,6 +511,68 @@ def test_engine_distill_uses_provided_response_logprobs(tinker_engine, mock_trai
     mock_training_client.save_weights_and_get_sampling_client_async.assert_not_called()
 
 
+def test_engine_distill_multistep_recomputes_behavior_logprobs(tinker_engine, mock_training_client):
+    """Multi-step distill recomputes behavior logprobs between optimizer steps."""
+    engine, mock_service = tinker_engine
+
+    set_tinker_path("test/lora", "tinker://ckpt", "gpt-oss/GPT-OSS-120B", 32, step=0)
+    mock_service.create_training_client_from_state_async = AsyncMock(
+        return_value=mock_training_client
+    )
+
+    teacher_sampler = MagicMock()
+    teacher_sampler.compute_logprobs_async = AsyncMock(return_value=[-0.3] * 100)
+    mock_service.create_sampling_client_async = AsyncMock(return_value=teacher_sampler)
+
+    student_sampler = MagicMock()
+    student_sampler.compute_logprobs_async = AsyncMock(return_value=[-0.15] * 100)
+    mock_training_client.save_weights_and_get_sampling_client_async = AsyncMock(
+        return_value=student_sampler
+    )
+
+    payload = DistillBatchRequestPayload(
+        lora_id="test/lora",
+        training=TrainingConfig(steps_per_batch=2),
+        samples=[
+            DistillBatchItem(
+                prompt="Hello",
+                response="World",
+                feedback="Nice",
+                response_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+                prompt_token_ids=[0, 1, 2, 3, 4],
+                response_token_ids=[0, 1, 2, 3, 4],
+                user_prompt="Hello",
+                system_prompt="You are a helpful assistant.",
+            )
+        ],
+    )
+
+    result = asyncio.run(engine.distill(payload))
+
+    assert isinstance(result, DistillResponse)
+    assert result.metadata["steps_per_batch_applied"] == 2
+    assert result.metadata["step"] == 2
+
+    # Two optimizer updates, one recompute between them.
+    assert mock_training_client.forward_backward_async.call_count == 2
+    assert mock_training_client.optim_step_async.call_count == 2
+    mock_training_client.save_weights_and_get_sampling_client_async.assert_called_once()
+    student_sampler.compute_logprobs_async.assert_called()
+
+    # Final checkpoint reflects cumulative training steps.
+    mock_training_client.save_state_async.assert_called_once_with("step-2")
+    entry = get_entry("test/lora")
+    assert entry is not None
+    assert entry.step == 2
+
+    # Step-2 datum should use recomputed student logprobs (different from rollout logprobs).
+    first_call = mock_training_client.forward_backward_async.call_args_list[0]
+    second_call = mock_training_client.forward_backward_async.call_args_list[1]
+    first_logprobs = first_call.args[0][0].loss_fn_inputs["logprobs"].data
+    second_logprobs = second_call.args[0][0].loss_fn_inputs["logprobs"].data
+    assert first_logprobs != second_logprobs
+
+
 def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_client):
     """Batched distill: 3 samples processed concurrently, single train step.
 

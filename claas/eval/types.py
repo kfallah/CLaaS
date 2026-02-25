@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from claas.core.config import DEFAULT_SYSTEM_PROMPT
-from claas.core.types import ChatMessage
+from claas.core.types import ChatMessage, TrainingConfig
 
 
 @dataclass
@@ -78,6 +78,20 @@ class EvalRollout:
 
 
 @dataclass
+class EvalTrainingConfig:
+    """Hydra-managed training subsection for eval requests."""
+
+    learning_rate: float = 3e-5
+    alpha: float = 0.5
+    is_clip: float = 5.0
+    max_grad_norm: float = 1.0
+    kl_reg_weight: float = 0.0
+    teacher_top_k: int = 100
+    steps_per_batch: int = 1
+    feedback_repetitions: int = 1
+
+
+@dataclass
 class EvalConfig:
     """Hydra-managed eval configuration (no secrets)."""
 
@@ -94,12 +108,27 @@ class EvalConfig:
     openclaw_url: Optional[str] = None
     base_model: str = "Qwen/Qwen3-8B"
     batch_size: int = 4
-    steps_per_batch: int = 4
-    feedback_repetitions: int = 1
+    training: EvalTrainingConfig = field(default_factory=EvalTrainingConfig)
 
 
-# HarnessConfig is the post-processed runtime config (still no secrets).
-HarnessConfig = EvalConfig
+@dataclass
+class HarnessConfig:
+    """Post-processed runtime config with strict TrainingConfig type."""
+
+    mode: str = "local"
+    claas_url: str = "http://localhost:8080"
+    preferences: list[str] = field(default_factory=lambda: ["no_emoji", "concise", "identity"])
+    num_steps: int = 20
+    output_dir: str = "./data/evals"
+    metrics: list[str] = field(default_factory=lambda: ["logprob"])
+    plots: bool = True
+    collapse_steps: Optional[list[int]] = None
+    lora_id_prefix: str = "eval"
+    seed: int = 42
+    openclaw_url: Optional[str] = None
+    base_model: str = "Qwen/Qwen3-8B"
+    batch_size: int = 4
+    training: TrainingConfig = field(default_factory=TrainingConfig)
 
 
 @dataclass
@@ -120,6 +149,7 @@ class LocalDistillMetrics:
     kl_reg: float | None
     mean_is_ratio: float | None
     clip_fraction: float | None
+    steps_per_batch_applied: int = 1
 
 
 @dataclass
@@ -134,6 +164,7 @@ class TinkerDistillMetrics:
     adv_abs_mean_raw: float
     completion_len: int = 0
     batch_size: int = 0
+    steps_per_batch_applied: int = 1
 
 
 @dataclass

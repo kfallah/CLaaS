@@ -26,8 +26,6 @@ metrics:                             # metrics to evaluate per step
 
 num_steps: 20
 batch_size: 4
-steps_per_batch: 1                   # gradient updates per batch
-feedback_repetitions: 1              # times to repeat feedback string
 collapse_steps: [0, 5, 10, 15, 19]  # steps where collapse metric runs
 plots: true                          # generate matplotlib plots
 seed: 42
@@ -35,6 +33,10 @@ lora_id_prefix: eval
 output_dir: ./data/evals
 
 openclaw_url: http://localhost:18789  # OpenClaw gateway (null = use CLaaS API directly)
+
+training:                             # forwarded to /v1/feedback TrainingConfig
+  steps_per_batch: 4                 # gradient updates per batch
+  feedback_repetitions: 1            # times to repeat feedback string
 ```
 
 ### Overriding config via CLI

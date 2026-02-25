@@ -81,6 +81,7 @@ async def _submit_feedback(
             adv_abs_mean_raw=metadata["adv_abs_mean_raw"],
             completion_len=metadata["completion_len"],
             batch_size=metadata["batch_size"],
+            steps_per_batch_applied=metadata["steps_per_batch_applied"],
         )
 
     return LocalDistillMetrics(
@@ -88,6 +89,7 @@ async def _submit_feedback(
         kl_reg=metadata.get("kl_reg"),
         mean_is_ratio=metadata.get("mean_is_ratio"),
         clip_fraction=metadata.get("clip_fraction"),
+        steps_per_batch_applied=metadata["steps_per_batch_applied"],
     )
 
 
@@ -190,6 +192,7 @@ def _load_completed_steps(output_dir: str, preference: str) -> list[StepResult]:
                 prompt_used=data["prompt_used"],
                 response_text=data.get("response_text"),
                 timing_s=data.get("timing_s", 0.0),
+                sub_step_count=data.get("sub_step_count", 1),
             ))
     return steps
 
@@ -360,8 +363,8 @@ async def run_preference_experiment(
     for step in range(resume_from, config.num_steps):
         step_start = time.perf_counter()
 
-        # Determine feedback string
-        feedback_str = " ".join([pref.feedback_string] * config.feedback_repetitions)
+        # Feedback repetition is a training concern configured via TrainingConfig.
+        feedback_str = pref.feedback_string
 
         # Collect samples for this step (batch_size >= 1)
         samples: list[FeedbackItem] = []
@@ -385,6 +388,7 @@ async def run_preference_experiment(
                     prompt=prompt,
                     response=content,
                     feedback=feedback_str,
+                    training=config.training,
                 ))
             except (httpx.HTTPError, KeyError, ValueError) as e:
                 logger.warning(
@@ -395,28 +399,20 @@ async def run_preference_experiment(
         if response_text is None:
             response_text = "I'd be happy to help you with that."
 
-        # Submit feedback — possibly multiple gradient steps on same batch
+        # Submit feedback for this step. Training engine applies steps_per_batch.
         sdpo_metrics = None
-        sub_steps_completed = 0
         if samples:
-            for sub_step in range(config.steps_per_batch):
-                try:
-                    sdpo_metrics = await _submit_feedback(
-                        config, actual_lora_id, samples,
-                    )
-                    sub_steps_completed += 1
-                except (httpx.HTTPError, KeyError) as e:
-                    logger.warning(
-                        "[%s] Step %d sub-step %d feedback failed: %s",
-                        pref.name, step, sub_step, e,
-                    )
-                    break
-
-            if config.steps_per_batch > 1:
-                logger.info(
-                    "[%s] Step %d: %d sub-steps completed",
-                    pref.name, step, sub_steps_completed,
+            try:
+                sdpo_metrics = await _submit_feedback(
+                    config, actual_lora_id, samples,
                 )
+            except (httpx.HTTPError, KeyError) as e:
+                logger.warning(
+                    "[%s] Step %d feedback failed: %s",
+                    pref.name, step, e,
+                )
+
+        sub_step_count = sdpo_metrics.steps_per_batch_applied if sdpo_metrics else 1
 
         # Measure eval
         try:
@@ -444,7 +440,7 @@ async def run_preference_experiment(
             ],
             response_text=response_text if needs_generation else None,
             timing_s=timing_s,
-            sub_step_count=sub_steps_completed if sub_steps_completed > 0 else 1,
+            sub_step_count=sub_step_count,
         )
 
         result.steps.append(step_result)

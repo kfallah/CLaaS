@@ -77,9 +77,14 @@ def test_collapse_steps_list() -> None:
     assert config.collapse_steps == [0, 5, 10]
 
 
-def test_steps_per_batch_from_config() -> None:
-    config = build_harness_config(_compose_eval_config(["steps_per_batch=3"]))
-    assert config.steps_per_batch == 3
+def test_training_steps_per_batch_from_config() -> None:
+    config = build_harness_config(_compose_eval_config(["training.steps_per_batch=3"]))
+    assert config.training.steps_per_batch == 3
+
+
+def test_eval_top_level_steps_per_batch_rejected() -> None:
+    with pytest.raises(Exception):
+        _compose_eval_config(["steps_per_batch=3"])
 
 
 def test_hydra_config_custom_dir() -> None:
