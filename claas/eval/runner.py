@@ -17,7 +17,6 @@ from claas.core.types import (
     FeedbackBatchRequest,
     FeedbackItem,
     FeedbackOrchestration,
-    TrainingConfig,
 )
 
 from .metrics import Metric, build_metrics, derive_model_name
@@ -212,8 +211,6 @@ def _write_metadata(output_dir: str, preference: str, config: EvalConfig, lora_i
     os.makedirs(pref_dir, exist_ok=True)
     path = os.path.join(pref_dir, "metadata.json")
 
-    if not isinstance(config.training, TrainingConfig):
-        raise TypeError(f"EvalConfig.training must be TrainingConfig, got {type(config.training)!r}")
     config_dict = dataclasses.asdict(config)
 
     data = {
@@ -361,8 +358,6 @@ async def run_preference_experiment(
 
     # Main loop
     training_cfg = config.training
-    if not isinstance(training_cfg, TrainingConfig):
-        raise TypeError(f"EvalConfig.training must be TrainingConfig, got {type(training_cfg)!r}")
 
     for step in range(resume_from, config.num_steps):
         step_start = time.perf_counter()

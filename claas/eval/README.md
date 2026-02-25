@@ -39,7 +39,7 @@ collapse_steps: [0, 5, 10, 15, 19]  # steps where collapse metric runs
 plots: true                          # generate matplotlib plots
 seed: 42
 lora_id_prefix: eval
-output_dir: ./data/evals
+output_dir: ./data/evals/${now:%Y%m%d-%H%M%SZ}
 
 openclaw_url: http://localhost:18789  # OpenClaw gateway (null = use CLaaS API directly)
 ```
@@ -65,16 +65,14 @@ uv run python -m claas.eval --config-dir ./my_configs --config-name my_config
 ### Programmatic usage
 
 ```python
-from claas.eval.config import build_harness_config
 from claas.eval.runner import run_harness
 from claas.eval.types import EvalConfig
 import asyncio
 
-config = build_harness_config(
-    EvalConfig(
-        preferences=["concise"],
-        num_steps=5,
-    )
+config = EvalConfig(
+    preferences=["concise"],
+    num_steps=5,
+    output_dir="./data/evals/manual-run",  # explicit when bypassing Hydra CLI
 )
 asyncio.run(run_harness(config))
 ```

@@ -13,7 +13,7 @@ import asyncio
 import hydra
 from omegaconf import OmegaConf
 
-from .config import build_harness_config
+from . import config as _config  # noqa: F401
 from .types import EvalConfig
 
 
@@ -25,8 +25,7 @@ def main(cfg: EvalConfig) -> None:
     if not isinstance(eval_cfg, EvalConfig):
         raise TypeError("Hydra did not produce an EvalConfig instance")
 
-    config = build_harness_config(eval_cfg)
-    asyncio.run(run_harness(config))
+    asyncio.run(run_harness(eval_cfg))
 
 
 if __name__ == "__main__":

@@ -33,6 +33,6 @@ training:
   teacher_top_k: 100
 seed: 42
 lora_id_prefix: eval
-output_dir: ./data/evals
+output_dir: ./data/evals/${now:%Y%m%d-%H%M%SZ}
 
 openclaw_url: http://localhost:18789
