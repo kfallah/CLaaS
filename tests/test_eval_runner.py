@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from claas.core.types import TrainingConfig
 from claas.eval.types import (
-    HarnessConfig,
+    EvalConfig,
     LocalDistillMetrics,
     StepResult,
     TinkerDistillMetrics,
@@ -105,36 +105,36 @@ def test_step_result_from_dict_no_metrics():
     assert result.sdpo_metrics is None
 
 
-# ── HarnessConfig defaults ───────────────────────────────────────────
+# ── EvalConfig defaults ──────────────────────────────────────────────
 
 
 def test_steps_per_batch_default():
-    """HarnessConfig.steps_per_batch defaults to 4."""
-    config = HarnessConfig()
+    """EvalConfig.steps_per_batch defaults to 4."""
+    config = EvalConfig()
     assert config.steps_per_batch == 4
 
 
 def test_steps_per_batch_custom():
-    """HarnessConfig.steps_per_batch can be set."""
-    config = HarnessConfig(steps_per_batch=3)
+    """EvalConfig.steps_per_batch can be set."""
+    config = EvalConfig(steps_per_batch=3)
     assert config.steps_per_batch == 3
 
 
 def test_feedback_repetitions_default():
-    """HarnessConfig.feedback_repetitions defaults to 1."""
-    config = HarnessConfig()
+    """EvalConfig.feedback_repetitions defaults to 1."""
+    config = EvalConfig()
     assert config.feedback_repetitions == 1
 
 
 def test_feedback_repetitions_custom():
-    """HarnessConfig.feedback_repetitions can be set."""
-    config = HarnessConfig(feedback_repetitions=4)
+    """EvalConfig.feedback_repetitions can be set."""
+    config = EvalConfig(feedback_repetitions=4)
     assert config.feedback_repetitions == 4
 
 
 def test_training_config_default_type():
-    """HarnessConfig.training defaults to typed TrainingConfig."""
-    config = HarnessConfig()
+    """EvalConfig.training defaults to typed TrainingConfig."""
+    config = EvalConfig()
     assert isinstance(config.training, TrainingConfig)
     assert config.training.is_clip == 5.0
 

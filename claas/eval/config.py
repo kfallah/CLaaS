@@ -12,7 +12,7 @@ from hydra.core.config_store import ConfigStore
 
 from claas.core.types import TrainingConfig
 
-from .types import EvalConfig, EvalTrainingConfig, HarnessConfig
+from .types import EvalConfig
 
 # Pattern matching the timestamped run-id suffix (e.g. 20260220-012345Z)
 _RUN_ID_RE = re.compile(r"\d{8}-\d{6}Z$")
@@ -20,30 +20,26 @@ _RUN_ID_RE = re.compile(r"\d{8}-\d{6}Z$")
 ConfigStore.instance().store(name="_eval_schema", node=EvalConfig)
 
 
-def build_harness_config(eval_cfg: EvalConfig) -> HarnessConfig:
-    """Post-process EvalConfig → HarnessConfig (no secrets)."""
-    if not isinstance(eval_cfg.training, EvalTrainingConfig):
+def build_harness_config(eval_cfg: EvalConfig) -> EvalConfig:
+    """Post-process EvalConfig while preserving strict runtime types."""
+    if not isinstance(eval_cfg.training, TrainingConfig):
         raise TypeError(
-            f"EvalConfig.training must be EvalTrainingConfig, got {type(eval_cfg.training)!r}"
+            f"EvalConfig.training must be TrainingConfig, got {type(eval_cfg.training)!r}"
         )
 
-    training = TrainingConfig(
-        learning_rate=eval_cfg.training.learning_rate,
-        alpha=eval_cfg.training.alpha,
-        is_clip=eval_cfg.training.is_clip,
-        max_grad_norm=eval_cfg.training.max_grad_norm,
-        kl_reg_weight=eval_cfg.training.kl_reg_weight,
-        teacher_top_k=eval_cfg.training.teacher_top_k,
+    config = dataclasses.replace(
+        eval_cfg,
+        training=dataclasses.replace(eval_cfg.training),
     )
-
-    fields = dataclasses.asdict(eval_cfg)
-    fields["training"] = training
 
     # Timestamped output subdir (skip if output_dir already ends with a run-id,
     # which allows resuming an existing run by passing its directory).
-    output_dir = fields["output_dir"]
+    output_dir = config.output_dir
     if not _RUN_ID_RE.search(Path(output_dir).name):
         run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
-        fields["output_dir"] = os.path.join(output_dir, run_id)
+        config = dataclasses.replace(
+            config,
+            output_dir=os.path.join(output_dir, run_id),
+        )
 
-    return HarnessConfig(**fields)
+    return config

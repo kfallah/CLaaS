@@ -272,6 +272,60 @@ def test_feedback_returns_500_and_logs_error(monkeypatch, tmp_path):
     assert log_records and log_records[0]["status"] == "error"
 
 
+def test_feedback_rejects_invalid_training_config(monkeypatch):
+    _mock_config(monkeypatch, "modal")
+    client = TestClient(web_app)
+
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "clean prompt",
+                    "response": "unused",
+                    "feedback": "f",
+                    "training": {"is_clip": -1},
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+    assert "invalid training config" in response.json()["detail"]
+    assert "is_clip" in response.json()["detail"]
+
+
+def test_feedback_rejects_mismatched_training_config(monkeypatch):
+    _mock_config(monkeypatch, "modal")
+    client = TestClient(web_app)
+
+    response = client.post(
+        "/v1/feedback",
+        json={
+            "requests": [
+                {
+                    "lora_id": "user/model",
+                    "prompt": "prompt-1",
+                    "response": "response-1",
+                    "feedback": "f",
+                    "training": {"is_clip": 5.0},
+                },
+                {
+                    "lora_id": "user/model",
+                    "prompt": "prompt-2",
+                    "response": "response-2",
+                    "feedback": "f",
+                    "training": {"is_clip": 7.0},
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "all requests must use the same training config"
+
+
 def test_export_404_when_missing(monkeypatch):
     from claas import api
 

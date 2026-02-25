@@ -14,7 +14,7 @@ from claas.core.types import TrainingConfig
 from claas.eval.config import build_harness_config
 from claas.eval.metrics import VerifierResult
 from claas.eval.preferences import get_preference_configs
-from claas.eval.types import EvalConfig, HarnessConfig
+from claas.eval.types import EvalConfig
 
 
 def _make_config_dir(yaml_content: str) -> str:
@@ -46,7 +46,7 @@ def _compose_eval_config(
 
 def test_hydra_config_defaults() -> None:
     config = build_harness_config(_compose_eval_config())
-    assert isinstance(config, HarnessConfig)
+    assert isinstance(config, EvalConfig)
     assert isinstance(config.training, TrainingConfig)
     assert config.mode == "tinker"
     assert config.num_steps == 20
