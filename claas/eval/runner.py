@@ -17,6 +17,7 @@ from claas.core.types import (
     FeedbackBatchRequest,
     FeedbackItem,
     FeedbackOrchestration,
+    TrainingConfig,
 )
 
 from .metrics import Metric, build_metrics, derive_model_name
@@ -212,6 +213,10 @@ def _write_metadata(output_dir: str, preference: str, config: HarnessConfig, lor
     path = os.path.join(pref_dir, "metadata.json")
 
     config_dict = dataclasses.asdict(config)
+    training = config_dict.get("training")
+    if not isinstance(training, TrainingConfig):
+        raise TypeError(f"HarnessConfig.training must be TrainingConfig, got {type(training)!r}")
+    config_dict["training"] = training.model_dump()
 
     data = {
         "config": config_dict,
@@ -357,6 +362,10 @@ async def run_preference_experiment(
     )
 
     # Main loop
+    training_cfg = config.training
+    if not isinstance(training_cfg, TrainingConfig):
+        raise TypeError(f"HarnessConfig.training must be TrainingConfig, got {type(training_cfg)!r}")
+
     for step in range(resume_from, config.num_steps):
         step_start = time.perf_counter()
 
@@ -385,6 +394,7 @@ async def run_preference_experiment(
                     prompt=prompt,
                     response=content,
                     feedback=feedback_str,
+                    training=training_cfg,
                 ))
             except (httpx.HTTPError, KeyError, ValueError) as e:
                 logger.warning(

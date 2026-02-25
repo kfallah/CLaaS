@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from claas.core.types import TrainingConfig
 from claas.eval.types import (
     HarnessConfig,
     LocalDistillMetrics,
@@ -129,6 +130,13 @@ def test_feedback_repetitions_custom():
     """HarnessConfig.feedback_repetitions can be set."""
     config = HarnessConfig(feedback_repetitions=4)
     assert config.feedback_repetitions == 4
+
+
+def test_training_config_default_type():
+    """HarnessConfig.training defaults to typed TrainingConfig."""
+    config = HarnessConfig()
+    assert isinstance(config.training, TrainingConfig)
+    assert config.training.is_clip == 5.0
 
 
 # ── StepResult sub_step_count ────────────────────────────────────────

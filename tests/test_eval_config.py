@@ -10,6 +10,7 @@ import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
+from claas.core.types import TrainingConfig
 from claas.eval.config import build_harness_config
 from claas.eval.metrics import VerifierResult
 from claas.eval.preferences import get_preference_configs
@@ -46,18 +47,32 @@ def _compose_eval_config(
 def test_hydra_config_defaults() -> None:
     config = build_harness_config(_compose_eval_config())
     assert isinstance(config, HarnessConfig)
+    assert isinstance(config.training, TrainingConfig)
     assert config.mode == "tinker"
     assert config.num_steps == 20
     assert config.batch_size == 4
     assert config.seed == 42
     assert config.lora_id_prefix == "eval"
     assert config.plots is True
+    assert config.training.is_clip == 5.0
+    assert config.training.learning_rate == 3e-5
 
 
 def test_hydra_config_with_overrides() -> None:
-    config = build_harness_config(_compose_eval_config(["num_steps=5", "seed=99"]))
+    config = build_harness_config(
+        _compose_eval_config(
+            ["num_steps=5", "seed=99", "training.is_clip=7.0", "training.learning_rate=1e-4"]
+        )
+    )
     assert config.num_steps == 5
     assert config.seed == 99
+    assert config.training.is_clip == 7.0
+    assert config.training.learning_rate == 1e-4
+
+
+def test_training_type_invariance_rejects_dict() -> None:
+    with pytest.raises(TypeError):
+        build_harness_config(EvalConfig(training={"is_clip": 7.0}))  # type: ignore[arg-type]
 
 
 def test_unknown_key_rejected() -> None:
