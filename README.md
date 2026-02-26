@@ -9,7 +9,7 @@
 
 # CLaaS: Continual Learning as a Service
 
-Continual learning as-a-service (CLaaS) via self-distillation for OpenClaw. Personalize the model weights of your OpenClaw assistant using text feedback without model collapse.
+Continual learning as-a-service (CLaaS): distill context into weights to retain knowledge and make your tokens count.
 
 <p align="center">
   <img src="before.png" alt="Before training" width="380">
