@@ -12,7 +12,9 @@
 Continual learning as-a-service (CLaaS) via self-distillation for OpenClaw. Personalize the model weights of your OpenClaw assistant using text feedback without model collapse.
 
 <p align="center">
-  <img src="assets/telegram.png" alt="Telegram demo" width="400">
+  <img src="before.png" alt="Before training" width="380">
+  &nbsp;&nbsp;
+  <img src="after.png" alt="After training" width="380">
 </p>
 
 ## Installation
