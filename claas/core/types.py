@@ -32,6 +32,8 @@ class TrainingConfig:
     max_grad_norm: float = 1.0
     kl_reg_weight: float = 0.0
     teacher_top_k: int = 100
+    steps_per_batch: int = 4
+    feedback_repetitions: int = 1
 
 
 class SDPOLossInput(BaseModel):

@@ -94,8 +94,6 @@ class EvalConfig:
     openclaw_url: Optional[str] = None
     base_model: str = "Qwen/Qwen3-8B"
     batch_size: int = 4
-    steps_per_batch: int = 4
-    feedback_repetitions: int = 1
     training: TrainingConfig = field(default_factory=TrainingConfig)
 
 
@@ -117,6 +115,7 @@ class LocalDistillMetrics:
     kl_reg: float | None
     mean_is_ratio: float | None
     clip_fraction: float | None
+    steps_per_batch_applied: int = 1
 
 
 @dataclass
@@ -131,6 +130,7 @@ class TinkerDistillMetrics:
     adv_abs_mean_raw: float
     completion_len: int = 0
     batch_size: int = 0
+    steps_per_batch_applied: int = 1
 
 
 @dataclass

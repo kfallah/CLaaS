@@ -34,6 +34,7 @@ def test_tinker_distill_metrics_fields():
     assert m.adv_abs_mean_raw == 0.60
     assert m.completion_len == 128
     assert m.batch_size == 4
+    assert m.steps_per_batch_applied == 1
 
 
 def test_tinker_distill_metrics_defaults():
@@ -48,6 +49,7 @@ def test_tinker_distill_metrics_defaults():
     )
     assert m.completion_len == 0
     assert m.batch_size == 0
+    assert m.steps_per_batch_applied == 1
 
 
 # ── step_result_from_dict deserialization ─────────────────────────────
@@ -76,11 +78,13 @@ def test_step_result_from_dict_tinker_metrics():
             "adv_abs_mean_raw": 0.55,
             "completion_len": 64,
             "batch_size": 4,
+            "steps_per_batch_applied": 3,
         },
     }
     result = step_result_from_dict(data)
     assert isinstance(result.sdpo_metrics, TinkerDistillMetrics)
     assert result.sdpo_metrics.adv_mean == -0.5
+    assert result.sdpo_metrics.steps_per_batch_applied == 3
 
 
 def test_step_result_from_dict_local_metrics():
@@ -92,11 +96,13 @@ def test_step_result_from_dict_local_metrics():
             "kl_reg": 0.02,
             "mean_is_ratio": 1.01,
             "clip_fraction": 0.05,
+            "steps_per_batch_applied": 2,
         },
     }
     result = step_result_from_dict(data)
     assert isinstance(result.sdpo_metrics, LocalDistillMetrics)
     assert result.sdpo_metrics.distill_loss == 0.35
+    assert result.sdpo_metrics.steps_per_batch_applied == 2
 
 
 def test_step_result_from_dict_no_metrics():
@@ -108,28 +114,19 @@ def test_step_result_from_dict_no_metrics():
 # ── EvalConfig defaults ──────────────────────────────────────────────
 
 
-def test_steps_per_batch_default():
-    """EvalConfig.steps_per_batch defaults to 4."""
+def test_training_config_default():
+    """EvalConfig.training defaults to TrainingConfig defaults."""
     config = EvalConfig()
-    assert config.steps_per_batch == 4
+    assert config.training == TrainingConfig()
 
 
-def test_steps_per_batch_custom():
-    """EvalConfig.steps_per_batch can be set."""
-    config = EvalConfig(steps_per_batch=3)
-    assert config.steps_per_batch == 3
-
-
-def test_feedback_repetitions_default():
-    """EvalConfig.feedback_repetitions defaults to 1."""
-    config = EvalConfig()
-    assert config.feedback_repetitions == 1
-
-
-def test_feedback_repetitions_custom():
-    """EvalConfig.feedback_repetitions can be set."""
-    config = EvalConfig(feedback_repetitions=4)
-    assert config.feedback_repetitions == 4
+def test_training_config_custom():
+    """EvalConfig.training accepts custom steps/repetitions."""
+    config = EvalConfig(
+        training=TrainingConfig(steps_per_batch=3, feedback_repetitions=4),
+    )
+    assert config.training.steps_per_batch == 3
+    assert config.training.feedback_repetitions == 4
 
 
 def test_training_config_default_type():

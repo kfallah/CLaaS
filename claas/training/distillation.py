@@ -7,7 +7,7 @@ import logging
 import os
 import tempfile
 from contextlib import nullcontext as _nullcontext
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import torch
 
@@ -33,6 +33,17 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+class PreparedSample(TypedDict):
+    full_ids: torch.Tensor
+    response_ids: torch.Tensor
+    response_start: int
+    response_mask: torch.Tensor
+    base_logprobs: torch.Tensor
+    teacher_logprobs: torch.Tensor
+    teacher_indices: torch.Tensor
+    behavior_logprobs: torch.Tensor
 
 
 class DistillationTrainer:
@@ -219,6 +230,24 @@ class DistillationTrainer:
         torch.cuda.empty_cache()
         return top_logprobs, top_indices, teacher_scored_text
 
+    def _compute_student_response_logprobs(
+        self,
+        model: "PeftModel | PeftMixedModel",
+        full_ids: torch.Tensor,
+        response_ids: torch.Tensor,
+        response_start: int,
+    ) -> torch.Tensor:
+        """Compute student logprobs for response tokens under the current adapter."""
+        with torch.no_grad():
+            student_output = model(input_ids=full_ids)
+            student_logits = student_output.logits[:, response_start - 1 : -1, :]
+            student_logprobs = self.functional.log_softmax(student_logits, dim=-1).gather(
+                -1, response_ids.unsqueeze(-1)
+            ).squeeze(-1)
+        del student_output, student_logits
+        torch.cuda.empty_cache()
+        return student_logprobs.to(dtype=torch.float32).detach()
+
     def distill(self, payload: DistillBatchRequestPayload) -> DistillResponse:
         """Run one SDPO distillation step.
 
@@ -257,13 +286,10 @@ class DistillationTrainer:
             )
             self._load_optimizer_state(lora_local_path, optimizer)
 
-            batch_loss_tensors: list[torch.Tensor] = []
-            batch_distill_loss: list[float] = []
-            batch_kl_reg: list[float] = []
-            batch_mean_is_ratio: list[float] = []
-            batch_clip_fraction: list[float] = []
+            prepared_samples: list[PreparedSample] = []
             batch_teacher_scored_texts: list[str] = []
-            tokens_processed = 0
+            tokens_per_step = 0
+            repeated_feedback_count = config.feedback_repetitions
 
             for sample in payload.samples:
                 prompt_ids = torch.tensor(
@@ -276,79 +302,124 @@ class DistillationTrainer:
                     device=self.device,
                     dtype=torch.int64,
                 )
+                response_token_count = response_ids.shape[-1]
+                if len(sample.response_logprobs) != response_token_count:
+                    raise ValueError("response_logprobs length must match response token length")
 
                 full_ids = torch.cat([prompt_ids, response_ids], dim=-1)
                 response_start = prompt_ids.shape[-1]
-                response_token_count = response_ids.shape[-1]
-                tokens_processed += int(response_token_count)
-
-                response_mask = torch.zeros(1, full_ids.shape[-1], device=self.device)
-                response_mask[:, response_start:] = 1.0
+                tokens_per_step += int(response_token_count)
 
                 with torch.no_grad(), model.disable_adapter():
                     base_output = self.base_model(input_ids=full_ids)
                     base_logits = base_output.logits[:, response_start - 1 : -1, :]
                     base_logprobs = self.functional.log_softmax(base_logits, dim=-1).gather(
-                        -1, response_ids[:, :response_token_count].unsqueeze(-1)
+                        -1, response_ids.unsqueeze(-1)
                     ).squeeze(-1)
-
                 del base_output, base_logits
                 torch.cuda.empty_cache()
 
-                student_output = model(input_ids=full_ids)
-                student_logits = student_output.logits[:, response_start - 1 : -1, :].contiguous()
-                del student_output
-
-                old_student_logprobs = torch.tensor(
-                    sample.response_logprobs,
-                    dtype=torch.float32,
-                    device=self.device,
-                ).unsqueeze(0)
-                if old_student_logprobs.shape[1] > response_token_count:
-                    old_student_logprobs = old_student_logprobs[:, :response_token_count]
-                elif old_student_logprobs.shape[1] < response_token_count:
-                    raise ValueError("response_logprobs length must match response token length")
-
+                repeated_feedback = " ".join([sample.feedback] * repeated_feedback_count)
                 teacher_logprobs, teacher_indices, teacher_scored_text = self._build_self_teacher_topk(
                     sample.user_prompt,
-                    sample.feedback,
+                    repeated_feedback,
                     response_ids,
                     config.teacher_top_k,
                     system_prompt=sample.system_prompt,
                     peft_model=model,
                 )
-
                 if teacher_logprobs.shape[0] != response_token_count:
                     raise ValueError("teacher logprob sequence length must match response length")
 
-                loss_input = SDPOLossInput(
-                    student_logits=student_logits,
-                    teacher_logprobs=teacher_logprobs.unsqueeze(0),
-                    teacher_indices=teacher_indices.unsqueeze(0),
-                    base_logprobs=base_logprobs,
-                    response_mask=response_mask[:, response_start:],
-                    old_student_logprobs=old_student_logprobs,
-                    response_ids=response_ids[:, :response_token_count],
-                    training=config,
+                behavior_logprobs = torch.tensor(
+                    sample.response_logprobs,
+                    dtype=torch.float32,
+                    device=self.device,
+                ).unsqueeze(0)
+
+                prepared_samples.append(
+                    PreparedSample(
+                        full_ids=full_ids,
+                        response_ids=response_ids,
+                        response_start=int(response_start),
+                        response_mask=torch.ones(
+                            (1, response_token_count),
+                            device=self.device,
+                            dtype=torch.float32,
+                        ),
+                        base_logprobs=base_logprobs,
+                        teacher_logprobs=teacher_logprobs.unsqueeze(0),
+                        teacher_indices=teacher_indices.unsqueeze(0),
+                        behavior_logprobs=behavior_logprobs,
+                    )
                 )
-                loss_dict = compute_sdpo_loss(loss_input)
-                batch_loss_tensors.append(loss_dict["loss"])
-                batch_distill_loss.append(loss_dict["distill_loss"])
-                batch_kl_reg.append(loss_dict["kl_reg"])
-                batch_mean_is_ratio.append(loss_dict["mean_is_ratio"])
-                batch_clip_fraction.append(loss_dict["clip_fraction"])
                 batch_teacher_scored_texts.append(teacher_scored_text)
 
-                del full_ids, prompt_ids, response_ids, response_mask
-                del student_logits, base_logprobs, old_student_logprobs
-                del teacher_logprobs, teacher_indices, loss_input
+                del prompt_ids
 
-            mean_loss = torch.stack(batch_loss_tensors).mean()
-            mean_loss.backward()
+            step_metrics: list[dict[str, float | int]] = []
 
-            grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, config.max_grad_norm)
-            optimizer.step()
-            optimizer.zero_grad()
+            for step_idx in range(config.steps_per_batch):
+                batch_loss_tensors: list[torch.Tensor] = []
+                batch_distill_loss: list[float] = []
+                batch_kl_reg: list[float] = []
+                batch_mean_is_ratio: list[float] = []
+                batch_clip_fraction: list[float] = []
+
+                for sample_state in prepared_samples:
+                    student_output = model(input_ids=sample_state["full_ids"])
+                    student_logits = student_output.logits[
+                        :, sample_state["response_start"] - 1 : -1, :
+                    ].contiguous()
+                    del student_output
+
+                    loss_input = SDPOLossInput(
+                        student_logits=student_logits,
+                        teacher_logprobs=sample_state["teacher_logprobs"],
+                        teacher_indices=sample_state["teacher_indices"],
+                        base_logprobs=sample_state["base_logprobs"],
+                        response_mask=sample_state["response_mask"],
+                        old_student_logprobs=sample_state["behavior_logprobs"],
+                        response_ids=sample_state["response_ids"],
+                        training=config,
+                    )
+                    loss_dict = compute_sdpo_loss(loss_input)
+                    batch_loss_tensors.append(loss_dict["loss"])
+                    batch_distill_loss.append(loss_dict["distill_loss"])
+                    batch_kl_reg.append(loss_dict["kl_reg"])
+                    batch_mean_is_ratio.append(loss_dict["mean_is_ratio"])
+                    batch_clip_fraction.append(loss_dict["clip_fraction"])
+
+                    del student_logits, loss_input
+
+                mean_loss = torch.stack(batch_loss_tensors).mean()
+                mean_loss.backward()
+
+                grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, config.max_grad_norm)
+                optimizer.step()
+                optimizer.zero_grad()
+
+                grad_norm_value = grad_norm.item() if hasattr(grad_norm, "item") else float(grad_norm)
+                step_metrics.append(
+                    {
+                        "step": step_idx + 1,
+                        "total_loss": mean_loss.item(),
+                        "distill_loss": sum(batch_distill_loss) / len(batch_distill_loss),
+                        "kl_reg": sum(batch_kl_reg) / len(batch_kl_reg),
+                        "mean_is_ratio": sum(batch_mean_is_ratio) / len(batch_mean_is_ratio),
+                        "clip_fraction": sum(batch_clip_fraction) / len(batch_clip_fraction),
+                        "grad_norm": grad_norm_value,
+                    }
+                )
+
+                if step_idx < config.steps_per_batch - 1:
+                    for sample_state in prepared_samples:
+                        sample_state["behavior_logprobs"] = self._compute_student_response_logprobs(
+                            model=model,
+                            full_ids=sample_state["full_ids"],
+                            response_ids=sample_state["response_ids"],
+                            response_start=sample_state["response_start"],
+                        )
 
             model.gradient_checkpointing_disable()
 
@@ -363,28 +434,25 @@ class DistillationTrainer:
             finally:
                 cleanup_local_lora(save_dir)
 
-            total_loss = mean_loss.item()
-            distill_loss = sum(batch_distill_loss) / len(batch_distill_loss)
-            kl_reg = sum(batch_kl_reg) / len(batch_kl_reg)
-            mean_is_ratio = sum(batch_mean_is_ratio) / len(batch_mean_is_ratio)
-            clip_fraction = sum(batch_clip_fraction) / len(batch_clip_fraction)
-            grad_norm_value = grad_norm.item() if hasattr(grad_norm, "item") else float(grad_norm)
+            final_step_metrics = step_metrics[-1]
 
-            del model, optimizer, batch_loss_tensors
+            del model, optimizer
             torch.cuda.empty_cache()
 
             return DistillResponse.model_validate(
                 {
                     "lora_id": new_lora_id,
                     "metadata": {
-                        "total_loss": total_loss,
-                        "distill_loss": distill_loss,
-                        "kl_reg": kl_reg,
-                        "mean_is_ratio": mean_is_ratio,
-                        "clip_fraction": clip_fraction,
-                        "grad_norm": grad_norm_value,
-                        "tokens_processed": tokens_processed,
+                        "total_loss": final_step_metrics["total_loss"],
+                        "distill_loss": final_step_metrics["distill_loss"],
+                        "kl_reg": final_step_metrics["kl_reg"],
+                        "mean_is_ratio": final_step_metrics["mean_is_ratio"],
+                        "clip_fraction": final_step_metrics["clip_fraction"],
+                        "grad_norm": final_step_metrics["grad_norm"],
+                        "tokens_processed": tokens_per_step * config.steps_per_batch,
                         "batch_size": len(payload.samples),
+                        "steps_per_batch_applied": config.steps_per_batch,
+                        "per_step_metrics": step_metrics,
                         "teacher_scored_texts": batch_teacher_scored_texts,
                     },
                 }
