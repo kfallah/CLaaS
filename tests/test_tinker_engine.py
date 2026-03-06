@@ -408,7 +408,7 @@ def test_engine_distill_full_flow(tinker_engine, mock_training_client):
 
     payload = DistillBatchRequestPayload(
         lora_id="test/lora",
-        training=TrainingConfig(),
+        training=TrainingConfig(steps_per_batch=1),
         samples=[
             DistillBatchItem(
                 prompt="Hello",
@@ -487,7 +487,7 @@ def test_engine_distill_uses_provided_response_logprobs(tinker_engine, mock_trai
     # Provide response_logprobs matching the response length (5 tokens)
     payload = DistillBatchRequestPayload(
         lora_id="test/lora",
-        training=TrainingConfig(),
+        training=TrainingConfig(steps_per_batch=1),
         samples=[
             DistillBatchItem(
                 prompt="Hello",
@@ -633,7 +633,7 @@ def test_engine_distill_batch_multiple_samples(tinker_engine, mock_training_clie
 
     payload = DistillBatchRequestPayload(
         lora_id="test/lora",
-        training=TrainingConfig(),
+        training=TrainingConfig(steps_per_batch=1),
         samples=samples,
     )
 
@@ -777,7 +777,7 @@ def test_engine_distill_uses_response_token_ids(tinker_engine, mock_training_cli
 
     payload = DistillBatchRequestPayload(
         lora_id="test/lora",
-        training=TrainingConfig(),
+        training=TrainingConfig(steps_per_batch=1),
         samples=[
             DistillBatchItem(
                 prompt="(ignored prompt text)",

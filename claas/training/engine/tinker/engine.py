@@ -233,8 +233,9 @@ class TinkerTrainingEngine(TrainingEngine):
             await training_client.optim_step_async(
                 T.AdamParams(learning_rate=lr, beta1=0.9, beta2=0.95)
             )
-            if hasattr(fwd_bwd, "metrics") and fwd_bwd.metrics:
-                final_fwd_metrics = dict(fwd_bwd.metrics)
+            fwd_metrics = getattr(fwd_bwd, "metrics", None)
+            if fwd_metrics:
+                final_fwd_metrics = dict(fwd_metrics)
 
             n = len(sample_metrics)
             total_completion_len = sum(m["completion_len"] for m in sample_metrics)
