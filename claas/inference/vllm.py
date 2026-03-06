@@ -167,6 +167,16 @@ class VllmBackend(InferenceBackend):
 
         usage = data.get("usage", {})
 
+        # vLLM includes the stop token (e.g. <|im_end|>) in logprobs but the
+        # tokenizer doesn't produce it when re-encoding the text.  Trim the
+        # logprobs so the two sequences stay aligned.
+        if (
+            response_logprobs is not None
+            and response_token_ids
+            and len(response_logprobs) > len(response_token_ids)
+        ):
+            response_logprobs = response_logprobs[: len(response_token_ids)]
+
         return CompletionResult(
             content=content,
             raw_prompt=raw_prompt,

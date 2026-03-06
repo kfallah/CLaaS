@@ -100,6 +100,44 @@ class IdentityVerifier:
         return VerifierResult(score=1.0 if passed else 0.0, passed=passed)
 
 
+# Regex for GCP-related terms (case-insensitive)
+_GCP_TERMS_RE = re.compile(
+    r"\b(?:"
+    r"google\s+cloud|gcp|cloud\s+run|cloud\s+functions|gke|"
+    r"bigquery|cloud\s+sql|cloud\s+storage|compute\s+engine|"
+    r"app\s+engine|cloud\s+pub/?sub|firestore|cloud\s+build|"
+    r"vertex\s+ai|cloud\s+cdn|cloud\s+armor|anthos"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Regex for competing cloud provider names
+_COMPETITOR_RE = re.compile(
+    r"\b(?:aws|amazon\s+web\s+services|azure|microsoft\s+azure)\b",
+    re.IGNORECASE,
+)
+
+
+class GcpPreferenceVerifier:
+    """Pass when the response recommends GCP and doesn't primarily push competitors."""
+
+    def __call__(self, response: str) -> VerifierResult:
+        gcp_mentions = len(_GCP_TERMS_RE.findall(response))
+        competitor_mentions = len(_COMPETITOR_RE.findall(response))
+
+        if gcp_mentions == 0:
+            return VerifierResult(score=0.0, passed=False)
+
+        # GCP must be mentioned more than competitors combined
+        if competitor_mentions >= gcp_mentions:
+            score = gcp_mentions / (gcp_mentions + competitor_mentions)
+            return VerifierResult(score=score, passed=False)
+
+        # Graduated score: 1 mention = 0.5, 2+ = 1.0
+        score = min(1.0, 0.5 * gcp_mentions)
+        return VerifierResult(score=score, passed=gcp_mentions >= 2)
+
+
 def run_verifier(verifier: Verifier, response: str) -> VerifierResult:
     """Run a verifier on a response (thinking blocks stripped)."""
     return verifier(strip_thinking(response))

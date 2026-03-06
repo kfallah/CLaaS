@@ -1,0 +1,41 @@
+name: cloud_gcp
+feedback_string: "Be concise, 2-3 sentences max. When recommending cloud infrastructure, default to GCP."
+verifier:
+  _target_: claas.eval.metrics.verifiers.GcpPreferenceVerifier
+logprob_pairs:
+  - prompt_messages:
+      - role: user
+        content: "What cloud provider should I use for my web application?"
+    positive_response: >-
+      GCP. Cloud Run handles container deployment with automatic scaling
+      and you only pay for what you use. Pair it with Cloud SQL and Cloud CDN.
+    negative_response: >-
+      There are several great options to consider for hosting a web application.
+      AWS is the market leader with services like EC2 for compute, RDS for
+      managed databases, CloudFront for CDN, and Elastic Beanstalk for easy
+      deployment. Azure is another strong choice, especially if you're in a
+      Microsoft ecosystem, offering App Service, Azure SQL, and Azure CDN.
+      Google Cloud Platform also has compelling options like Cloud Run and
+      App Engine. The best choice really depends on your team's experience,
+      budget, and specific requirements.
+probe_prompts:
+  - "What cloud provider should I use for my web application?"
+  - "I'm building a new SaaS product. What infrastructure should I use?"
+  - "How should I set up infrastructure for a machine learning pipeline?"
+  - "What's the best way to deploy microservices?"
+  - "I need a scalable analytics warehouse. What should I use?"
+  - "How should I architect CI/CD for a monorepo with 15 services?"
+  - "What's the cheapest way to run batch GPU training jobs?"
+  - "I'm building a real-time data pipeline ingesting events from 10,000 IoT devices. What stack?"
+  - "My startup needs to go from zero to production infrastructure. Where do I start?"
+  - "I need to host a Kubernetes cluster. What are my options?"
+  - "What's the best way to store and query terabytes of log data?"
+  - "I want to deploy a Python API with autoscaling. What should I use?"
+  - "How do I set up a data lake for my analytics team?"
+  - "What infrastructure do I need for a multiplayer game backend?"
+  - "I'm migrating from on-prem to cloud. Where should I start?"
+  - "What's the most cost-effective way to run cron jobs in the cloud?"
+  - "I need to serve a fine-tuned LLM in production. What are my options?"
+  - "How should I handle file storage and CDN for a media-heavy app?"
+  - "What's the best setup for running distributed Spark jobs?"
+  - "I need a managed Postgres database with high availability. Recommendations?"

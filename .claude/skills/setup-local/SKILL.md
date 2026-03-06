@@ -46,6 +46,10 @@ uv pip install "torch>=2.1.0+cu128" torchvision torchaudio \
   --index-url https://download.pytorch.org/whl/cu128 --reinstall
 uv pip install "numpy<2.3"  # numba compatibility
 
+# Flash Attention 2 — required for local training (default attn_implementation)
+# Must install AFTER torch with --no-build-isolation so it links against the CUDA torch
+uv pip install flash-attn --no-build-isolation
+
 # OpenClaw
 npm install -g openclaw@latest
 ```
@@ -109,14 +113,19 @@ EOF
 
 ```bash
 LORA_ROOT="${HOME}/.local/share/claas/loras"
+# Create the aliases file if it doesn't exist (the start script reads it)
+[ -f "$LORA_ROOT/.aliases.json" ] || echo '{}' > "$LORA_ROOT/.aliases.json"
+
 export PATH="$(pwd)/.venv/bin:$PATH"  # puts 'vllm' on PATH
 export MODEL=Qwen/Qwen3-8B HOST=0.0.0.0 PORT=8000 API_KEY=sk-local
 export SERVED_MODEL_NAMES=qwen3-8b MAX_MODEL_LEN=32768 GPU_MEMORY_UTILIZATION=0.70
 export ENABLE_SLEEP_MODE=1 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
 export ENABLE_AUTO_TOOL_CHOICE=1 TOOL_CALL_PARSER=qwen3_xml
 export LORA_ROOT="$LORA_ROOT" LORA_ALIAS_FILE="$LORA_ROOT/.aliases.json" INCLUDE_ALIAS_LORAS=1
+# Enable LoRA even with no initial adapters — needed for runtime LoRA loading
+export EXTRA_ARGS='--enable-lora --max-lora-rank 32'
 
-bash scripts/openclaw-local/start_vllm_qwen3_8b.sh >> /tmp/vllm.log 2>&1 &
+bash docker/scripts/start_vllm_qwen3_8b.sh >> /tmp/vllm.log 2>&1 &
 
 # First run downloads Qwen3-8B (~16 GB) — expect 5-20 min
 until curl -sf http://localhost:8000/health; do sleep 5; done && echo "vLLM ready"
@@ -124,13 +133,17 @@ until curl -sf http://localhost:8000/health; do sleep 5; done && echo "vLLM read
 
 ### 4. Start CLaaS API
 
+The API must be started via its Hydra entry point (not bare `uvicorn`) so that the
+runtime config is loaded and `configure_web_app()` is called. Override `lora_root`
+to point to the local LoRA directory (the default `/loras` is the Docker path).
+
 ```bash
-CLAAS_CONFIG_NAME=local \
-CLAAS_LORA_ROOT="${HOME}/.local/share/claas/loras" \
-VLLM_BASE_URL=http://localhost:8000 \
 VLLM_API_KEY=sk-local \
-FEEDBACK_LOG_DIR=/tmp/feedback-logs \
-  uv run uvicorn claas.api:web_app --host 0.0.0.0 --port 8080 >> /tmp/claas-api.log 2>&1 &
+  uv run python -m runpy claas.api \
+    lora_root="${HOME}/.local/share/claas/loras" \
+    feedback_log_dir=/tmp/feedback-logs \
+    'hydra.run.dir=.' \
+    >> /tmp/claas-api.log 2>&1 &
 
 curl -sf http://localhost:8080/v1/health
 ```
@@ -172,6 +185,7 @@ Report the status of all four components and the Telegram bot username.
 | `Numba needs NumPy 2.2 or less` | `uv pip install "numpy<2.3"` |
 | `Python.h: No such file or directory` | Recreate venv with uv-managed Python (step 1 note) |
 | `No API key found for provider "local"` | Create `auth-profiles.json` (step 2) |
+| `flash_attn seems to be not installed` | `uv pip install flash-attn --no-build-isolation` (requires CUDA torch first) |
 | vLLM OOM | Lower `GPU_MEMORY_UTILIZATION` to `0.60` |
 
 ## Logs
