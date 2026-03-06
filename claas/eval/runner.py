@@ -81,7 +81,7 @@ async def _submit_feedback(
             adv_abs_mean_raw=metadata["adv_abs_mean_raw"],
             completion_len=metadata["completion_len"],
             batch_size=metadata["batch_size"],
-            steps_per_batch_applied=metadata["steps_per_batch_applied"],
+            steps_per_batch_applied=metadata.get("steps_per_batch_applied", 1),
         )
 
     return LocalDistillMetrics(
@@ -89,7 +89,7 @@ async def _submit_feedback(
         kl_reg=metadata.get("kl_reg"),
         mean_is_ratio=metadata.get("mean_is_ratio"),
         clip_fraction=metadata.get("clip_fraction"),
-        steps_per_batch_applied=metadata["steps_per_batch_applied"],
+        steps_per_batch_applied=metadata.get("steps_per_batch_applied", 1),
     )
 
 
