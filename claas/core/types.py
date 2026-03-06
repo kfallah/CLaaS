@@ -35,6 +35,11 @@ class TrainingConfig:
     steps_per_batch: int = 4
     feedback_repetitions: int = 1
 
+    def __post_init__(self) -> None:
+        if self.steps_per_batch < 1:
+            msg = f"steps_per_batch must be >= 1, got {self.steps_per_batch}"
+            raise ValueError(msg)
+
 
 class SDPOLossInput(BaseModel):
     """Typed input for SDPO loss computation."""
