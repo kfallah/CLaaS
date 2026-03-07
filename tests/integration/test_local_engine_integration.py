@@ -18,6 +18,11 @@ from claas.core.types import (  # noqa: E402
     TrainingConfig,
 )
 from claas.training import storage  # noqa: E402
+from claas.training.engine.local.cache import (  # noqa: E402
+    DistillStepResult,
+    LoraAdapterConfig,
+    LoraCacheEntry,
+)
 from claas.training.engine.local.engine import LocalTrainingEngine  # noqa: E402
 
 
@@ -41,11 +46,20 @@ class _TrainerStub:
     def load_base_model(self) -> None:
         self._state.loaded = True
 
-    def distill(self, payload: DistillBatchRequestPayload) -> DistillResponse:
+    def reload_base_model(self) -> None:
+        pass
+
+    def distill(self, payload: DistillBatchRequestPayload, *, cached: object = None) -> DistillStepResult:
         self._state.payload = payload
-        return DistillResponse.model_validate(
+        response = DistillResponse.model_validate(
             {"lora_id": payload.lora_id, "metadata": {"tokens_processed": 5}}
         )
+        cache_entry = LoraCacheEntry(
+            lora_state_dict={},
+            optimizer_state_dict={},
+            adapter_config=LoraAdapterConfig(r=8, lora_alpha=16, target_modules=[], lora_dropout=0.0, bias="none", task_type="CAUSAL_LM"),
+        )
+        return DistillStepResult(response=response, cache_entry=cache_entry)
 
     def offload_base_model(self) -> None:
         self._state.cleaned_up = True

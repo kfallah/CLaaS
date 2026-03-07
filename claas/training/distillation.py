@@ -173,7 +173,7 @@ class DistillationTrainer:
             lora_alpha=cfg.lora_alpha,
             target_modules=cfg.target_modules,
             lora_dropout=cfg.lora_dropout,
-            bias=cfg.bias,
+            bias=cfg.bias,  # type: ignore[arg-type]  # peft Literal vs str
             task_type=cfg.task_type,
         )
         model = get_peft_model(self.base_model, lora_config)
@@ -295,11 +295,13 @@ class DistillationTrainer:
         """Snapshot current model + optimizer state into a CPU-resident cache entry."""
         from peft import PeftModel as PeftModelCls
 
-        peft_config = model.peft_config["default"]
+        from peft import LoraConfig
+
+        peft_config = cast(LoraConfig, model.peft_config["default"])
         adapter_config = LoraAdapterConfig(
             r=peft_config.r,
             lora_alpha=peft_config.lora_alpha,
-            target_modules=list(peft_config.target_modules),
+            target_modules=list(peft_config.target_modules or []),
             lora_dropout=peft_config.lora_dropout,
             bias=peft_config.bias,
             task_type=str(peft_config.task_type),

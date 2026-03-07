@@ -109,7 +109,7 @@ def testcpu_optimizer_state_moves_tensors_to_cpu() -> None:
     original = optimizer.state_dict()
     cpu_state = cpu_optimizer_state(original)
 
-    for param_state in cpu_state["state"].values():
+    for param_state in cpu_state["state"].values():  # type: ignore[union-attr]
         for v in param_state.values():
             if isinstance(v, torch.Tensor):
                 assert v.device == torch.device("cpu")
@@ -129,13 +129,13 @@ def test_cpugpu_optimizer_state_roundtrip() -> None:
 
     # Step counts match
     for param_id in original["state"]:
-        assert roundtripped["state"][param_id]["step"] == original["state"][param_id]["step"]
+        assert roundtripped["state"][param_id]["step"] == original["state"][param_id]["step"]  # type: ignore[index]
 
     # Tensor values match
     for param_id in original["state"]:
         for key in ("exp_avg", "exp_avg_sq"):
             orig_tensor = original["state"][param_id][key]
-            rt_tensor = roundtripped["state"][param_id][key]
+            rt_tensor = roundtripped["state"][param_id][key]  # type: ignore[index]
             assert torch.equal(orig_tensor, rt_tensor)
 
 
@@ -152,7 +152,7 @@ def testcpu_optimizer_state_does_not_mutate_original() -> None:
 
     cpu_state = cpu_optimizer_state(original)
     # Mutate the copy
-    cpu_state["state"][0]["exp_avg"].zero_()
+    cpu_state["state"][0]["exp_avg"].zero_()  # type: ignore[index]
 
     # Original is unchanged
     assert torch.equal(original["state"][0]["exp_avg"], original_exp_avg)

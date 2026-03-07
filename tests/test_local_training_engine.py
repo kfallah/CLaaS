@@ -47,6 +47,7 @@ def _make_payload(lora_id: str = "user/model") -> DistillBatchRequestPayload:
                 prompt_token_ids=[1, 2],
                 response_token_ids=[3],
                 user_prompt="p",
+                system_prompt="You are a helpful assistant.",
             )
         ],
     )
