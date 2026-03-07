@@ -51,6 +51,11 @@ htmlcov/
 feedback_logs/
 .local_loras/
 .run-logs/
+.hydra/
+node_modules/
+package.json
+package-lock.json
+EXPERIMENTS.md
 
 # Runtime data (feedback logs, eval results, Hydra logs)
 data/feedback/

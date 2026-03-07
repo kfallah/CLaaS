@@ -1,6 +1,6 @@
 ---
 name: setup-local
-description: Set up the full CLaaS stack (vLLM + API + OpenClaw/Telegram) directly on the host without Docker. Use when Docker is unavailable or you want a native setup.
+description: Set up the full CLaaS stack (vLLM + API + OpenClaw/Telegram) locally. Uses Docker if available, falls back to native setup otherwise.
 ---
 
 # Setup Local
