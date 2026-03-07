@@ -302,16 +302,17 @@ class DistillationTrainer:
             target_modules=list(peft_config.target_modules),
             lora_dropout=peft_config.lora_dropout,
             bias=peft_config.bias,
-            task_type=peft_config.task_type,
+            task_type=str(peft_config.task_type),
         )
 
-        # Determine state dict — use PEFT's adapter-only extraction if available
-        if isinstance(model, PeftModelCls):
-            from peft import get_peft_model_state_dict
+        # Extract adapter-only state dict via PEFT
+        if not isinstance(model, PeftModelCls):
+            raise TypeError(
+                f"Expected a PeftModel for cache entry construction, got {type(model).__name__}"
+            )
+        from peft import get_peft_model_state_dict
 
-            raw_state = get_peft_model_state_dict(model)
-        else:
-            raw_state = model.state_dict()
+        raw_state = get_peft_model_state_dict(model)
 
         lora_state = {k: v.detach().cpu().clone() for k, v in raw_state.items()}
         opt_state = cpu_optimizer_state(optimizer.state_dict())
