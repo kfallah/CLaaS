@@ -56,12 +56,14 @@ class LocalTrainingEngine(TrainingEngine):
         self._lora_cache = {}
         self._cache_lock = threading.Lock()
         self._model_loaded = False
+        self._load_lock = asyncio.Lock()
 
     async def _ensure_model_loaded(self) -> None:
         """One-time base model load on first distill() call."""
-        if not self._model_loaded:
-            await asyncio.to_thread(self._trainer.load_base_model)
-            self._model_loaded = True
+        async with self._load_lock:
+            if not self._model_loaded:
+                await asyncio.to_thread(self._trainer.load_base_model)
+                self._model_loaded = True
 
     async def distill(
         self,
@@ -89,8 +91,9 @@ class LocalTrainingEngine(TrainingEngine):
         finally:
             await asyncio.to_thread(self._trainer.offload_base_model)
 
+        new_resolved = await asyncio.to_thread(resolve_lora_id, result.response.lora_id)
         with self._cache_lock:
-            self._lora_cache[resolved_id] = result.cache_entry
+            self._lora_cache[new_resolved] = result.cache_entry
 
         return result.response
 
