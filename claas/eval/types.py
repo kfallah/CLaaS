@@ -131,6 +131,7 @@ class TinkerDistillMetrics:
     completion_len: int = 0
     batch_size: int = 0
     steps_per_batch_applied: int = 1
+    divergence_mode: str = "scalar_kl"
 
 
 @dataclass

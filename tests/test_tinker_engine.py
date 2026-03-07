@@ -856,3 +856,191 @@ def test_engine_distill_uses_user_prompt_for_teacher(tinker_engine, mock_trainin
     tok = mock_training_client.get_tokenizer()
     tok.apply_chat_template.assert_called_once()
     assert tok.apply_chat_template.call_args[1]["add_generation_prompt"] is True
+
+
+# ── Top-K GJS mode tests ─────────────────────────────────────────────
+
+
+def _make_mock_topk_response(topk_data):
+    """Build a mock Tinker sample_async response with topk_prompt_logprobs."""
+    resp = MagicMock()
+    resp.topk_prompt_logprobs = topk_data
+    return resp
+
+
+def test_engine_distill_topk_mode(tinker_engine, mock_training_client):
+    """End-to-end distill with use_topk_divergence=True.
+
+    Verifies that sample_async is called (instead of compute_logprobs_async)
+    for teacher signal acquisition and that GJS-derived advantages flow
+    through to the datum.
+    """
+    engine, mock_service = tinker_engine
+
+    set_tinker_path("test/lora", "tinker://init-ckpt", "gpt-oss/GPT-OSS-120B", 32, step=0)
+    mock_service.create_training_client_from_state_async = AsyncMock(
+        return_value=mock_training_client
+    )
+
+    # Teacher sampling client: returns top-K data via sample_async
+    teacher_sampler = MagicMock()
+    # Build top-K data: 100 positions (enough for slicing), each with K=3 entries
+    topk_entry = [(0, -0.5), (1, -1.0), (2, -2.0)]
+    topk_full = [topk_entry] * 100
+    teacher_sampler.sample_async = AsyncMock(
+        return_value=_make_mock_topk_response(topk_full)
+    )
+    # compute_logprobs_async should NOT be called in topk mode
+    teacher_sampler.compute_logprobs_async = AsyncMock(
+        side_effect=AssertionError("compute_logprobs_async should not be called in topk mode")
+    )
+    mock_service.create_sampling_client_async = AsyncMock(
+        return_value=teacher_sampler
+    )
+
+    payload = DistillBatchRequestPayload(
+        lora_id="test/lora",
+        training=TrainingConfig(
+            steps_per_batch=1,
+            use_topk_divergence=True,
+            teacher_top_k=3,
+        ),
+        samples=[
+            DistillBatchItem(
+                prompt="Hello",
+                response="World",
+                feedback="Good job",
+                response_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+                prompt_token_ids=[0, 1, 2, 3, 4],
+                response_token_ids=[0, 1, 2, 3, 4],
+                user_prompt="Hello",
+                system_prompt="You are a helpful assistant.",
+            )
+        ],
+    )
+
+    result = asyncio.run(engine.distill(payload))
+
+    assert isinstance(result, DistillResponse)
+    assert result.lora_id == "test/lora"
+    assert result.metadata["step"] == 1
+    assert result.metadata["divergence_mode"] == "topk_gjs"
+
+    # Teacher used sample_async, not compute_logprobs_async
+    teacher_sampler.sample_async.assert_called_once()
+    call_kwargs = teacher_sampler.sample_async.call_args[1]
+    assert call_kwargs["topk_prompt_logprobs"] == 3
+    assert call_kwargs["include_prompt_logprobs"] is True
+
+    # Training step happened
+    mock_training_client.forward_backward_async.assert_called_once()
+    mock_training_client.optim_step_async.assert_called_once()
+
+
+def test_engine_distill_topk_multistep(tinker_engine, mock_training_client):
+    """Multi-step distill with top-K: verifies student top-K recomputation."""
+    engine, mock_service = tinker_engine
+
+    set_tinker_path("test/lora", "tinker://ckpt", "gpt-oss/GPT-OSS-120B", 32, step=0)
+    mock_service.create_training_client_from_state_async = AsyncMock(
+        return_value=mock_training_client
+    )
+
+    # Teacher sampling client with top-K
+    teacher_sampler = MagicMock()
+    topk_entry = [(0, -0.3), (1, -1.5), (2, -2.5)]
+    topk_full = [topk_entry] * 100
+    teacher_sampler.sample_async = AsyncMock(
+        return_value=_make_mock_topk_response(topk_full)
+    )
+    mock_service.create_sampling_client_async = AsyncMock(
+        return_value=teacher_sampler
+    )
+
+    # Student sampling client also returns top-K via sample_async
+    student_sampler = MagicMock()
+    student_topk_entry = [(0, -0.2), (1, -1.2), (2, -2.2)]
+    student_topk_full = [student_topk_entry] * 100
+    student_sampler.sample_async = AsyncMock(
+        return_value=_make_mock_topk_response(student_topk_full)
+    )
+    mock_training_client.save_weights_and_get_sampling_client_async = AsyncMock(
+        return_value=student_sampler
+    )
+
+    payload = DistillBatchRequestPayload(
+        lora_id="test/lora",
+        training=TrainingConfig(
+            steps_per_batch=2,
+            use_topk_divergence=True,
+            teacher_top_k=3,
+        ),
+        samples=[
+            DistillBatchItem(
+                prompt="Hello",
+                response="World",
+                feedback="Nice",
+                response_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+                prompt_token_ids=[0, 1, 2, 3, 4],
+                response_token_ids=[0, 1, 2, 3, 4],
+                user_prompt="Hello",
+                system_prompt="You are a helpful assistant.",
+            )
+        ],
+    )
+
+    result = asyncio.run(engine.distill(payload))
+
+    assert isinstance(result, DistillResponse)
+    assert result.metadata["steps_per_batch_applied"] == 2
+    assert result.metadata["step"] == 2
+    assert result.metadata["divergence_mode"] == "topk_gjs"
+
+    # Two optimizer steps
+    assert mock_training_client.forward_backward_async.call_count == 2
+    assert mock_training_client.optim_step_async.call_count == 2
+
+    # Student recomputation used sample_async (not compute_logprobs_async)
+    mock_training_client.save_weights_and_get_sampling_client_async.assert_called_once()
+    student_sampler.sample_async.assert_called()
+
+    # Step-2 datum should use different advantages (from student top-K GJS)
+    first_call = mock_training_client.forward_backward_async.call_args_list[0]
+    second_call = mock_training_client.forward_backward_async.call_args_list[1]
+    first_advantages = first_call.args[0][0].loss_fn_inputs["advantages"].data
+    second_advantages = second_call.args[0][0].loss_fn_inputs["advantages"].data
+    assert first_advantages != second_advantages
+
+
+def test_engine_distill_scalar_mode_reports_divergence_mode(tinker_engine, mock_training_client):
+    """Scalar mode (default) reports divergence_mode='scalar_kl' in metadata."""
+    engine, mock_service = tinker_engine
+
+    set_tinker_path("test/lora", "tinker://ckpt", "gpt-oss/GPT-OSS-120B", 32, step=0)
+    mock_service.create_training_client_from_state_async = AsyncMock(
+        return_value=mock_training_client
+    )
+
+    teacher_sampler = MagicMock()
+    teacher_sampler.compute_logprobs_async = AsyncMock(return_value=[-0.2] * 100)
+    mock_service.create_sampling_client_async = AsyncMock(return_value=teacher_sampler)
+
+    payload = DistillBatchRequestPayload(
+        lora_id="test/lora",
+        training=TrainingConfig(steps_per_batch=1),
+        samples=[
+            DistillBatchItem(
+                prompt="Hello",
+                response="World",
+                feedback="Nice",
+                response_logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+                prompt_token_ids=[0, 1, 2, 3, 4],
+                response_token_ids=[0, 1, 2, 3, 4],
+                user_prompt="Hello",
+                system_prompt="You are a helpful assistant.",
+            )
+        ],
+    )
+
+    result = asyncio.run(engine.distill(payload))
+    assert result.metadata["divergence_mode"] == "scalar_kl"
