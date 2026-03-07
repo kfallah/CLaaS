@@ -293,9 +293,7 @@ class DistillationTrainer:
         optimizer: "torch.optim.Optimizer",
     ) -> LoraCacheEntry:
         """Snapshot current model + optimizer state into a CPU-resident cache entry."""
-        from peft import PeftModel as PeftModelCls
-
-        from peft import LoraConfig
+        from peft import LoraConfig, PeftModel as PeftModelCls
 
         peft_config = cast(LoraConfig, model.peft_config["default"])
         adapter_config = LoraAdapterConfig(
