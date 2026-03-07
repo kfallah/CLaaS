@@ -16,6 +16,12 @@ RUN mkdir -p claas && touch claas/__init__.py
 
 RUN pip install --no-cache-dir ".[local]" modal
 
+# Qwen3.5 GDN (Gated Delta Networks) layers require these CUDA kernels.
+# Without them, transformers falls back to a buggy torch implementation.
+# causal-conv1d must be built from source to match the container's torch ABI.
+RUN pip install --no-cache-dir flash-linear-attention \
+    && pip install --no-cache-dir --no-build-isolation causal-conv1d
+
 # Now copy the full source and reinstall the package (no-deps: deps cached above)
 COPY . /app
 RUN pip install --no-cache-dir --no-deps --force-reinstall "."

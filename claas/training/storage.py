@@ -454,15 +454,28 @@ def create_initial_lora(
 
     # Resolve layer dimensions from the base model config (no weights downloaded).
     model_config = AutoConfig.from_pretrained(base_model_name, trust_remote_code=True)
-    hidden_size = model_config.hidden_size
-    intermediate_size = getattr(model_config, "intermediate_size", hidden_size * 4)
-    num_heads = model_config.num_attention_heads
-    head_dim = hidden_size // num_heads
-    num_kv_heads = getattr(model_config, "num_key_value_heads", num_heads)
-    num_layers = model_config.num_hidden_layers
+    # Multimodal models (e.g. Qwen3.5) nest text dimensions under text_config.
+    text_config = getattr(model_config, "text_config", model_config)
+    hidden_size = text_config.hidden_size
+    intermediate_size = getattr(text_config, "intermediate_size", hidden_size * 4)
+    num_heads = text_config.num_attention_heads
+    head_dim = getattr(text_config, "head_dim", hidden_size // num_heads)
+    num_kv_heads = getattr(text_config, "num_key_value_heads", num_heads)
+    num_layers = text_config.num_hidden_layers
+
+    # Hybrid models (e.g. Qwen3.5) mix layer types: full_attention layers have
+    # standard q/k/v/o_proj, while linear_attention (GDN) layers use different
+    # projections (in_proj_qkv, out_proj).  Detect via layer_types config.
+    layer_types: list[str] | None = getattr(text_config, "layer_types", None)
+    # Full attention q_proj may be doubled for output gating (attn_output_gate).
+    attn_output_gate = getattr(text_config, "attn_output_gate", False)
+    q_proj_multiplier = 2 if attn_output_gate else 1
+
+    attn_modules = {"q_proj", "k_proj", "v_proj", "o_proj"}
+    mlp_modules = {"gate_proj", "up_proj", "down_proj"}
 
     dim_map = {
-        "q_proj": (num_heads * head_dim, hidden_size),
+        "q_proj": (num_heads * head_dim * q_proj_multiplier, hidden_size),
         "k_proj": (num_kv_heads * head_dim, hidden_size),
         "v_proj": (num_kv_heads * head_dim, hidden_size),
         "o_proj": (hidden_size, num_heads * head_dim),
@@ -488,10 +501,15 @@ def create_initial_lora(
     # while allowing gradients to propagate through A.
     tensors: dict[str, torch.Tensor] = {}
     for layer_idx in range(num_layers):
+        layer_type = layer_types[layer_idx] if layer_types else "full_attention"
         for mod_name in target_modules:
+            # Skip attention modules for non-full-attention layers (e.g. GDN
+            # layers use in_proj_qkv/out_proj instead of q/k/v/o_proj).
+            if mod_name in attn_modules and layer_type != "full_attention":
+                continue
             out_dim, in_dim = dim_map[mod_name]
             prefix = f"base_model.model.model.layers.{layer_idx}.self_attn.{mod_name}"
-            if mod_name in ("gate_proj", "up_proj", "down_proj"):
+            if mod_name in mlp_modules:
                 prefix = f"base_model.model.model.layers.{layer_idx}.mlp.{mod_name}"
             lora_a = torch.empty(lora_r, in_dim)
             torch.nn.init.kaiming_uniform_(lora_a, a=5**0.5)

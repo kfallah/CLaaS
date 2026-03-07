@@ -3,26 +3,27 @@ services:
 
   vllm:
     profiles: [local]
-    image: vllm/vllm-openai:v0.15.1
-    entrypoint: ["/scripts/start_vllm_qwen3_8b.sh"]
+    image: vllm/vllm-openai:qwen3_5
+    entrypoint: ["/scripts/start_vllm.sh"]
     environment:
       - MODEL=${MODEL}
       - HOST=0.0.0.0
       - API_KEY=sk-local
-      - SERVED_MODEL_NAMES=qwen3-8b
+      - SERVED_MODEL_NAMES=qwen3.5-9b
       - MAX_MODEL_LEN=${MAX_MODEL_LEN}
       - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION}
       - ENABLE_SLEEP_MODE=1
       - VLLM_SERVER_DEV_MODE=1
       - VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
       - ENABLE_AUTO_TOOL_CHOICE=1
-      - TOOL_CALL_PARSER=qwen3_xml
+      - TOOL_CALL_PARSER=qwen3_coder
       - LORA_ROOT=/loras
       - LORA_ALIAS_FILE=/loras/.aliases.json
       - INCLUDE_ALIAS_LORAS=1
       - HF_TOKEN=${HF_TOKEN:-}
+      - EXTRA_ARGS=--enforce-eager
     volumes:
-      - ./scripts/start_vllm_qwen3_8b.sh:/scripts/start_vllm_qwen3_8b.sh:ro
+      - ./scripts/start_vllm.sh:/scripts/start_vllm.sh:ro
       - hf-cache:/root/.cache/huggingface
       - lora-storage:/loras
     ports:

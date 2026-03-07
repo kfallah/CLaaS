@@ -101,6 +101,15 @@ export default function register(api: OpenClawPluginApi) {
     }
     if (!Array.isArray(messages) || messages.length === 0) return;
 
+    // Debug: inspect assistant message content shape for proxy-removal investigation
+    const lastAssistant = messages.slice().reverse().find((m: Record<string, unknown>) => m.role === "assistant");
+    if (lastAssistant) {
+      const raw = JSON.stringify((lastAssistant as Record<string, unknown>).content);
+      console.log("[claas-feedback] content type:", typeof (lastAssistant as Record<string, unknown>).content, Array.isArray((lastAssistant as Record<string, unknown>).content) ? "(array)" : "");
+      console.log("[claas-feedback] preview:", raw.slice(0, 500));
+      console.log("[claas-feedback] has thinking:", raw.includes("think") || raw.includes("thinking"));
+    }
+
     logDebug(
       `[claas-feedback] agent_end: senderKey=${redactIdentifier(senderKey)} messageCount=${messages.length}`,
     );

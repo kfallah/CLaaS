@@ -48,7 +48,7 @@ def test_worker_import_allows_missing_tokens_and_model_env(monkeypatch) -> None:
     _install_torch_stub(monkeypatch)
     worker = _reload("claas.modal.worker")
 
-    assert worker.DistillWorker.base_model_id == "Qwen/Qwen3-8B"
+    assert worker.DistillWorker.base_model_id == "Qwen/Qwen3.5-9B"
     assert worker.DistillWorker.attn_implementation == "sdpa"
 
 

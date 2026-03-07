@@ -127,11 +127,17 @@ def bounded_float(
 
 
 def coerce_template_ids(result: Any) -> list[int]:
-    """Normalize ``tokenizer.apply_chat_template`` output to a plain list[int]."""
+    """Normalize ``tokenizer.apply_chat_template`` output to a plain list[int].
+
+    Handles plain list[int], dict-like objects with ``input_ids`` key
+    (including ``BatchEncoding`` from transformers), and tensor-like
+    objects with a ``tolist()`` method.
+    """
     if isinstance(result, list):
         return [int(tok) for tok in result]
-    if isinstance(result, dict):
-        maybe_ids = result.get("input_ids")
+    # BatchEncoding (from transformers) is a Mapping but not a plain dict
+    if hasattr(result, "__getitem__") and "input_ids" in result:
+        maybe_ids = result["input_ids"]
         if isinstance(maybe_ids, list):
             return [int(tok) for tok in maybe_ids]
     if hasattr(result, "tolist"):

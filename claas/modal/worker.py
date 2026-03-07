@@ -67,7 +67,7 @@ class DistillWorker:
 
     # Defaults are captured at deploy/import time. Move env reads into runtime
     # initialization if container-level overrides are required.
-    base_model_id: str = os.environ.get("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3-8B")
+    base_model_id: str = os.environ.get("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3.5-9B")
     attn_implementation: str = os.environ.get("CLAAS_ATTN_IMPLEMENTATION", "sdpa")
 
     @modal.enter(snap=True)

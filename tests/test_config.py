@@ -18,7 +18,7 @@ def test_load_local_config() -> None:
     assert cfg.mode == "local"
     assert cfg.storage_backend == "local_fs"
     assert cfg.vllm_base_url == "http://127.0.0.1:8000"
-    assert cfg.base_model_id == "Qwen/Qwen3-8B"
+    assert cfg.base_model_id == "Qwen/Qwen3.5-9B"
 
 
 def test_load_modal_config() -> None:
@@ -42,7 +42,7 @@ def test_core_config_includes_shared_defaults() -> None:
     cfg = load_core_config("local")
     assert cfg.feedback_log_dir == "./data/feedback"
     assert cfg.lora_root == "/loras"
-    assert "Qwen/Qwen3-8B" in cfg.allowed_init_base_models
+    assert "Qwen/Qwen3.5-9B" in cfg.allowed_init_base_models
 
 
 def test_core_config_name_is_case_insensitive() -> None:

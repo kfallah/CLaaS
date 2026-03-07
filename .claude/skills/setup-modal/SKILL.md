@@ -26,7 +26,7 @@ When this skill is invoked, perform the following steps:
 ## Deployed Services
 
 The deployment includes:
-- **DistillWorker**: L40S GPU worker with Qwen3-8B student model (self-distillation)
+- **DistillWorker**: L40S GPU worker with Qwen3.5-9B student model (self-distillation)
 - **FastAPI endpoint**: REST API for feedback and distillation requests
 
 ## Health Check

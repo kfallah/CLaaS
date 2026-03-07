@@ -42,7 +42,7 @@ cp .env.local.example .env
 docker compose --profile local up --build
 ```
 
-This brings up vLLM with Qwen3-8B, the CLaaS feedback API, and OpenClaw's Telegram gateway. See [`docker/README.md`](docker/README.md) for details.
+This brings up vLLM with Qwen3.5-9B, the CLaaS feedback API, and OpenClaw's Telegram gateway. See [`docker/README.md`](docker/README.md) for details.
 
 **Manual install:**
 
@@ -90,7 +90,7 @@ Deploy:
 ```bash
 # Set HF_TOKEN if using gated models
 export HF_TOKEN=...
-export CLAAS_BASE_MODEL_ID=Qwen/Qwen3-8B
+export CLAAS_BASE_MODEL_ID=Qwen/Qwen3.5-9B
 uv run modal deploy -m claas.modal.deploy
 ```
 
@@ -104,7 +104,7 @@ For manual (non-Docker) local setup:
 
 ```bash
 # 1. Start vLLM with LoRA support
-vllm serve Qwen/Qwen3-8B --host 0.0.0.0 --port 8000 \
+vllm serve Qwen/Qwen3.5-9B --host 0.0.0.0 --port 8000 \
   --enable-lora --lora-modules my-lora=/loras/user/my-lora-init
 
 # 2. Start the CLaaS API

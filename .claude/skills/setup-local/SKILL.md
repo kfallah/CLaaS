@@ -38,7 +38,7 @@ See `docker/README.md` for details. Report success and stop.
 
 ```bash
 # Python deps (from repo root)
-uv sync --extra local --extra teacher --extra dev
+uv sync --extra local --extra dev
 
 # pyproject.toml pins torch to CPU — reinstall with CUDA
 # Match cu1XX to your CUDA version from nvidia-smi (e.g. cu124, cu128)
@@ -71,7 +71,7 @@ mkdir -p "$LORA_ROOT" "$OPENCLAW_HOME"
 CLAAS_CONFIG_NAME=local \
 CLAAS_LORA_ROOT="$LORA_ROOT" \
 LORA_NAME=openclaw/assistant \
-MODEL=Qwen/Qwen3-8B \
+MODEL=Qwen/Qwen3.5-9B \
 VLLM_BASE_URL=http://localhost:8000/v1 \
 API_KEY=sk-local \
 TELEGRAM_BOT_TOKEN=<token> \
@@ -117,17 +117,18 @@ LORA_ROOT="${HOME}/.local/share/claas/loras"
 [ -f "$LORA_ROOT/.aliases.json" ] || echo '{}' > "$LORA_ROOT/.aliases.json"
 
 export PATH="$(pwd)/.venv/bin:$PATH"  # puts 'vllm' on PATH
-export MODEL=Qwen/Qwen3-8B HOST=0.0.0.0 PORT=8000 API_KEY=sk-local
-export SERVED_MODEL_NAMES=qwen3-8b MAX_MODEL_LEN=32768 GPU_MEMORY_UTILIZATION=0.70
+export MODEL=Qwen/Qwen3.5-9B HOST=0.0.0.0 PORT=8000 API_KEY=sk-local
+export SERVED_MODEL_NAMES=qwen3.5-9b MAX_MODEL_LEN=32768 GPU_MEMORY_UTILIZATION=0.70
 export ENABLE_SLEEP_MODE=1 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
-export ENABLE_AUTO_TOOL_CHOICE=1 TOOL_CALL_PARSER=qwen3_xml
+export ENABLE_AUTO_TOOL_CHOICE=1 TOOL_CALL_PARSER=qwen3_coder
 export LORA_ROOT="$LORA_ROOT" LORA_ALIAS_FILE="$LORA_ROOT/.aliases.json" INCLUDE_ALIAS_LORAS=1
 # Enable LoRA even with no initial adapters — needed for runtime LoRA loading
-export EXTRA_ARGS='--enable-lora --max-lora-rank 32'
+# --enforce-eager required: CUDA graph capture has a bug in Qwen3.5's GDN causal conv1d layer
+export EXTRA_ARGS='--enable-lora --max-lora-rank 32 --enforce-eager'
 
-bash docker/scripts/start_vllm_qwen3_8b.sh >> /tmp/vllm.log 2>&1 &
+bash docker/scripts/start_vllm.sh >> /tmp/vllm.log 2>&1 &
 
-# First run downloads Qwen3-8B (~16 GB) — expect 5-20 min
+# First run downloads Qwen3.5-9B — expect 5-20 min
 until curl -sf http://localhost:8000/health; do sleep 5; done && echo "vLLM ready"
 ```
 

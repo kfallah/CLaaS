@@ -24,7 +24,7 @@ cp .env.local.example .env
 docker compose --profile local up --build
 ```
 
-The first run downloads Qwen3-8B (~16 GB) — expect the vLLM health check to take 10-20 minutes. Subsequent runs use the cached model.
+The first run downloads Qwen3.5-9B (~16 GB) — expect the vLLM health check to take 10-20 minutes. Subsequent runs use the cached model.
 
 ## Tinker Profile
 
@@ -49,7 +49,7 @@ This stack brings up:
 
 | Service | Port | Description |
 |---------|------|-------------|
-| `vllm` | 8000 | Qwen3-8B with LoRA serving and sleep/wake support |
+| `vllm` | 8000 | Qwen3.5-9B with LoRA serving and sleep/wake support |
 | `claas-api` | 8080 | CLaaS feedback API and distill worker |
 | `openclaw-local` | 18789 | OpenClaw gateway with Telegram bot |
 | `init-local` | — | One-shot: creates LoRA adapter + writes OpenClaw config |
@@ -75,7 +75,7 @@ This stack brings up:
           ▼                          ▼                      ▼
  ┌────────────────┐        ┌─────────────────┐    ┌────────────────┐
  │  vllm (:8000)  │◄───────│ claas-api(:8080) │   │ openclaw(:18789)│
- │  Qwen3-8B +    │  sleep │  Feedback API    │   │  Telegram bot  │
+ │  Qwen3.5-9B +    │  sleep │  Feedback API    │   │  Telegram bot  │
  │  LoRA serving  │  /wake │  Distill worker  │   │  Uses LoRA     │
  └────────────────┘        └─────────────────┘    └────────────────┘
        │                          │                       │
@@ -133,7 +133,7 @@ Settings live in `.env` (local profile) and `.env.tinker` (tinker profile).
 | `TELEGRAM_BOT_TOKEN` | *(required)* | Bot token from @BotFather |
 | `TINKER_API_KEY` | *(tinker only)* | API key for Tinker SDK |
 | `HF_TOKEN` | — | HuggingFace token for gated models (local only) |
-| `MODEL` | `Qwen/Qwen3-8B` (local) / *(required, tinker)* | Base model ID |
+| `MODEL` | `Qwen/Qwen3.5-9B` (local) / *(required, tinker)* | Base model ID (local uses Qwen3.5-9B, tinker uses Qwen3-30B-A3B) |
 | `MAX_MODEL_LEN` | `32768` | Max sequence length (local only) |
 | `GPU_MEMORY_UTILIZATION` | `0.70` | GPU VRAM fraction (local only) |
 | `LORA_NAME` | `openclaw/assistant` | LoRA adapter identity |
@@ -163,7 +163,7 @@ Only secrets should be passed via environment variables:
 
 ## Troubleshooting
 
-**vLLM takes forever to start**: The first run downloads Qwen3-8B. Check progress with `docker compose --profile local logs -f vllm`.
+**vLLM takes forever to start**: The first run downloads Qwen3.5-9B. Check progress with `docker compose --profile local logs -f vllm`.
 
 **Out of GPU memory**: Lower `GPU_MEMORY_UTILIZATION` in `.env` (e.g., `0.85`). The sleep/wake mechanism ensures vLLM and CLaaS don't use GPU simultaneously.
 

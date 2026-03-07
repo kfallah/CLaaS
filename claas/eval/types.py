@@ -92,7 +92,7 @@ class EvalConfig:
     lora_id_prefix: str = "eval"
     seed: int = 42
     openclaw_url: Optional[str] = None
-    base_model: str = "Qwen/Qwen3-8B"
+    base_model: str = "Qwen/Qwen3.5-9B"
     batch_size: int = 4
     training: TrainingConfig = field(default_factory=TrainingConfig)
 

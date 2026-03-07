@@ -264,7 +264,7 @@ class LoraInitRequest(BaseModel):
         description="LoRA identifier (e.g., 'user123/coder-v1')",
     )
     base_model: str = Field(
-        default="Qwen/Qwen3-8B",
+        default="Qwen/Qwen3.5-9B",
         description="Base model the LoRA will be applied to",
     )
     lora_r: int = Field(

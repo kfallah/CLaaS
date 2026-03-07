@@ -12,12 +12,15 @@ WORKDIR /app
 # Copy only dependency files first for layer caching
 COPY pyproject.toml uv.lock ./
 
-# Install core dependencies only (no extras)
-RUN uv sync --frozen --no-install-project --no-dev
+# Install core + local deps (torch, transformers, safetensors for LoRA init)
+RUN uv sync --frozen --no-install-project --no-dev --extra local
+
+# Override GPU torch with CPU-only to keep image small
+RUN uv pip install torch --index-url https://download.pytorch.org/whl/cpu --reinstall
 
 # Copy source and install just the project (deps already cached)
 COPY . .
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra local
 
 ENV PATH="/app/.venv/bin:$PATH"
 

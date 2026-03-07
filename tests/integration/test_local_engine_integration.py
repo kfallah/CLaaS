@@ -63,7 +63,7 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
     from claas.training.engine.local import engine as engine_module
 
     monkeypatch.setenv("CLAAS_LORA_ROOT", str(tmp_path))
-    monkeypatch.setenv("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3-8B")
+    monkeypatch.setenv("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3.5-9B")
     monkeypatch.setenv("CLAAS_ATTN_IMPLEMENTATION", "sdpa")
     monkeypatch.setattr(storage, "LORA_MOUNT_PATH", str(tmp_path))
 
@@ -77,7 +77,7 @@ def test_local_engine_integration_paths(monkeypatch, tmp_path):
             state,
         ),
     )
-    cfg = LocalConfig(base_model_id="Qwen/Qwen3-8B", attn_implementation="sdpa")
+    cfg = LocalConfig(base_model_id="Qwen/Qwen3.5-9B", attn_implementation="sdpa")
     local_engine = LocalTrainingEngine(cfg)
 
     init_response = asyncio.run(local_engine.init_lora(LoraInitRequest(lora_id="user/integration")))
@@ -130,7 +130,7 @@ def test_local_engine_cleanup_failure_propagates(monkeypatch):
     """Cleanup errors fail distillation requests."""
     from claas.training.engine.local import engine as engine_module
 
-    monkeypatch.setenv("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3-8B")
+    monkeypatch.setenv("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3.5-9B")
     monkeypatch.setenv("CLAAS_ATTN_IMPLEMENTATION", "sdpa")
     state = TrainerState()
     monkeypatch.setattr(
@@ -142,7 +142,7 @@ def test_local_engine_cleanup_failure_propagates(monkeypatch):
             state,
         ),
     )
-    cfg = LocalConfig(base_model_id="Qwen/Qwen3-8B", attn_implementation="sdpa")
+    cfg = LocalConfig(base_model_id="Qwen/Qwen3.5-9B", attn_implementation="sdpa")
 
     with pytest.raises(RuntimeError, match="cleanup failure"):
         asyncio.run(

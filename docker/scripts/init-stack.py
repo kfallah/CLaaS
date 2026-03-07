@@ -24,7 +24,7 @@ from claas.training.storage import configure_storage_backend, configure_storage_
 # ---------------------------------------------------------------------------
 LORA_NAME = os.environ.get("LORA_NAME", "openclaw/assistant")
 DISTILL_MODE = "local"
-BASE_MODEL = "Qwen/Qwen3-8B"
+BASE_MODEL = "Qwen/Qwen3.5-9B"
 LORA_ROOT = "/loras"
 OPENCLAW_HOME = Path(os.environ.get("OPENCLAW_HOME", "/openclaw-config"))
 VLLM_BASE_URL = "http://vllm:8000/v1"
@@ -46,7 +46,7 @@ FEEDBACK_BATCH_SIZE = _parse_feedback_batch_size()
 def _default_base_model(config_name: str) -> str:
     if config_name == "tinker":
         return "Qwen/Qwen3-30B-A3B"
-    return "Qwen/Qwen3-8B"
+    return "Qwen/Qwen3.5-9B"
 
 
 def _default_vllm_base_url(config_name: str) -> str:
@@ -184,7 +184,7 @@ def _model_entry(model_id: str) -> dict:
 
 
 def _normalize_lora_alias(name: str) -> str:
-    """Slash-separated LoRA alias → vLLM-safe name (matches start_vllm_qwen3_8b.sh)."""
+    """Slash-separated LoRA alias → vLLM-safe name (matches start_vllm.sh)."""
     import re
 
     normalized = re.sub(r"[^a-zA-Z0-9._-]+", "-", name).strip("-")
@@ -195,7 +195,7 @@ def write_openclaw_config() -> None:
     lora_alias = f"{LORA_NAME}-latest"
     vllm_model_name = _normalize_lora_alias(lora_alias)
 
-    model_ids = ["qwen3-8b", vllm_model_name]
+    model_ids = ["qwen3.5-9b", vllm_model_name]
     primary_model = vllm_model_name
 
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")

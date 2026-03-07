@@ -34,10 +34,10 @@ class _Trainer:
 def test_local_engine_distill_propagates_cleanup_error(monkeypatch):
     from claas.training.engine.local import engine as local_engine
 
-    monkeypatch.setenv("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3-8B")
+    monkeypatch.setenv("CLAAS_BASE_MODEL_ID", "Qwen/Qwen3.5-9B")
     monkeypatch.setenv("CLAAS_ATTN_IMPLEMENTATION", "sdpa")
     monkeypatch.setattr(local_engine, "DistillationTrainer", _Trainer)
-    cfg = LocalConfig(base_model_id="Qwen/Qwen3-8B", attn_implementation="sdpa")
+    cfg = LocalConfig(base_model_id="Qwen/Qwen3.5-9B", attn_implementation="sdpa")
 
     with pytest.raises(OSError, match="cleanup failed"):
         asyncio.run(

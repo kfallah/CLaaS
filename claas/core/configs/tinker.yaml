@@ -7,7 +7,7 @@ feedback_log_dir: ./data/feedback
 lora_root: /loras
 storage_backend: local_fs
 allowed_init_base_models:
-  - Qwen/Qwen3-8B
+  - Qwen/Qwen3.5-9B
 vllm_base_url: http://127.0.0.1:8000
 tinker_base_model: Qwen/Qwen3-30B-A3B
 tinker_state_path: /data/tinker_state.json

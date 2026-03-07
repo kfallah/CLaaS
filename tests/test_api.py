@@ -33,7 +33,7 @@ def _mock_config(monkeypatch, mode: str, **overrides):
     log_dir = str(overrides.get("feedback_log_dir", "./feedback_logs"))
     root = str(overrides.get("lora_root", "/loras"))
     backend = str(overrides.get("storage_backend", "modal_volume"))
-    allowed = list(overrides.get("allowed_init_base_models", ["Qwen/Qwen3-8B"]))
+    allowed = list(overrides.get("allowed_init_base_models", ["Qwen/Qwen3.5-9B"]))
 
     if mode == "modal":
         cfg = ModalConfig(
@@ -811,7 +811,7 @@ def test_init_lora_success(monkeypatch):
 def test_init_lora_rejects_disallowed_base_model(monkeypatch):
     from claas import api
 
-    _mock_config(monkeypatch, "local", allowed_init_base_models=frozenset({"Qwen/Qwen3-8B"}))
+    _mock_config(monkeypatch, "local", allowed_init_base_models=frozenset({"Qwen/Qwen3.5-9B"}))
     monkeypatch.setattr(api, "_get_training_engine", lambda: _EngineStub(exists=True))
 
     client = TestClient(web_app)
