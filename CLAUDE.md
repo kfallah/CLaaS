@@ -8,6 +8,18 @@
 
 **Treat errors as signals, not obstacles.** An unexpected value or failed assertion means something upstream is wrong. Trace the data flow end-to-end: where was this value produced? What configuration or state fed into it? The goal is durable, correct software — not silencing errors.
 
+## Type Safety
+
+- Avoid `Any` in Python — prefer `cast()` with the correct type when the type checker can't infer it (e.g. GPU library return types). Use typed dicts, dataclasses, or Pydantic models over bare `dict` without type parameters.
+- Data should have the correct shape from the moment it enters the system. If you need a `_normalize_*` or `_make_serializable` function, the upstream data model is wrong — fix the source instead.
+
+## Code Style
+
+- Catch specific exception types (`except httpx.HTTPError:`, `except json.JSONDecodeError:`), not bare `except Exception:` or `except:`.
+- Keep imports at module top level. Exception: GPU dependencies (torch, peft, vllm, transformers) that aren't installed locally use deferred imports inside functions.
+- Don't guard against impossible states — avoid redundant `None` checks, `hasattr()` duck-typing, or `isinstance()` checks when the type is already known from the signature or upstream logic.
+- Every public function, class, and module should have a docstring. Keep them concise — one line for simple functions, a short paragraph for complex ones. If you touch a function that lacks one, add it.
+
 ## Code Quality Rules
 
 ### After Every Change
