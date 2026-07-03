@@ -47,6 +47,16 @@ compose up -d --build
 echo "==> Waiting for CLaaS API ..."
 timeout 120 bash -c 'until curl -sf http://127.0.0.1:8080/ >/dev/null 2>&1; do sleep 5; done'
 
+# ── 2b. Warm up Tinker (tokenizer downloads on first inference) ────
+echo "==> Warming up Tinker inference (tokenizer download may take >120s) ..."
+timeout 300 bash -c '
+  until curl -sf \
+    -H "Content-Type: application/json" \
+    -X POST http://127.0.0.1:8080/v1/chat/completions \
+    -d "{\"model\":\"'"$MODEL"'\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}" \
+    -o /dev/null 2>&1; do sleep 10; done'
+echo "==> Tinker warmed up."
+
 echo "==> Waiting for OpenClaw gateway ..."
 timeout 180 bash -c '
   until curl -sf \
