@@ -14,8 +14,9 @@
         "description": "LoRA adapter ID to update (e.g. openclaw/assistant-latest)"
       },
       "feedbackBatchSize": {
-        "type": "number",
-        "description": "Number of feedback samples to batch before triggering distillation"
+       "type": "integer",
+       "minimum": 1,
+       "description": "Number of feedback samples to batch before triggering distillation"
       }
     }
   }
